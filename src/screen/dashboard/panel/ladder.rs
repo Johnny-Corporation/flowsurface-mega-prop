@@ -15,11 +15,9 @@ use std::time::{Duration, Instant};
 const TEXT_SIZE: f32 = style::text_size::SMALL;
 const ROW_HEIGHT: f32 = 16.0;
 
-// Total width ratios must sum to 1.0
-/// Uses half of the width for each side of the order quantity columns
-const ORDER_QTY_COLS_WIDTH: f32 = 0.60;
-/// Uses half of the width for each side of the trade quantity columns
-const TRADE_QTY_COLS_WIDTH: f32 = 0.20;
+const HEATMAP_COL_WEIGHT: f32 = 0.40;
+const PRINTS_COL_WEIGHT: f32 = 0.34;
+const ORDER_QTY_COL_WEIGHT: f32 = 0.26;
 
 const COL_PADDING: f32 = 4.0;
 /// Used for calculating layout with texts inside the price column
@@ -28,6 +26,9 @@ const MONO_CHAR_ADVANCE: f32 = 0.62;
 const PRICE_TEXT_SIDE_PAD_MIN: f32 = 12.0;
 
 const CHASE_CIRCLE_RADIUS: f32 = 4.0;
+const RECENT_PRINT_LIMIT: usize = 56;
+const PRINT_BUBBLE_MIN_RADIUS: f32 = 4.0;
+const PRINT_BUBBLE_MAX_RADIUS: f32 = 13.0;
 /// Maximum interval between chase updates to consider them part of the same chase
 const CHASE_MIN_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -277,13 +278,12 @@ impl canvas::Program<Message> for Ladder {
                                 visible_row.y,
                                 price,
                                 qty,
-                                false,
                                 ask_color,
                                 text_color,
                                 maxima.vis_max_order_qty,
                                 visible_row.buy_t,
                                 visible_row.sell_t,
-                                maxima.vis_max_trade_qty,
+                                maxima.vis_max_recorded_qty,
                                 bid_color,
                                 ask_color,
                                 &cols,
@@ -295,13 +295,12 @@ impl canvas::Program<Message> for Ladder {
                                 visible_row.y,
                                 price,
                                 qty,
-                                true,
                                 bid_color,
                                 text_color,
                                 maxima.vis_max_order_qty,
                                 visible_row.buy_t,
                                 visible_row.sell_t,
-                                maxima.vis_max_trade_qty,
+                                maxima.vis_max_recorded_qty,
                                 bid_color,
                                 ask_color,
                                 &cols,
@@ -341,16 +340,20 @@ impl canvas::Program<Message> for Ladder {
                     }
                 }
 
+                self.draw_recent_prints(
+                    frame, &grid, bounds, &cols, bid_color, ask_color, text_color,
+                );
+
                 if self.config.show_chase_tracker {
-                    let left_gap_mid_x = cols.sell.1 + (layout.inside_pad_px + COL_PADDING) * 0.5;
-                    let right_gap_mid_x = cols.buy.0 - (layout.inside_pad_px + COL_PADDING) * 0.5;
+                    let ask_chase_x = cols.prints.0 + CHASE_CIRCLE_RADIUS + 2.0;
+                    let bid_chase_x = cols.prints.1 - CHASE_CIRCLE_RADIUS - 2.0;
 
                     self.draw_chase_trail(
                         frame,
                         &grid,
                         bounds,
                         self.chase_tracker(Side::Bid),
-                        right_gap_mid_x,
+                        bid_chase_x,
                         best_ask_y.map(|y| y + ROW_HEIGHT / 2.0),
                         palette.success.weak.color,
                         true, // is_bid
@@ -360,7 +363,7 @@ impl canvas::Program<Message> for Ladder {
                         &grid,
                         bounds,
                         self.chase_tracker(Side::Ask),
-                        left_gap_mid_x,
+                        ask_chase_x,
                         best_bid_y.map(|y| y + ROW_HEIGHT / 2.0),
                         palette.danger.weak.color,
                         false,
@@ -396,8 +399,10 @@ impl canvas::Program<Message> for Ladder {
                         }
                     }
                 };
-                draw_vsplit(cols.sell.1, spread_row);
-                draw_vsplit(cols.buy.0, spread_row);
+                draw_vsplit(cols.heatmap.1, spread_row);
+                draw_vsplit(cols.prints.1, spread_row);
+                draw_vsplit(cols.order_qty.0, spread_row);
+                draw_vsplit(cols.price.0, spread_row);
 
                 if let Some((top, bottom)) = spread_row {
                     let y_top: f32 = top.floor() + 0.5;
@@ -405,23 +410,12 @@ impl canvas::Program<Message> for Ladder {
 
                     frame.fill_rectangle(
                         Point::new(0.0, y_top),
-                        Size::new(cols.sell.1, 1.0),
+                        Size::new(bounds.width, 1.0),
                         divider_color,
                     );
                     frame.fill_rectangle(
                         Point::new(0.0, y_bot),
-                        Size::new(cols.sell.1, 1.0),
-                        divider_color,
-                    );
-
-                    frame.fill_rectangle(
-                        Point::new(cols.buy.0, y_top),
-                        Size::new(bounds.width - cols.buy.0, 1.0),
-                        divider_color,
-                    );
-                    frame.fill_rectangle(
-                        Point::new(cols.buy.0, y_bot),
-                        Size::new(bounds.width - cols.buy.0, 1.0),
+                        Size::new(bounds.width, 1.0),
                         divider_color,
                     );
                 }
@@ -435,7 +429,7 @@ impl canvas::Program<Message> for Ladder {
 #[derive(Default)]
 struct Maxima {
     vis_max_order_qty: f32,
-    vis_max_trade_qty: f32,
+    vis_max_recorded_qty: f32,
 }
 
 struct VisibleRow {
@@ -446,21 +440,19 @@ struct VisibleRow {
 }
 
 struct ColumnRanges {
-    bid_order: (f32, f32),
-    sell: (f32, f32),
+    heatmap: (f32, f32),
+    prints: (f32, f32),
+    order_qty: (f32, f32),
     price: (f32, f32),
-    buy: (f32, f32),
-    ask_order: (f32, f32),
 }
 
 struct PriceLayout {
     price_px: f32,
-    inside_pad_px: f32,
 }
 
 impl Ladder {
-    // [BidOrderQty][SellQty][ Price ][BuyQty][AskOrderQty]
-    const NUMBER_OF_COLUMN_GAPS: f32 = 4.0;
+    // [Recorded volume heatmap][Executed prints][Live volume][Price]
+    const NUMBER_OF_COLUMN_GAPS: f32 = 3.0;
 
     fn price_sample_text(&self, grid: &PriceGrid) -> String {
         let a = self.format_price(grid.best_ask);
@@ -476,17 +468,9 @@ impl Ladder {
         let sample = self.price_sample_text(grid);
         let text_px = Self::mono_text_width_px(sample.len());
 
-        let desired_total_gap = CHASE_CIRCLE_RADIUS * 2.0 + 4.0;
-        let inside_pad_px = PRICE_TEXT_SIDE_PAD_MIN
-            .max(desired_total_gap - COL_PADDING)
-            .max(0.0);
+        let price_px = (text_px + 2.0 * PRICE_TEXT_SIDE_PAD_MIN).min(total_width.max(0.0));
 
-        let price_px = (text_px + 2.0 * inside_pad_px).min(total_width.max(0.0));
-
-        PriceLayout {
-            price_px,
-            inside_pad_px,
-        }
+        PriceLayout { price_px }
     }
 
     fn column_ranges(&self, width: f32, price_px: f32) -> ColumnRanges {
@@ -496,51 +480,41 @@ impl Ladder {
         let price_width = price_px.min(usable_width);
 
         let rest = (usable_width - price_width).max(0.0);
-        let rest_ratio = ORDER_QTY_COLS_WIDTH + TRADE_QTY_COLS_WIDTH; // 0.80
-
-        let order_share = if rest_ratio > 0.0 {
-            (ORDER_QTY_COLS_WIDTH / rest_ratio) * rest
-        } else {
-            0.0
-        };
-        let trade_share = if rest_ratio > 0.0 {
-            (TRADE_QTY_COLS_WIDTH / rest_ratio) * rest
-        } else {
-            0.0
+        let total_weight = HEATMAP_COL_WEIGHT + PRINTS_COL_WEIGHT + ORDER_QTY_COL_WEIGHT;
+        let weighted = |weight: f32| {
+            if total_weight > 0.0 {
+                (weight / total_weight) * rest
+            } else {
+                0.0
+            }
         };
 
-        let bid_order_width = order_share * 0.5;
-        let sell_trades_width = trade_share * 0.5;
-        let buy_trades_width = trade_share * 0.5;
-        let ask_order_width = order_share * 0.5;
+        let heatmap_width = weighted(HEATMAP_COL_WEIGHT);
+        let prints_width = weighted(PRINTS_COL_WEIGHT);
+        let order_qty_width = weighted(ORDER_QTY_COL_WEIGHT);
 
         let mut cursor_x = 0.0;
 
-        let bid_order_end = cursor_x + bid_order_width;
-        let bid_order_range = (cursor_x, bid_order_end);
-        cursor_x = bid_order_end + COL_PADDING;
+        let heatmap_end = cursor_x + heatmap_width;
+        let heatmap_range = (cursor_x, heatmap_end);
+        cursor_x = heatmap_end + COL_PADDING;
 
-        let sell_trades_end = cursor_x + sell_trades_width;
-        let sell_trades_range = (cursor_x, sell_trades_end);
-        cursor_x = sell_trades_end + COL_PADDING;
+        let prints_end = cursor_x + prints_width;
+        let prints_range = (cursor_x, prints_end);
+        cursor_x = prints_end + COL_PADDING;
+
+        let order_qty_end = cursor_x + order_qty_width;
+        let order_qty_range = (cursor_x, order_qty_end);
+        cursor_x = order_qty_end + COL_PADDING;
 
         let price_end = cursor_x + price_width;
         let price_range = (cursor_x, price_end);
-        cursor_x = price_end + COL_PADDING;
-
-        let buy_trades_end = cursor_x + buy_trades_width;
-        let buy_trades_range = (cursor_x, buy_trades_end);
-        cursor_x = buy_trades_end + COL_PADDING;
-
-        let ask_order_end = cursor_x + ask_order_width;
-        let ask_order_range = (cursor_x, ask_order_end);
 
         ColumnRanges {
-            bid_order: bid_order_range,
-            sell: sell_trades_range,
+            heatmap: heatmap_range,
+            prints: prints_range,
+            order_qty: order_qty_range,
             price: price_range,
-            buy: buy_trades_range,
-            ask_order: ask_order_range,
         }
     }
 
@@ -550,13 +524,12 @@ impl Ladder {
         y: f32,
         price: Price,
         order_qty: Qty,
-        is_bid: bool,
         side_color: iced::Color,
         text_color: iced::Color,
         max_order_qty: f32,
         trade_buy_qty: Qty,
         trade_sell_qty: Qty,
-        max_trade_qty: f32,
+        max_recorded_qty: f32,
         trade_buy_color: iced::Color,
         trade_sell_color: iced::Color,
         cols: &ColumnRanges,
@@ -565,101 +538,159 @@ impl Ladder {
         let trade_buy_qty_f32 = f32::from(trade_buy_qty);
         let trade_sell_qty_f32 = f32::from(trade_sell_qty);
 
-        if is_bid {
+        let recorded_qty = trade_buy_qty_f32 + trade_sell_qty_f32;
+        if recorded_qty > 0.0 {
+            let heat_color = if trade_sell_qty_f32 > trade_buy_qty_f32 {
+                trade_sell_color
+            } else {
+                trade_buy_color
+            };
+            let intensity = if max_recorded_qty > 0.0 {
+                (recorded_qty / max_recorded_qty).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
             Self::fill_bar(
                 frame,
-                cols.bid_order,
+                cols.heatmap,
                 y,
                 ROW_HEIGHT,
-                order_qty_f32,
-                max_order_qty,
-                side_color,
+                recorded_qty,
+                max_recorded_qty,
+                heat_color,
                 true,
-                0.20,
+                0.10 + intensity * 0.32,
             );
-            let qty_txt = self.format_quantity(order_qty);
-            let x_text = cols.bid_order.0 + 6.0;
-            Self::draw_cell_text(frame, &qty_txt, x_text, y, text_color, Alignment::Start);
-        } else {
-            Self::fill_bar(
+
+            let heat_txt = data::util::abbr_large_numbers(recorded_qty);
+            Self::draw_cell_text(
                 frame,
-                cols.ask_order,
+                &heat_txt,
+                cols.heatmap.0 + 6.0,
                 y,
-                ROW_HEIGHT,
-                order_qty_f32,
-                max_order_qty,
-                side_color,
-                false,
-                0.20,
+                text_color.scale_alpha(0.75),
+                Alignment::Start,
             );
-            let qty_txt = self.format_quantity(order_qty);
-            let x_text = cols.ask_order.1 - 6.0;
-            Self::draw_cell_text(frame, &qty_txt, x_text, y, text_color, Alignment::End);
         }
 
-        // Sell trades (right-to-left)
         Self::fill_bar(
             frame,
-            cols.sell,
+            cols.order_qty,
             y,
             ROW_HEIGHT,
-            trade_sell_qty_f32,
-            max_trade_qty,
-            trade_sell_color,
+            order_qty_f32,
+            max_order_qty,
+            side_color,
             false,
-            0.30,
+            0.22,
         );
-        let sell_txt = if trade_sell_qty_f32 > 0.0 {
-            self.format_quantity(trade_sell_qty)
-        } else {
-            "".into()
-        };
+        let qty_txt = self.format_quantity(order_qty);
         Self::draw_cell_text(
             frame,
-            &sell_txt,
-            cols.sell.1 - 6.0,
+            &qty_txt,
+            cols.order_qty.1 - 6.0,
             y,
             text_color,
             Alignment::End,
         );
 
-        // Buy trades (left-to-right)
-        Self::fill_bar(
-            frame,
-            cols.buy,
-            y,
-            ROW_HEIGHT,
-            trade_buy_qty_f32,
-            max_trade_qty,
-            trade_buy_color,
-            true,
-            0.30,
-        );
-        let buy_txt = if trade_buy_qty_f32 > 0.0 {
-            self.format_quantity(trade_buy_qty)
-        } else {
-            "".into()
-        };
-        Self::draw_cell_text(
-            frame,
-            &buy_txt,
-            cols.buy.0 + 6.0,
-            y,
-            text_color,
-            Alignment::Start,
-        );
-
         // Price
         let price_text = self.format_price(price);
-        let price_x_center = (cols.price.0 + cols.price.1) * 0.5;
         Self::draw_cell_text(
             frame,
             &price_text,
-            price_x_center,
+            cols.price.1 - 6.0,
             y,
             side_color,
-            Alignment::Center,
+            Alignment::End,
         );
+    }
+
+    fn draw_recent_prints(
+        &self,
+        frame: &mut iced::widget::canvas::Frame,
+        grid: &PriceGrid,
+        bounds: Rectangle,
+        cols: &ColumnRanges,
+        bid_color: iced::Color,
+        ask_color: iced::Color,
+        text_color: iced::Color,
+    ) {
+        let recent: Vec<Trade> = self
+            .trades
+            .raw
+            .iter()
+            .rev()
+            .take(RECENT_PRINT_LIMIT)
+            .copied()
+            .collect();
+        if recent.is_empty() {
+            return;
+        }
+
+        let max_qty = recent
+            .iter()
+            .map(|trade| f32::from(trade.qty))
+            .fold(0.0, f32::max);
+        if max_qty <= 0.0 {
+            return;
+        }
+
+        let print_width = (cols.prints.1 - cols.prints.0).max(0.0);
+        let x_min = cols.prints.0 + PRINT_BUBBLE_MAX_RADIUS + 2.0;
+        let x_max = cols.prints.1 - PRINT_BUBBLE_MAX_RADIUS - 2.0;
+        let count = recent.len();
+
+        for (idx, trade) in recent.iter().rev().enumerate() {
+            let grouped_price = trade.price.round_to_side_step(trade.is_sell, grid.tick);
+            let Some(y) = self.price_to_screen_y(grouped_price, grid, bounds.height) else {
+                continue;
+            };
+
+            let age = if count > 1 {
+                idx as f32 / (count - 1) as f32
+            } else {
+                1.0
+            };
+            let x = if x_max > x_min {
+                x_min + (x_max - x_min) * age
+            } else {
+                cols.prints.0 + print_width * 0.5
+            };
+            let size_ratio = (f32::from(trade.qty) / max_qty).clamp(0.0, 1.0).sqrt();
+            let radius = PRINT_BUBBLE_MIN_RADIUS
+                + (PRINT_BUBBLE_MAX_RADIUS - PRINT_BUBBLE_MIN_RADIUS) * size_ratio;
+            if y + radius < 0.0 || y - radius > bounds.height {
+                continue;
+            }
+
+            let color = if trade.is_sell { ask_color } else { bid_color };
+            let alpha = 0.28 + age * 0.56;
+            let circle = Path::circle(Point::new(x, y), radius);
+            frame.fill(&circle, iced::Color { a: alpha, ..color });
+            frame.stroke(
+                &circle,
+                Stroke::default()
+                    .with_color(iced::Color {
+                        a: (alpha + 0.16).min(1.0),
+                        ..color
+                    })
+                    .with_width(1.0),
+            );
+
+            if radius >= 7.0 && print_width >= 48.0 {
+                frame.fill_text(Text {
+                    content: self.format_quantity(trade.qty),
+                    position: Point::new(x, y),
+                    color: text_color.scale_alpha(0.85),
+                    size: style::text_size::TINY.into(),
+                    font: style::AZERET_MONO,
+                    align_x: Alignment::Center.into(),
+                    align_y: Alignment::Center.into(),
+                    ..Default::default()
+                });
+            }
+        }
     }
 
     fn fill_bar(
@@ -833,9 +864,9 @@ impl Ladder {
 
             maxima.vis_max_order_qty = maxima.vis_max_order_qty.max(f32::from(order_qty));
             let (buy_t, sell_t) = self.trade_qty_at(price);
-            maxima.vis_max_trade_qty = maxima
-                .vis_max_trade_qty
-                .max(f32::from(buy_t).max(f32::from(sell_t)));
+            maxima.vis_max_recorded_qty = maxima
+                .vis_max_recorded_qty
+                .max(f32::from(buy_t) + f32::from(sell_t));
 
             let row = if is_bid {
                 DomRow::Bid {
