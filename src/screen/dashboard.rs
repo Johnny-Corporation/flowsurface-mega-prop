@@ -19,14 +19,19 @@ use crate::{
 };
 use data::{
     UserTimezone,
-    layout::{WindowSpec, pane::ContentKind},
-    stream::PersistStreamKind,
+    chart::{Autoscale, Basis, ViewConfig, indicator::KlineIndicator},
+    layout::{
+        WindowSpec,
+        pane::{ContentKind, LinkGroup, Settings},
+    },
+    stream::{PersistDepth, PersistStreamKind},
 };
 use exchange::{
-    Kline, PushFrequency, StreamPairKind, TickerInfo, Trade, UnixMs,
+    Kline, PushFrequency, StreamPairKind, TickMultiplier, Ticker, TickerInfo, Timeframe, Trade,
+    UnixMs,
     adapter::{
-        AdapterHandles, MAX_KLINE_STREAMS_PER_STREAM, MAX_TRADE_TICKERS_PER_STREAM, StreamConfig,
-        StreamKind, StreamTicksize, UniqueStreams,
+        AdapterHandles, Exchange, MAX_KLINE_STREAMS_PER_STREAM, MAX_TRADE_TICKERS_PER_STREAM,
+        StreamConfig, StreamKind, StreamTicksize, UniqueStreams,
     },
     depth::Depth,
 };
@@ -96,26 +101,80 @@ pub enum Event {
 impl Dashboard {
     fn default_pane_config() -> Configuration<pane::State> {
         Configuration::Split {
-            axis: pane_grid::Axis::Vertical,
-            ratio: 0.8,
-            a: Box::new(Configuration::Split {
-                axis: pane_grid::Axis::Horizontal,
-                ratio: 0.4,
-                a: Box::new(Configuration::Split {
-                    axis: pane_grid::Axis::Vertical,
-                    ratio: 0.5,
-                    a: Box::new(Configuration::Pane(pane::State::default())),
-                    b: Box::new(Configuration::Pane(pane::State::default())),
-                }),
-                b: Box::new(Configuration::Split {
-                    axis: pane_grid::Axis::Vertical,
-                    ratio: 0.5,
-                    a: Box::new(Configuration::Pane(pane::State::default())),
-                    b: Box::new(Configuration::Pane(pane::State::default())),
-                }),
-            }),
-            b: Box::new(Configuration::Pane(pane::State::default())),
+            axis: pane_grid::Axis::Horizontal,
+            ratio: 0.5,
+            a: Box::new(Self::default_market_column("BTC_USDT", LinkGroup::A)),
+            b: Box::new(Self::default_market_column("ETH_USDT", LinkGroup::B)),
         }
+    }
+
+    fn default_market_column(
+        symbol: &'static str,
+        link_group: LinkGroup,
+    ) -> Configuration<pane::State> {
+        Configuration::Split {
+            axis: pane_grid::Axis::Vertical,
+            ratio: 0.68,
+            a: Box::new(Self::default_ladder_pane(symbol, link_group)),
+            b: Box::new(Self::default_candlestick_pane(symbol, link_group)),
+        }
+    }
+
+    fn default_ladder_pane(
+        symbol: &'static str,
+        link_group: LinkGroup,
+    ) -> Configuration<pane::State> {
+        let ticker = Self::default_ticker(symbol);
+
+        Configuration::Pane(pane::State::from_config(
+            pane::Content::Ladder(None),
+            vec![
+                PersistStreamKind::Depth(PersistDepth {
+                    ticker,
+                    depth_aggr: StreamTicksize::Client,
+                    push_freq: PushFrequency::ServerDefault,
+                }),
+                PersistStreamKind::Trades { ticker },
+            ],
+            Settings {
+                tick_multiply: Some(TickMultiplier(10)),
+                selected_basis: Some(Basis::Time(Timeframe::MS500)),
+                ..Settings::default()
+            },
+            Some(link_group),
+        ))
+    }
+
+    fn default_candlestick_pane(
+        symbol: &'static str,
+        link_group: LinkGroup,
+    ) -> Configuration<pane::State> {
+        let ticker = Self::default_ticker(symbol);
+
+        Configuration::Pane(pane::State::from_config(
+            pane::Content::Kline {
+                chart: None,
+                indicators: vec![KlineIndicator::Volume],
+                layout: ViewConfig {
+                    splits: vec![],
+                    autoscale: Some(Autoscale::FitToVisible),
+                },
+                kind: data::chart::KlineChartKind::Candles,
+            },
+            vec![PersistStreamKind::Kline {
+                ticker,
+                timeframe: Timeframe::M5,
+            }],
+            Settings {
+                selected_basis: Some(Basis::Time(Timeframe::M5)),
+                ..Settings::default()
+            },
+            Some(link_group),
+        ))
+    }
+
+    fn default_ticker(symbol: &'static str) -> Ticker {
+        Ticker::new(symbol, Exchange::MexcLinear)
     }
 
     pub fn from_config(
