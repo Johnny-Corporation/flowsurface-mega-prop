@@ -3,6 +3,7 @@ pub mod heatmap;
 pub mod indicator;
 pub mod kline;
 mod scale;
+mod tools;
 
 use crate::connector::fetcher::{FetchRange, FetchSpec, RequestHandler};
 use crate::style;
@@ -13,6 +14,8 @@ use exchange::TickerInfo;
 use exchange::unit::{Price, PriceStep};
 use scale::linear::PriceInfoLabel;
 use scale::{AxisLabelsX, AxisLabelsY};
+pub use tools::ChartTool;
+use tools::LevelLine;
 
 use iced::theme::palette::Extended;
 use iced::widget::canvas::{self, Cache, Canvas, Event, Frame, LineDash, Path, Stroke};
@@ -57,6 +60,9 @@ pub enum Message {
     BoundsChanged(Rectangle),
     SplitDragged(usize, f32),
     DoubleClick(AxisScaleClicked),
+    ToolSelected(ChartTool),
+    LevelPlaced(u64),
+    ClearLevelLines,
 }
 
 pub trait Chart: PlotConstants + canvas::Program<Message> {
@@ -79,6 +85,10 @@ pub trait Chart: PlotConstants + canvas::Program<Message> {
     fn autoscaled_coords(&self) -> Vector;
 
     fn supports_fit_autoscaling(&self) -> bool;
+
+    fn supports_chart_tools(&self) -> bool {
+        false
+    }
 
     fn is_empty(&self) -> bool;
 }
@@ -121,23 +131,49 @@ fn canvas_interaction<T: Chart>(
                     let cursor_in_bounds = cursor_position?;
 
                     if let mouse::Button::Left = button {
-                        match interaction {
-                            Interaction::None
-                            | Interaction::Panning { .. }
-                            | Interaction::Zoomin { .. } => {
-                                *interaction = Interaction::Panning {
-                                    translation: state.translation,
-                                    start: cursor_in_bounds,
-                                };
+                        match state.selected_tool {
+                            ChartTool::Levels => {
+                                let cursor_in_chart = cursor.position_in(bounds)?;
+                                let visible_region = state.visible_region(bounds.size());
+                                let (anchor, _) = state.snap_x_to_index(
+                                    cursor_in_chart.x,
+                                    bounds.size(),
+                                    visible_region,
+                                );
+
+                                return Some(
+                                    canvas::Action::publish(Message::LevelPlaced(anchor))
+                                        .and_capture(),
+                                );
                             }
-                            Interaction::Ruler { start } if start.is_none() => {
-                                *interaction = Interaction::Ruler {
-                                    start: Some(cursor_in_bounds),
-                                };
-                            }
-                            Interaction::Ruler { .. } => {
-                                *interaction = Interaction::None;
-                            }
+                            ChartTool::Ruler => match interaction {
+                                Interaction::Ruler { start: Some(_) } => {
+                                    *interaction = Interaction::Ruler { start: None };
+                                }
+                                _ => {
+                                    *interaction = Interaction::Ruler {
+                                        start: Some(cursor_in_bounds),
+                                    };
+                                }
+                            },
+                            ChartTool::Cursor => match interaction {
+                                Interaction::None
+                                | Interaction::Panning { .. }
+                                | Interaction::Zoomin { .. } => {
+                                    *interaction = Interaction::Panning {
+                                        translation: state.translation,
+                                        start: cursor_in_bounds,
+                                    };
+                                }
+                                Interaction::Ruler { start } if start.is_none() => {
+                                    *interaction = Interaction::Ruler {
+                                        start: Some(cursor_in_bounds),
+                                    };
+                                }
+                                Interaction::Ruler { .. } => {
+                                    *interaction = Interaction::None;
+                                }
+                            },
                         }
                     }
                     Some(canvas::Action::request_redraw().and_capture())
@@ -487,6 +523,27 @@ pub fn update<T: Chart>(chart: &mut T, message: &Message) {
             }
         }
         Message::CrosshairMoved => return chart.invalidate_crosshair(),
+        Message::ToolSelected(tool) => {
+            let state = chart.mut_state();
+            state.selected_tool = *tool;
+        }
+        Message::LevelPlaced(anchor) => {
+            let state = chart.mut_state();
+
+            if let Some(index) = state
+                .level_lines
+                .iter()
+                .position(|line| line.anchor == *anchor)
+            {
+                state.level_lines.remove(index);
+            } else {
+                state.level_lines.push(LevelLine::new(*anchor));
+                state.level_lines.sort_unstable_by_key(|line| line.anchor);
+            }
+        }
+        Message::ClearLevelLines => {
+            chart.mut_state().level_lines.clear();
+        }
     }
     chart.invalidate_all();
 }
@@ -594,22 +651,37 @@ pub fn view<'a, T: Chart>(
         }
     };
 
-    column![
-        content,
-        rule::horizontal(1).style(style::split_ruler),
-        row![
-            container(
-                mouse_area(axis_labels_x)
-                    .on_double_click(Message::DoubleClick(AxisScaleClicked::X))
-            )
-            .padding(padding::right(1))
-            .width(Length::FillPortion(10))
-            .height(Length::Fixed(26.0)),
-            buttons.width(y_labels_width).height(Length::Fixed(26.0))
+    let x_axis_row = row![
+        container(
+            mouse_area(axis_labels_x).on_double_click(Message::DoubleClick(AxisScaleClicked::X))
+        )
+        .padding(padding::right(1))
+        .width(Length::FillPortion(10))
+        .height(Length::Fixed(26.0)),
+        buttons.width(y_labels_width).height(Length::Fixed(26.0))
+    ];
+
+    let chart_view: Element<_> = if chart.supports_chart_tools() {
+        column![
+            tools::toolbar(state.selected_tool, !state.level_lines.is_empty()),
+            rule::horizontal(1).style(style::split_ruler),
+            content,
+            rule::horizontal(1).style(style::split_ruler),
+            x_axis_row
         ]
-    ]
-    .padding(padding::left(1).right(1).bottom(1))
-    .into()
+        .into()
+    } else {
+        column![
+            content,
+            rule::horizontal(1).style(style::split_ruler),
+            x_axis_row
+        ]
+        .into()
+    };
+
+    container(chart_view)
+        .padding(padding::left(1).right(1).bottom(1))
+        .into()
 }
 
 pub trait PlotConstants {
@@ -660,6 +732,8 @@ pub struct ViewState {
     decimals: usize,
     ticker_info: TickerInfo,
     layout: ViewConfig,
+    selected_tool: ChartTool,
+    level_lines: Vec<LevelLine>,
 }
 
 impl ViewState {
@@ -687,6 +761,8 @@ impl ViewState {
             decimals,
             ticker_info,
             layout,
+            selected_tool: ChartTool::default(),
+            level_lines: Vec::new(),
         }
     }
 

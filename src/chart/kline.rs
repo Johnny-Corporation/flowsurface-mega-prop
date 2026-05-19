@@ -119,6 +119,10 @@ impl Chart for KlineChart {
         true
     }
 
+    fn supports_chart_tools(&self) -> bool {
+        true
+    }
+
     fn is_empty(&self) -> bool {
         match &self.data_source {
             PlotData::TimeBased(timeseries) => timeseries.datapoints.is_empty(),
@@ -1059,6 +1063,7 @@ impl canvas::Program<Message> for KlineChart {
                 }
             }
 
+            super::tools::draw_level_lines(chart, frame, palette, region);
             chart.draw_last_price_line(frame, palette, region);
         });
 
