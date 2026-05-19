@@ -14,7 +14,7 @@ mod settings;
 mod trades;
 
 use connections::{ConnectionPanelState, connections_panel};
-use settings::{SettingsSection, settings_panel};
+use settings::{SettingsAction, SettingsPanelState, settings_panel};
 use trades::trades_table;
 
 const PNL_POINTS: [f32; 12] = [
@@ -110,7 +110,7 @@ pub(crate) struct State {
     pub kind: Kind,
     show_trades: bool,
     connection_state: ConnectionPanelState,
-    settings_section: SettingsSection,
+    settings_state: SettingsPanelState,
 }
 
 impl State {
@@ -119,21 +119,20 @@ impl State {
             kind,
             show_trades: false,
             connection_state: ConnectionPanelState::default(),
-            settings_section: SettingsSection::General,
+            settings_state: SettingsPanelState::default(),
         }
     }
 
     pub(crate) fn update(&mut self, message: PanelMessage) {
         match message {
-            PanelMessage::Noop => {}
             PanelMessage::ConnectionAction(action) => {
                 if self.kind == Kind::Connections {
                     self.connection_state.update(action);
                 }
             }
-            PanelMessage::SettingsSection(section) => {
+            PanelMessage::SettingsAction(action) => {
                 if self.kind == Kind::Settings {
-                    self.settings_section = section;
+                    self.settings_state.update(action);
                 }
             }
             PanelMessage::TogglePnlTrades => {
@@ -222,7 +221,7 @@ impl State {
                     ("Report issue", "Collect logs and environment details"),
                 ],
             ),
-            Kind::Settings => settings_panel(self.settings_section),
+            Kind::Settings => settings_panel(&self.settings_state),
             Kind::Pnl => pnl_panel(self.show_trades),
             Kind::Connections => connections_panel(&self.connection_state),
             Kind::Account => account_panel(),
@@ -256,9 +255,8 @@ impl State {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PanelMessage {
-    Noop,
     ConnectionAction(ConnectionAction),
-    SettingsSection(SettingsSection),
+    SettingsAction(SettingsAction),
     TogglePnlTrades,
 }
 
@@ -559,14 +557,6 @@ pub(super) fn value_box<'a>(value: impl Into<String>, width: Length) -> Element<
         .width(width)
         .padding(padding::left(10).right(10).top(6).bottom(6))
         .style(style::panel_value_box)
-        .into()
-}
-
-pub(super) fn utility_button<'a>(label: &'static str) -> Element<'a, PanelMessage> {
-    button(text(label).size(style::text_size::SMALL))
-        .padding(padding::left(10).right(10).top(6).bottom(6))
-        .style(style::button::info)
-        .on_press(PanelMessage::Noop)
         .into()
 }
 
