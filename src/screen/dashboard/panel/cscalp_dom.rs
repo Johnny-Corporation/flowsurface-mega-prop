@@ -15,6 +15,7 @@ use iced::{Alignment, Event, Point, Rectangle, Renderer, Size, Theme, mouse};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
+mod prints;
 mod types;
 use types::{
     ColumnRanges, DomRow, LastPrintMarker, Maxima, PriceGrid, PriceLayout, VisibleRow,
@@ -36,6 +37,8 @@ const ORDER_QTY_MAX_WIDTH: f32 = 92.0;
 const RECENT_PRINT_LIMIT: usize = 64;
 const PRINT_BUBBLE_MIN_RADIUS: f32 = 4.0;
 const PRINT_BUBBLE_MAX_RADIUS: f32 = 18.0;
+const PRINT_LABEL_MIN_RADIUS: f32 = 10.5;
+const PRINT_LABEL_MAX_COUNT: usize = 10;
 const CLUSTER_FOOTER_ROWS: f32 = 3.0;
 
 impl super::Panel for CscalpDom {
@@ -243,6 +246,13 @@ impl canvas::Program<Message> for CscalpDom {
 
                     match visible_row.row {
                         DomRow::Ask { price, qty } => {
+                            self.draw_cluster_grid_row(
+                                frame,
+                                visible_row.y,
+                                &clusters,
+                                divider_color,
+                                &cols,
+                            );
                             self.draw_cluster_cells(
                                 frame,
                                 visible_row.y,
@@ -267,6 +277,13 @@ impl canvas::Program<Message> for CscalpDom {
                             );
                         }
                         DomRow::Bid { price, qty } => {
+                            self.draw_cluster_grid_row(
+                                frame,
+                                visible_row.y,
+                                &clusters,
+                                divider_color,
+                                &cols,
+                            );
                             self.draw_cluster_cells(
                                 frame,
                                 visible_row.y,
@@ -522,6 +539,43 @@ impl CscalpDom {
         }
     }
 
+    fn draw_cluster_grid_row(
+        &self,
+        frame: &mut iced::widget::canvas::Frame,
+        y: f32,
+        clusters: &[ClusterColumn],
+        divider_color: iced::Color,
+        cols: &ColumnRanges,
+    ) {
+        if clusters.is_empty() {
+            return;
+        }
+
+        let Some((first_x, col_width)) = cluster_column_geometry(cols.clusters, clusters.len())
+        else {
+            return;
+        };
+
+        for idx in 0..clusters.len() {
+            let x = first_x + idx as f32 * col_width;
+            let x_end = x + col_width - COL_PADDING;
+            if x_end <= x {
+                continue;
+            }
+
+            frame.fill_rectangle(
+                Point::new(x.floor() + 0.5, y),
+                Size::new(1.0, ROW_HEIGHT),
+                divider_color.scale_alpha(0.42),
+            );
+            frame.fill_rectangle(
+                Point::new(x, y.floor() + 0.5),
+                Size::new((x_end - x).max(0.0), 1.0),
+                divider_color.scale_alpha(0.20),
+            );
+        }
+    }
+
     fn draw_cluster_cell(
         &self,
         frame: &mut iced::widget::canvas::Frame,
@@ -538,38 +592,47 @@ impl CscalpDom {
             return;
         }
 
-        let inner_width = (x_end - x_start - 4.0).max(0.0);
-        let fill_width = ((total / max_cluster_qty) * inner_width).clamp(2.0, inner_width.max(2.0));
-        let fill_x = x_end - fill_width - 2.0;
-        let fill_y = y + 2.0;
-        let fill_h = (ROW_HEIGHT - 4.0).max(1.0);
-
         let sell = f32::from(cell.sell_qty);
         let buy = f32::from(cell.buy_qty);
-        let sell_width = if total > 0.0 {
-            fill_width * (sell / total)
-        } else {
-            0.0
-        };
-        let buy_width = if total > 0.0 {
-            fill_width * (buy / total)
-        } else {
-            0.0
-        };
+        let dominant = if sell > buy { ask_color } else { bid_color };
+        let intensity = (total / max_cluster_qty).clamp(0.0, 1.0);
+        let cell_width = (x_end - x_start).max(0.0);
+        let inner_x = x_start + 1.0;
+        let inner_y = y + 1.0;
+        let inner_w = (cell_width - 2.0).max(0.0);
+        let inner_h = (ROW_HEIGHT - 2.0).max(0.0);
 
-        if sell_width > 0.0 {
+        frame.fill_rectangle(
+            Point::new(inner_x, inner_y),
+            Size::new(inner_w, inner_h),
+            dominant.scale_alpha(0.08 + intensity * 0.18),
+        );
+
+        let outline = Path::rectangle(Point::new(inner_x, inner_y), Size::new(inner_w, inner_h));
+        frame.stroke(
+            &outline,
+            Stroke::default()
+                .with_color(dominant.scale_alpha(0.35 + intensity * 0.35))
+                .with_width(1.0),
+        );
+
+        let split_h = (inner_h * 0.34).clamp(2.0, inner_h);
+        let total_width = (inner_w * intensity).clamp(2.0, inner_w);
+        let volume_x = x_end - total_width - 2.0;
+
+        if sell > 0.0 {
             frame.fill_rectangle(
-                Point::new(fill_x, fill_y),
-                Size::new(sell_width, fill_h),
-                ask_color.scale_alpha(0.34),
+                Point::new(volume_x, y + 1.0),
+                Size::new(total_width, split_h),
+                ask_color.scale_alpha(0.34 + intensity * 0.22),
             );
         }
 
-        if buy_width > 0.0 {
+        if buy > 0.0 {
             frame.fill_rectangle(
-                Point::new(fill_x + sell_width, fill_y),
-                Size::new(buy_width, fill_h),
-                bid_color.scale_alpha(0.34),
+                Point::new(volume_x, y + ROW_HEIGHT - split_h - 1.0),
+                Size::new(total_width, split_h),
+                bid_color.scale_alpha(0.34 + intensity * 0.22),
             );
         }
 
@@ -665,90 +728,6 @@ impl CscalpDom {
                 muted_text_color,
                 Alignment::End,
             );
-        }
-    }
-
-    fn draw_recent_prints(
-        &self,
-        frame: &mut iced::widget::canvas::Frame,
-        grid: &PriceGrid,
-        bounds: Rectangle,
-        cols: &ColumnRanges,
-        bid_color: iced::Color,
-        ask_color: iced::Color,
-        text_color: iced::Color,
-    ) {
-        let recent: Vec<Trade> = self
-            .trades
-            .raw
-            .iter()
-            .rev()
-            .take(RECENT_PRINT_LIMIT)
-            .copied()
-            .collect();
-        if recent.is_empty() {
-            return;
-        }
-
-        let max_qty = recent
-            .iter()
-            .map(|trade| f32::from(trade.qty))
-            .fold(0.0, f32::max);
-        if max_qty <= 0.0 {
-            return;
-        }
-
-        let print_width = (cols.prints.1 - cols.prints.0).max(0.0);
-        let x_min = cols.prints.0 + PRINT_BUBBLE_MAX_RADIUS + 3.0;
-        let x_max = cols.prints.1 - PRINT_BUBBLE_MAX_RADIUS - 3.0;
-        let count = recent.len();
-
-        for (idx, trade) in recent.iter().rev().enumerate() {
-            let grouped_price = trade.price.round_to_side_step(trade.is_sell, grid.tick);
-            let Some(y) = self.price_to_screen_y(grouped_price, grid, bounds.height) else {
-                continue;
-            };
-
-            let age = if count > 1 {
-                idx as f32 / (count - 1) as f32
-            } else {
-                1.0
-            };
-            let x = if x_max > x_min {
-                x_min + (x_max - x_min) * age
-            } else {
-                cols.prints.0 + print_width * 0.5
-            };
-            let size_ratio = (f32::from(trade.qty) / max_qty).clamp(0.0, 1.0).sqrt();
-            let radius = PRINT_BUBBLE_MIN_RADIUS
-                + (PRINT_BUBBLE_MAX_RADIUS - PRINT_BUBBLE_MIN_RADIUS) * size_ratio;
-            if y + radius < 0.0 || y - radius > bounds.height {
-                continue;
-            }
-
-            let color = if trade.is_sell { ask_color } else { bid_color };
-            let alpha = 0.24 + age * 0.62;
-            let circle = Path::circle(Point::new(x, y), radius);
-            frame.fill(&circle, color.scale_alpha(alpha));
-            frame.stroke(
-                &circle,
-                Stroke::default()
-                    .with_color(color.scale_alpha((alpha + 0.18).min(1.0)))
-                    .with_width(1.0),
-            );
-
-            if radius >= 8.0 && print_width >= 48.0 {
-                frame.fill_text(Text {
-                    content: self.format_quantity(trade.qty),
-                    position: Point::new(x, y),
-                    color: text_color.scale_alpha(0.88),
-                    size: style::text_size::TINY.into(),
-                    font: style::AZERET_MONO,
-                    align_x: Alignment::Center.into(),
-                    align_y: Alignment::Center.into(),
-                    ..Default::default()
-                });
-            }
         }
     }
 

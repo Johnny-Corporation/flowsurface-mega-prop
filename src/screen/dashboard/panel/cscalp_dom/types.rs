@@ -95,3 +95,37 @@ pub(super) fn cluster_column_geometry(range: (f32, f32), count: usize) -> Option
     }
     Some((range.0, col_width))
 }
+
+#[derive(Clone, Copy)]
+pub(super) struct LabelBox {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+impl LabelBox {
+    pub(super) fn overlaps(self, other: Self) -> bool {
+        self.left < other.right
+            && self.right > other.left
+            && self.top < other.bottom
+            && self.bottom > other.top
+    }
+}
+
+pub(super) fn text_box(
+    center_x: f32,
+    center_y: f32,
+    chars: usize,
+    text_size: f32,
+    pad: f32,
+) -> LabelBox {
+    let width = chars as f32 * text_size * 0.62 + pad * 2.0;
+    let height = text_size + pad * 2.0;
+    LabelBox {
+        left: center_x - width * 0.5,
+        top: center_y - height * 0.5,
+        right: center_x + width * 0.5,
+        bottom: center_y + height * 0.5,
+    }
+}
