@@ -17,6 +17,7 @@ use std::time::Instant;
 
 mod orderbook;
 mod prints;
+mod ruler;
 mod sections;
 mod types;
 use sections::SectionDragState;
@@ -271,16 +272,24 @@ impl canvas::Program<Message> for CscalpDom {
                     }
                 }
                 mouse::Event::CursorMoved { .. } => {
-                    let divider = _state.dragging?;
-                    let cursor_position = cursor_position?;
-                    Some(
-                        canvas::Action::publish(Message::SectionSplitDragged {
-                            divider,
-                            cursor_x: cursor_position.x,
-                            width: bounds.width,
-                        })
-                        .and_capture(),
-                    )
+                    if let Some(divider) = _state.dragging {
+                        let cursor_position = cursor_position?;
+                        Some(
+                            canvas::Action::publish(Message::SectionSplitDragged {
+                                divider,
+                                cursor_x: cursor_position.x,
+                                width: bounds.width,
+                            })
+                            .and_capture(),
+                        )
+                    } else if self.config.show_ruler {
+                        Some(
+                            canvas::Action::publish(Message::Invalidate(Some(Instant::now())))
+                                .and_capture(),
+                        )
+                    } else {
+                        None
+                    }
                 }
                 mouse::Event::WheelScrolled { delta } => {
                     let scroll_amount = match delta {
@@ -323,7 +332,7 @@ impl canvas::Program<Message> for CscalpDom {
         renderer: &Renderer,
         theme: &Theme,
         bounds: Rectangle,
-        _cursor: iced_core::mouse::Cursor,
+        cursor: iced_core::mouse::Cursor,
     ) -> Vec<iced::widget::canvas::Geometry<Renderer>> {
         let palette = theme.extended_palette();
 
@@ -469,6 +478,7 @@ impl canvas::Program<Message> for CscalpDom {
                 );
 
                 self.draw_vertical_splits(frame, bounds, &cols, divider_color, spread_row);
+                self.draw_price_ruler(frame, &grid, bounds, cursor, &cols, text_color);
             }
         });
 
@@ -952,5 +962,11 @@ impl CscalpDom {
 
         let y = mid_screen_y + PriceGrid::top_y(idx) - scroll + ROW_HEIGHT / 2.0;
         Some(y)
+    }
+
+    fn screen_y_to_price(&self, y: f32, grid: &PriceGrid, bounds_height: f32) -> Option<Price> {
+        let mid_screen_y = bounds_height * 0.5;
+        let idx = ((y + self.scroll_px - mid_screen_y) / ROW_HEIGHT).round() as i32;
+        grid.index_to_price(idx)
     }
 }

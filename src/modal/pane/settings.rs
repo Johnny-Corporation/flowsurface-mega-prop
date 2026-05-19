@@ -814,9 +814,23 @@ pub fn cscalp_dom_cfg_view<'a>(
                 )
             });
 
+        let ruler = checkbox(cfg.show_ruler)
+            .label("Show Price Ruler")
+            .on_toggle(move |value| {
+                Message::VisualConfigChanged(
+                    pane,
+                    VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                        show_ruler: value,
+                        ..cfg
+                    }),
+                    false,
+                )
+            });
+
         column![
             text("Display Options").size(crate::style::text_size::SECTION),
             spread,
+            ruler,
         ]
         .spacing(8)
     };

@@ -10,6 +10,8 @@ const TRADE_RETENTION_MS: u64 = 8 * 60_000;
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub struct Config {
     pub show_spread: bool,
+    #[serde(default)]
+    pub show_ruler: bool,
     pub trade_retention: Duration,
     #[serde(default = "default_cluster_timeframe")]
     pub cluster_timeframe: Timeframe,
@@ -25,6 +27,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             show_spread: false,
+            show_ruler: false,
             trade_retention: Duration::from_millis(TRADE_RETENTION_MS),
             cluster_timeframe: default_cluster_timeframe(),
             visible_cluster_columns: default_cluster_columns(),
