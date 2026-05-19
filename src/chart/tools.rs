@@ -11,6 +11,7 @@ use iced::{
 
 const HIT_TARGET_PX: f32 = 9.0;
 const DELETE_MARKER_PX: f32 = 14.0;
+const RECT_ARROW_MIN_LENGTH_PX: f32 = 24.0;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ChartTool {
@@ -276,16 +277,7 @@ fn draw_rectangles(
             continue;
         }
 
-        frame.fill_rectangle(
-            bounds.position(),
-            bounds.size(),
-            palette.primary.base.color.scale_alpha(0.08),
-        );
-        frame.stroke_rectangle(
-            bounds.position(),
-            bounds.size(),
-            annotation_stroke(state, palette.primary.base.color),
-        );
+        draw_trend_rectangle(state, frame, palette, *rect);
     }
 }
 
@@ -322,13 +314,7 @@ fn draw_draft(
     let color = palette.primary.strong.color.scale_alpha(0.85);
     match tool {
         ChartTool::Rectangle => {
-            let bounds = state.rectangle_bounds(ChartRectangle { start, end });
-            frame.fill_rectangle(bounds.position(), bounds.size(), color.scale_alpha(0.08));
-            frame.stroke_rectangle(
-                bounds.position(),
-                bounds.size(),
-                annotation_stroke(state, color),
-            );
+            draw_trend_rectangle(state, frame, palette, ChartRectangle { start, end });
         }
         ChartTool::Line | ChartTool::Ray => {
             let start = state.point_to_chart_xy(start);
@@ -342,6 +328,101 @@ fn draw_draft(
         }
         ChartTool::Hand | ChartTool::Level => {}
     }
+}
+
+fn draw_trend_rectangle(
+    state: &ViewState,
+    frame: &mut canvas::Frame,
+    palette: &Extended,
+    rect: ChartRectangle,
+) {
+    let bounds = state.rectangle_bounds(rect);
+    let (fill, stroke_color) = trend_rectangle_colors(palette, rect);
+    let stroke = trend_stroke(state, stroke_color);
+
+    frame.fill_rectangle(bounds.position(), bounds.size(), fill);
+    frame.stroke_rectangle(bounds.position(), bounds.size(), stroke);
+
+    let start = state.point_to_chart_xy(rect.start);
+    let end = state.point_to_chart_xy(rect.end);
+    let uptrend = rect.end.price >= rect.start.price;
+    let side_start_y = if uptrend {
+        bounds.y + bounds.height
+    } else {
+        bounds.y
+    };
+    let side_end_y = if uptrend {
+        bounds.y
+    } else {
+        bounds.y + bounds.height
+    };
+
+    draw_arrow_line(
+        state,
+        frame,
+        Point::new(bounds.x, side_start_y),
+        Point::new(bounds.x, side_end_y),
+        stroke_color,
+    );
+    draw_arrow_line(
+        state,
+        frame,
+        Point::new(bounds.x + bounds.width, side_start_y),
+        Point::new(bounds.x + bounds.width, side_end_y),
+        stroke_color,
+    );
+    draw_arrow_line(state, frame, start, end, stroke_color);
+}
+
+fn trend_rectangle_colors(palette: &Extended, rect: ChartRectangle) -> (Color, Color) {
+    let is_uptrend = rect.end.price >= rect.start.price;
+    let color = if is_uptrend {
+        palette.success.base.color
+    } else {
+        palette.danger.base.color
+    };
+
+    (color.scale_alpha(0.10), color.scale_alpha(0.78))
+}
+
+fn trend_stroke(state: &ViewState, color: Color) -> Stroke<'static> {
+    Stroke::with_color(
+        Stroke {
+            width: (1.2 / state.scaling.max(1.0)).max(0.6),
+            ..Default::default()
+        },
+        color,
+    )
+}
+
+fn draw_arrow_line(
+    state: &ViewState,
+    frame: &mut canvas::Frame,
+    start: Point,
+    end: Point,
+    color: Color,
+) {
+    let direction = end - start;
+    let length = (direction.x * direction.x + direction.y * direction.y).sqrt();
+    let min_length = RECT_ARROW_MIN_LENGTH_PX / state.scaling.max(1.0);
+
+    if length <= min_length {
+        return;
+    }
+
+    let stroke = trend_stroke(state, color);
+    frame.stroke(&Path::line(start, end), stroke);
+
+    let unit = Vector::new(direction.x / length, direction.y / length);
+    let normal = Vector::new(-unit.y, unit.x);
+    let head_len = (9.0 / state.scaling.max(1.0)).max(4.0 / state.scaling.max(1.0));
+    let head_width = head_len * 0.58;
+    let wing_base = end - unit * head_len;
+    let left = wing_base + normal * head_width;
+    let right = wing_base - normal * head_width;
+
+    frame.stroke(&Path::line(end, left), stroke);
+    frame.stroke(&Path::line(end, right), stroke);
 }
 
 fn draw_delete_marker(
