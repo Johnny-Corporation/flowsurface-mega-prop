@@ -841,7 +841,7 @@ pub fn cscalp_dom_cfg_view<'a>(
             });
 
         let transparent_fills = checkbox(cfg.transparent_liquidity_fills)
-            .label("Transparent heatmap fills")
+            .label("Transparent grid heatmaps")
             .on_toggle(move |value| {
                 Message::VisualConfigChanged(
                     pane,

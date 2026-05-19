@@ -259,17 +259,7 @@ impl CscalpDom {
 
         let footer_y = bounds.height - footer_h;
         let (position_dollars, pnl_percent, pnl_dollars) = self.paper_position_values();
-        let is_open = self.paper_position.is_open();
-        let position_fill = if is_open {
-            let tint = if pnl_dollars > 0.0 {
-                bid_color
-            } else {
-                ask_color
-            };
-            solid_mix(footer_bg, tint, 0.30)
-        } else {
-            footer_bg
-        };
+        let panel_fill = trading_footer_panel_color(text_color, footer_bg);
         let cells = [
             ("$", signed_money(position_dollars)),
             ("CT", signed_contracts(self.paper_position.contracts)),
@@ -286,44 +276,52 @@ impl CscalpDom {
         frame.fill_rectangle(
             Point::new(x0, footer_y),
             Size::new(width, footer_h),
-            position_fill,
+            panel_fill,
         );
 
-        let cell_w = width / cells.len() as f32;
+        let cell_w = width / 2.0;
+        let cell_h = footer_h / 2.0;
         for (idx, (label, value)) in cells.iter().enumerate() {
-            let x = x0 + idx as f32 * cell_w;
+            let col = idx % 2;
+            let row = idx / 2;
+            let x = x0 + col as f32 * cell_w;
+            let y = footer_y + row as f32 * cell_h;
             frame.fill_rectangle(
-                Point::new(x, footer_y),
-                Size::new(cell_w, footer_h),
-                position_fill,
+                Point::new(x + 1.0, y + 1.0),
+                Size::new((cell_w - 2.0).max(0.0), (cell_h - 2.0).max(0.0)),
+                panel_fill,
             );
             frame.fill_rectangle(
-                Point::new(x.floor() + 0.5, footer_y),
-                Size::new(1.0, footer_h),
+                Point::new(x.floor() + 0.5, y),
+                Size::new(1.0, cell_h),
                 divider_color,
             );
             frame.fill_rectangle(
-                Point::new(x, footer_y),
+                Point::new(x, y.floor() + 0.5),
                 Size::new(cell_w, 1.0),
                 divider_color,
             );
+            let value_color = footer_value_color(*label, value, text_color, bid_color, ask_color);
+            let label_x = x + 4.0;
+            let value_x = x + cell_w - 4.0;
+            let center_y = y + cell_h * 0.5;
             frame.fill_text(Text {
                 content: (*label).to_string(),
-                position: Point::new(x + cell_w * 0.5, footer_y + ROW_HEIGHT * 0.78),
-                color: text_color.scale_alpha(0.56),
-                size: style::text_size::TINY.into(),
+                position: Point::new(label_x, center_y),
+                color: text_color.scale_alpha(0.62),
+                size: fit_footer_text_size(label, cell_w * 0.30).into(),
                 font: style::AZERET_MONO,
-                align_x: Alignment::Center.into(),
+                align_x: Alignment::Start.into(),
                 align_y: Alignment::Center.into(),
                 ..Default::default()
             });
             frame.fill_text(Text {
                 content: value.clone(),
-                position: Point::new(x + cell_w * 0.5, footer_y + ROW_HEIGHT * 1.82),
-                color: text_color.scale_alpha(0.88),
-                size: style::text_size::TINY.into(),
+                position: Point::new(value_x, center_y),
+                color: value_color,
+                size: fit_footer_text_size(value, cell_w * 0.70).into(),
                 font: style::AZERET_MONO,
-                align_x: Alignment::Center.into(),
+                align_x: Alignment::End.into(),
                 align_y: Alignment::Center.into(),
                 ..Default::default()
             });
@@ -472,10 +470,6 @@ impl CscalpDom {
 }
 
 impl PaperPosition {
-    fn is_open(self) -> bool {
-        self.contracts.abs() > POSITION_EPSILON
-    }
-
     fn apply_fill(&mut self, side: PaperOrderSide, price: Price, contracts: f32) {
         let contracts = contracts.max(0.0);
         if contracts <= POSITION_EPSILON {
@@ -575,6 +569,51 @@ fn label_plate_color(text_color: iced::Color) -> iced::Color {
     } else {
         iced::Color::WHITE.scale_alpha(0.60)
     }
+}
+
+fn trading_footer_panel_color(text_color: iced::Color, footer_bg: iced::Color) -> iced::Color {
+    let luminance = 0.2126 * text_color.r + 0.7152 * text_color.g + 0.0722 * text_color.b;
+    let panel = if luminance > 0.5 {
+        iced::Color {
+            r: 0.02,
+            g: 0.02,
+            b: 0.025,
+            a: 1.0,
+        }
+    } else {
+        iced::Color {
+            r: 0.88,
+            g: 0.88,
+            b: 0.86,
+            a: 1.0,
+        }
+    };
+    solid_mix(footer_bg, panel, 0.88)
+}
+
+fn footer_value_color(
+    label: &str,
+    value: &str,
+    text_color: iced::Color,
+    bid_color: iced::Color,
+    ask_color: iced::Color,
+) -> iced::Color {
+    if matches!(label, "P%" | "P$") {
+        if value.starts_with('-') || value.starts_with("$-") {
+            return ask_color;
+        }
+        if value.starts_with('+') || value.starts_with("$+") {
+            return bid_color;
+        }
+    }
+    text_color.scale_alpha(0.92)
+}
+
+fn fit_footer_text_size(text: &str, available_width: f32) -> f32 {
+    let chars = text.chars().count().max(1) as f32;
+    let max_size = style::text_size::TINY;
+    let fitted = (available_width / (chars * 0.62)).floor();
+    fitted.clamp(7.0, max_size)
 }
 
 fn solid_mix(base: iced::Color, tint: iced::Color, tint_weight: f32) -> iced::Color {
