@@ -2,7 +2,7 @@ use exchange::{TickMultiplier, TickerInfo, Timeframe};
 use serde::{Deserialize, Serialize};
 
 use crate::chart::{comparison, heatmap, kline};
-use crate::panel::{ladder, timeandsales};
+use crate::panel::{cscalp_dom, ladder, timeandsales};
 use crate::stream::PersistStreamKind;
 use crate::util::ok_or_default;
 
@@ -81,6 +81,12 @@ pub enum Pane {
         #[serde(deserialize_with = "ok_or_default", default)]
         link_group: Option<LinkGroup>,
     },
+    CscalpDom {
+        stream_type: Vec<PersistStreamKind>,
+        settings: Settings,
+        #[serde(deserialize_with = "ok_or_default", default)]
+        link_group: Option<LinkGroup>,
+    },
     Ladder {
         stream_type: Vec<PersistStreamKind>,
         settings: Settings,
@@ -152,6 +158,7 @@ impl std::fmt::Display for LinkGroup {
 pub enum VisualConfig {
     Heatmap(heatmap::Config),
     TimeAndSales(timeandsales::Config),
+    CscalpDom(cscalp_dom::Config),
     Kline(kline::Config),
     Ladder(ladder::Config),
     Comparison(comparison::Config),
@@ -168,6 +175,13 @@ impl VisualConfig {
     pub fn time_and_sales(&self) -> Option<timeandsales::Config> {
         match self {
             Self::TimeAndSales(cfg) => Some(*cfg),
+            _ => None,
+        }
+    }
+
+    pub fn cscalp_dom(&self) -> Option<cscalp_dom::Config> {
+        match self {
+            Self::CscalpDom(cfg) => Some(*cfg),
             _ => None,
         }
     }
@@ -203,11 +217,12 @@ pub enum ContentKind {
     CandlestickChart,
     ComparisonChart,
     TimeAndSales,
+    CscalpDom,
     Ladder,
 }
 
 impl ContentKind {
-    pub const ALL: [ContentKind; 8] = [
+    pub const ALL: [ContentKind; 9] = [
         ContentKind::Starter,
         ContentKind::HeatmapChart,
         ContentKind::ShaderHeatmap,
@@ -215,6 +230,7 @@ impl ContentKind {
         ContentKind::CandlestickChart,
         ContentKind::ComparisonChart,
         ContentKind::TimeAndSales,
+        ContentKind::CscalpDom,
         ContentKind::Ladder,
     ];
 }
@@ -229,6 +245,7 @@ impl std::fmt::Display for ContentKind {
             ContentKind::CandlestickChart => "Candlestick Chart",
             ContentKind::ComparisonChart => "Comparison Chart",
             ContentKind::TimeAndSales => "Time&Sales",
+            ContentKind::CscalpDom => "DOM/Clusters",
             ContentKind::Ladder => "DOM/Ladder",
         };
         write!(f, "{s}")
@@ -270,7 +287,7 @@ impl PaneSetup {
 
                     Some(current.unwrap_or_else(|| Basis::default_heatmap_time(Some(base_ticker))))
                 }
-                ContentKind::Ladder => Some(
+                ContentKind::Ladder | ContentKind::CscalpDom => Some(
                     current_basis.unwrap_or_else(|| Basis::default_heatmap_time(Some(base_ticker))),
                 ),
                 ContentKind::ShaderHeatmap => Some(
@@ -301,7 +318,10 @@ impl PaneSetup {
             };
 
         let tick_multiplier = match content_kind {
-            ContentKind::HeatmapChart | ContentKind::Ladder | ContentKind::ShaderHeatmap => {
+            ContentKind::HeatmapChart
+            | ContentKind::Ladder
+            | ContentKind::CscalpDom
+            | ContentKind::ShaderHeatmap => {
                 let tm = if !is_client_aggr && prev_is_client_aggr {
                     TickMultiplier(10)
                 } else if let Some(tm) = current_tick_multiplier {

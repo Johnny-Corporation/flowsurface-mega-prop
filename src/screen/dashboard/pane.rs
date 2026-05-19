@@ -10,13 +10,14 @@ use crate::{
             Modal,
             mini_tickers_list::MiniPanel,
             settings::{
-                comparison_cfg_view, heatmap_cfg_view, heatmap_shader_cfg_view, kline_cfg_view,
+                comparison_cfg_view, cscalp_dom_cfg_view, heatmap_cfg_view,
+                heatmap_shader_cfg_view, kline_cfg_view,
             },
             stack_modal,
         },
     },
     screen::dashboard::{
-        panel::{self, ladder::Ladder, timeandsales::TimeAndSales},
+        panel::{self, cscalp_dom::CscalpDom, ladder::Ladder, timeandsales::TimeAndSales},
         tickers_table::TickersTable,
     },
     style::{self, Icon, icon_text},
@@ -298,6 +299,22 @@ impl State {
                         .clone()
                         .and_then(|cfg| cfg.ladder());
                     let content = Content::Ladder(Some(Ladder::new(
+                        config,
+                        derived_plan.ticker_info,
+                        derived_plan.price_step,
+                    )));
+
+                    let streams = vec![depth_stream(&derived_plan), trades_stream(&derived_plan)];
+
+                    (content, streams)
+                }
+                ContentKind::CscalpDom => {
+                    let config = self
+                        .settings
+                        .visual_config
+                        .clone()
+                        .and_then(|cfg| cfg.cscalp_dom());
+                    let content = Content::CscalpDom(Some(CscalpDom::new(
                         config,
                         derived_plan.ticker_info,
                         derived_plan.price_step,
@@ -782,6 +799,65 @@ impl State {
                     )
                 }
             }
+            Content::CscalpDom(panel) => {
+                if let Some(panel) = panel {
+                    let basis = self
+                        .settings
+                        .selected_basis
+                        .unwrap_or(Basis::default_heatmap_time(self.stream_pair()));
+                    let tick_multiply = self.settings.tick_multiply.unwrap_or(TickMultiplier(1));
+
+                    let stream_pair = self.stream_pair();
+
+                    let price_step = stream_pair
+                        .map(|ti| {
+                            tick_multiply.unscale_step_or_min_tick(panel.step, ti.min_ticksize)
+                        })
+                        .unwrap_or_else(|| tick_multiply.unscale_step(panel.step));
+
+                    let exchange = stream_pair.map(|ti| ti.ticker.exchange);
+                    let min_ticksize = stream_pair.map(|ti| ti.min_ticksize);
+
+                    let modifiers = ticksize_modifier(
+                        id,
+                        price_step,
+                        min_ticksize,
+                        tick_multiply,
+                        modifier,
+                        ModifierKind::Orderbook(basis, tick_multiply),
+                        exchange,
+                    );
+
+                    top_left_buttons = top_left_buttons.push(modifiers);
+
+                    let base = panel::view(panel, timezone).map(move |message| {
+                        Message::PaneEvent(id, Event::PanelInteraction(message))
+                    });
+
+                    let settings_modal = || cscalp_dom_cfg_view(panel.config, id);
+
+                    self.compose_stack_view(
+                        base,
+                        id,
+                        None,
+                        compact_controls,
+                        settings_modal,
+                        None,
+                        tickers_table,
+                    )
+                } else {
+                    let base = uninitialized_base(ContentKind::CscalpDom);
+                    self.compose_stack_view(
+                        base,
+                        id,
+                        None,
+                        compact_controls,
+                        || column![].into(),
+                        None,
+                        tickers_table,
+                    )
+                }
+            }
             Content::Heatmap {
                 chart, indicators, ..
             } => {
@@ -1157,6 +1233,7 @@ impl State {
                 _ => {}
             },
             Event::PanelInteraction(msg) => match &mut self.content {
+                Content::CscalpDom(Some(p)) => super::panel::update(p, msg),
                 Content::Ladder(Some(p)) => super::panel::update(p, msg),
                 Content::TimeAndSales(Some(p)) => super::panel::update(p, msg),
                 _ => {}
@@ -1240,6 +1317,9 @@ impl State {
                                             );
                                         }
                                         Content::Ladder(Some(p)) => {
+                                            p.set_tick_size(tm.multiply_with_min_tick_step(ticker));
+                                        }
+                                        Content::CscalpDom(Some(p)) => {
                                             p.set_tick_size(tm.multiply_with_min_tick_step(ticker));
                                         }
                                         Content::ShaderHeatmap {
@@ -1757,6 +1837,9 @@ impl State {
             Content::TimeAndSales(panel) => panel
                 .as_mut()
                 .and_then(|p| p.invalidate(Some(now)).map(Action::Panel)),
+            Content::CscalpDom(panel) => panel
+                .as_mut()
+                .and_then(|p| p.invalidate(Some(now)).map(Action::Panel)),
             Content::Ladder(panel) => panel
                 .as_mut()
                 .and_then(|p| p.invalidate(Some(now)).map(Action::Panel)),
@@ -1787,7 +1870,7 @@ impl State {
                     None
                 }
             }
-            Content::Ladder(_) | Content::TimeAndSales(_) => Some(100),
+            Content::CscalpDom(_) | Content::Ladder(_) | Content::TimeAndSales(_) => Some(100),
             Content::ShaderHeatmap { .. } => None,
             Content::Starter => None,
         }
@@ -1873,6 +1956,7 @@ pub enum Content {
         kind: data::chart::KlineChartKind,
     },
     TimeAndSales(Option<TimeAndSales>),
+    CscalpDom(Option<CscalpDom>),
     Ladder(Option<Ladder>),
     Comparison(Option<ComparisonChart>),
 }
@@ -2081,6 +2165,7 @@ impl Content {
             },
             ContentKind::ComparisonChart => Content::Comparison(None),
             ContentKind::TimeAndSales => Content::TimeAndSales(None),
+            ContentKind::CscalpDom => Content::CscalpDom(None),
             ContentKind::Ladder => Content::Ladder(None),
         }
     }
@@ -2090,6 +2175,7 @@ impl Content {
             Content::Heatmap { chart, .. } => Some(chart.as_ref()?.last_update()),
             Content::Kline { chart, .. } => Some(chart.as_ref()?.last_update()),
             Content::TimeAndSales(panel) => Some(panel.as_ref()?.last_update()),
+            Content::CscalpDom(panel) => Some(panel.as_ref()?.last_update()),
             Content::Ladder(panel) => Some(panel.as_ref()?.last_update()),
             Content::Comparison(chart) => Some(chart.as_ref()?.last_update()),
             Content::Starter => None,
@@ -2166,6 +2252,7 @@ impl Content {
             Content::Heatmap { indicators, .. } => column_drag::reorder_vec(indicators, event),
             Content::Kline { indicators, .. } => column_drag::reorder_vec(indicators, event),
             Content::TimeAndSales(_)
+            | Content::CscalpDom(_)
             | Content::Ladder(_)
             | Content::Starter
             | Content::Comparison(_)
@@ -2192,6 +2279,9 @@ impl Content {
             (Content::TimeAndSales(Some(panel)), VisualConfig::TimeAndSales(cfg)) => {
                 panel.config = cfg;
             }
+            (Content::CscalpDom(Some(panel)), VisualConfig::CscalpDom(cfg)) => {
+                panel.config = cfg;
+            }
             (Content::Ladder(Some(panel)), VisualConfig::Ladder(cfg)) => {
                 panel.config = cfg;
             }
@@ -2213,6 +2303,7 @@ impl Content {
                 }
             }
             Content::TimeAndSales(_)
+            | Content::CscalpDom(_)
             | Content::Ladder(_)
             | Content::Starter
             | Content::Comparison(_) => None,
@@ -2273,6 +2364,7 @@ impl Content {
                 data::chart::KlineChartKind::Candles => ContentKind::CandlestickChart,
             },
             Content::TimeAndSales(_) => ContentKind::TimeAndSales,
+            Content::CscalpDom(_) => ContentKind::CscalpDom,
             Content::Ladder(_) => ContentKind::Ladder,
             Content::Comparison(_) => ContentKind::ComparisonChart,
             Content::Starter => ContentKind::Starter,
@@ -2292,6 +2384,7 @@ impl Content {
             Content::ShaderHeatmap { chart, .. } => chart.is_some(),
             Content::Kline { chart, .. } => chart.is_some(),
             Content::TimeAndSales(panel) => panel.is_some(),
+            Content::CscalpDom(panel) => panel.is_some(),
             Content::Ladder(panel) => panel.is_some(),
             Content::Comparison(chart) => chart.is_some(),
             Content::Starter => true,
@@ -2313,6 +2406,7 @@ impl PartialEq for Content {
                 | (Content::Heatmap { .. }, Content::Heatmap { .. })
                 | (Content::Kline { .. }, Content::Kline { .. })
                 | (Content::TimeAndSales(_), Content::TimeAndSales(_))
+                | (Content::CscalpDom(_), Content::CscalpDom(_))
                 | (Content::Ladder(_), Content::Ladder(_))
         )
     }
