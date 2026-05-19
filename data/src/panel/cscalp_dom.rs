@@ -16,6 +16,8 @@ pub struct Config {
     pub view_mode: bool,
     #[serde(default = "default_paper_order_contracts")]
     pub paper_order_contracts: f32,
+    #[serde(default)]
+    pub transparent_liquidity_fills: bool,
     pub trade_retention: Duration,
     #[serde(default = "default_cluster_timeframe")]
     pub cluster_timeframe: Timeframe,
@@ -34,6 +36,7 @@ impl Default for Config {
             show_ruler: false,
             view_mode: default_view_mode(),
             paper_order_contracts: default_paper_order_contracts(),
+            transparent_liquidity_fills: false,
             trade_retention: Duration::from_millis(TRADE_RETENTION_MS),
             cluster_timeframe: default_cluster_timeframe(),
             visible_cluster_columns: default_cluster_columns(),

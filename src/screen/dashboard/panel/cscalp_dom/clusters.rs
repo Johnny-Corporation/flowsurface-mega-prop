@@ -30,6 +30,7 @@ impl CscalpDom {
         bid_color: iced::Color,
         ask_color: iced::Color,
         text_color: iced::Color,
+        base_color: iced::Color,
         cols: &ColumnRanges,
     ) {
         if clusters.is_empty() || max_cluster_qty <= 0.0 {
@@ -60,6 +61,7 @@ impl CscalpDom {
                 bid_color,
                 ask_color,
                 text_color,
+                base_color,
             );
         }
     }
@@ -128,6 +130,7 @@ impl CscalpDom {
         bid_color: iced::Color,
         ask_color: iced::Color,
         text_color: iced::Color,
+        base_color: iced::Color,
     ) {
         let total = f32::from(cell.total());
         if total <= 0.0 || max_cluster_qty <= 0.0 {
@@ -148,17 +151,29 @@ impl CscalpDom {
         }
         let fill_w = (inner_w * intensity).max(2.0).min(inner_w);
 
-        frame.fill_rectangle(
-            Point::new(inner_x, inner_y),
-            Size::new(inner_w, inner_h),
-            dominant.scale_alpha(0.06),
-        );
-
-        frame.fill_rectangle(
-            Point::new(inner_x, inner_y),
-            Size::new(fill_w, inner_h),
-            dominant.scale_alpha(0.28 + intensity * 0.36),
-        );
+        if self.config.transparent_liquidity_fills {
+            frame.fill_rectangle(
+                Point::new(inner_x, inner_y),
+                Size::new(inner_w, inner_h),
+                dominant.scale_alpha(0.06),
+            );
+            frame.fill_rectangle(
+                Point::new(inner_x, inner_y),
+                Size::new(fill_w, inner_h),
+                dominant.scale_alpha(0.28 + intensity * 0.36),
+            );
+        } else {
+            frame.fill_rectangle(
+                Point::new(inner_x, inner_y),
+                Size::new(inner_w, inner_h),
+                solid_mix(base_color, dominant, 0.12),
+            );
+            frame.fill_rectangle(
+                Point::new(inner_x, inner_y),
+                Size::new(fill_w, inner_h),
+                solid_mix(base_color, dominant, 0.36 + intensity * 0.42),
+            );
+        }
 
         let outline = Path::rectangle(Point::new(inner_x, inner_y), Size::new(inner_w, inner_h));
         frame.stroke(
@@ -170,10 +185,15 @@ impl CscalpDom {
 
         if buy > 0.0 && sell > 0.0 {
             let other_side = if sell > buy { bid_color } else { ask_color };
+            let stripe_color = if self.config.transparent_liquidity_fills {
+                other_side.scale_alpha(0.58)
+            } else {
+                solid_mix(base_color, other_side, 0.60)
+            };
             frame.fill_rectangle(
                 Point::new(inner_x, inner_y + inner_h - 2.0),
                 Size::new(fill_w, 2.0),
-                other_side.scale_alpha(0.58),
+                stripe_color,
             );
         }
 
@@ -291,5 +311,16 @@ impl CscalpDom {
             }
         }
         max_qty
+    }
+}
+
+fn solid_mix(base: iced::Color, tint: iced::Color, tint_weight: f32) -> iced::Color {
+    let tint_weight = tint_weight.clamp(0.0, 1.0);
+    let base_weight = 1.0 - tint_weight;
+    iced::Color {
+        r: base.r * base_weight + tint.r * tint_weight,
+        g: base.g * base_weight + tint.g * tint_weight,
+        b: base.b * base_weight + tint.b * tint_weight,
+        a: 1.0,
     }
 }

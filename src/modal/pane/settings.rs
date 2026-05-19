@@ -840,11 +840,25 @@ pub fn cscalp_dom_cfg_view<'a>(
                 )
             });
 
+        let transparent_fills = checkbox(cfg.transparent_liquidity_fills)
+            .label("Transparent heatmap fills")
+            .on_toggle(move |value| {
+                Message::VisualConfigChanged(
+                    pane,
+                    VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                        transparent_liquidity_fills: value,
+                        ..cfg
+                    }),
+                    false,
+                )
+            });
+
         column![
             text("Display Options").size(crate::style::text_size::SECTION),
             spread,
             ruler,
             view_mode,
+            transparent_fills,
         ]
         .spacing(8)
     };

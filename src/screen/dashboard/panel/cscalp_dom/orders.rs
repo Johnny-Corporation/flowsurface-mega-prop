@@ -198,6 +198,7 @@ impl CscalpDom {
         bounds: Rectangle,
         grid: &PriceGrid,
         cols: &ColumnRanges,
+        base_color: iced::Color,
         bid_color: iced::Color,
         ask_color: iced::Color,
     ) {
@@ -219,8 +220,9 @@ impl CscalpDom {
         }
 
         let fill_color = if is_profitable { bid_color } else { ask_color };
-        let x = cols.prints.0;
-        let width = (cols.price.1 - cols.prints.0).max(0.0);
+        let fill_color = solid_mix(base_color, fill_color, 0.70);
+        let x = cols.orderbook.0;
+        let width = (cols.orderbook.1 - cols.orderbook.0).max(0.0);
         if width <= 0.0 {
             return;
         }
@@ -228,14 +230,14 @@ impl CscalpDom {
         frame.fill_rectangle(
             Point::new(x, top),
             Size::new(width, bottom - top),
-            fill_color.scale_alpha(0.24),
+            fill_color,
         );
 
         let entry_color = if is_long { bid_color } else { ask_color };
         frame.fill_rectangle(
             Point::new(x, entry_y - 1.0),
             Size::new(width, 2.0),
-            entry_color.scale_alpha(0.72),
+            solid_mix(base_color, entry_color, 0.90),
         );
     }
 

@@ -436,6 +436,7 @@ impl canvas::Program<Message> for CscalpDom {
                                 bid_color,
                                 ask_color,
                                 text_color,
+                                footer_bg,
                                 &cols,
                             );
                             self.draw_orderbook_row(
@@ -445,6 +446,7 @@ impl canvas::Program<Message> for CscalpDom {
                                 qty,
                                 ask_color,
                                 text_color,
+                                footer_bg,
                                 maxima.vis_max_order_qty,
                                 last_print,
                                 &cols,
@@ -467,6 +469,7 @@ impl canvas::Program<Message> for CscalpDom {
                                 bid_color,
                                 ask_color,
                                 text_color,
+                                footer_bg,
                                 &cols,
                             );
                             self.draw_orderbook_row(
@@ -476,6 +479,7 @@ impl canvas::Program<Message> for CscalpDom {
                                 qty,
                                 bid_color,
                                 text_color,
+                                footer_bg,
                                 maxima.vis_max_order_qty,
                                 last_print,
                                 &cols,
@@ -516,7 +520,9 @@ impl canvas::Program<Message> for CscalpDom {
                     }
                 }
 
-                self.draw_open_position_range(frame, bounds, &grid, &cols, bid_color, ask_color);
+                self.draw_open_position_range(
+                    frame, bounds, &grid, &cols, footer_bg, bid_color, ask_color,
+                );
 
                 self.draw_recent_prints(
                     frame, &grid, bounds, &cols, bid_color, ask_color, text_color,

@@ -19,6 +19,7 @@ impl CscalpDom {
         order_qty: Qty,
         side_color: iced::Color,
         text_color: iced::Color,
+        base_color: iced::Color,
         max_order_qty: f32,
         last_print: Option<LastPrintMarker>,
         cols: &ColumnRanges,
@@ -42,6 +43,16 @@ impl CscalpDom {
 
         let order_qty_f32 = f32::from(order_qty);
         let volume_color = volume_tier_color(order_qty_f32, max_order_qty);
+        let fill_color = if self.config.transparent_liquidity_fills {
+            volume_color
+        } else {
+            solid_mix(base_color, volume_color, 0.48)
+        };
+        let fill_alpha = if self.config.transparent_liquidity_fills {
+            0.36
+        } else {
+            1.0
+        };
         fill_bar(
             frame,
             cols.order_qty,
@@ -49,9 +60,9 @@ impl CscalpDom {
             ROW_HEIGHT,
             order_qty_f32,
             max_order_qty,
-            volume_color,
+            fill_color,
             false,
-            0.36,
+            fill_alpha,
         );
 
         if order_qty_f32 > 0.0 {
@@ -157,5 +168,16 @@ fn volume_ratio(value: f32, visible_max: f32) -> f32 {
         0.0
     } else {
         (value / visible_max).clamp(0.0, 1.0)
+    }
+}
+
+fn solid_mix(base: iced::Color, tint: iced::Color, tint_weight: f32) -> iced::Color {
+    let tint_weight = tint_weight.clamp(0.0, 1.0);
+    let base_weight = 1.0 - tint_weight;
+    iced::Color {
+        r: base.r * base_weight + tint.r * tint_weight,
+        g: base.g * base_weight + tint.g * tint_weight,
+        b: base.b * base_weight + tint.b * tint_weight,
+        a: 1.0,
     }
 }
