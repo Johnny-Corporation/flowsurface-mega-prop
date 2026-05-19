@@ -46,6 +46,7 @@ pub(crate) enum Kind {
 }
 
 impl Kind {
+    #[cfg(not(target_os = "macos"))]
     pub(crate) const ALL: [Self; 11] = [
         Self::App,
         Self::File,
@@ -269,6 +270,7 @@ impl TradeRow {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn menu_bar<'a>() -> Element<'a, Message> {
     let mut items = row![].spacing(2).align_y(Alignment::Center);
 
@@ -282,6 +284,60 @@ pub(crate) fn menu_bar<'a>() -> Element<'a, Message> {
     }
 
     items.into()
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_menu_bar<'a>() -> Element<'a, Message> {
+    let mut items = row![
+        text("\u{f8ff}")
+            .size(style::text_size::TITLE)
+            .font(iced::Font {
+                weight: iced::font::Weight::Bold,
+                ..Default::default()
+            }),
+        macos_menu_button(Kind::App, true),
+    ]
+    .spacing(14)
+    .align_y(Alignment::Center);
+
+    for kind in [
+        Kind::File,
+        Kind::Edit,
+        Kind::View,
+        Kind::Window,
+        Kind::Help,
+        Kind::Pnl,
+        Kind::Connections,
+        Kind::Account,
+        Kind::Analytics,
+        Kind::About,
+    ] {
+        items = items.push(macos_menu_button(kind, false));
+    }
+
+    items.into()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_menu_button<'a>(kind: Kind, is_app_name: bool) -> Element<'a, Message> {
+    let weight = if is_app_name {
+        iced::font::Weight::Bold
+    } else {
+        iced::font::Weight::Normal
+    };
+
+    button(
+        text(kind.label())
+            .size(style::text_size::TITLE)
+            .font(iced::Font {
+                weight,
+                ..Default::default()
+            }),
+    )
+    .padding(padding::left(4).right(4).top(1).bottom(1))
+    .style(style::button::macos_menu)
+    .on_press(Message::OpenPanel(kind))
+    .into()
 }
 
 fn app_panel<'a>() -> Element<'a, PanelMessage> {

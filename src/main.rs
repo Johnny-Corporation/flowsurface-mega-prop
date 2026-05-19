@@ -34,7 +34,7 @@ use widget::{
 use iced::{
     Alignment, Element, Subscription, Task, keyboard, padding,
     widget::{
-        Space, button, column, container, pane_grid, pick_list, row, rule, scrollable, text,
+        button, column, container, pane_grid, pick_list, row, rule, scrollable, text,
         tooltip::Position as TooltipPosition,
     },
 };
@@ -695,24 +695,32 @@ impl Flowsurface {
                     event: msg,
                 });
 
-            let header_title = row![
-                panel_window::menu_bar(),
-                Space::new().width(iced::Length::Fill),
-                text("FLOWSURFACE")
-                    .font(iced::Font {
-                        weight: iced::font::Weight::Bold,
-                        ..Default::default()
-                    })
-                    .size(crate::style::text_size::TITLE)
-                    .style(style::title_text),
-            ]
-            .height(24)
-            .align_y(Alignment::Center)
-            .padding(if cfg!(target_os = "macos") {
-                padding::top(4).left(76).right(8)
-            } else {
-                padding::top(4).left(8).right(8)
-            });
+            let header_title = {
+                #[cfg(target_os = "macos")]
+                {
+                    row![panel_window::macos_menu_bar(),]
+                        .height(28)
+                        .align_y(Alignment::Center)
+                        .padding(padding::top(4).left(76).right(8))
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    row![
+                        panel_window::menu_bar(),
+                        iced::widget::Space::new().width(iced::Length::Fill),
+                        text("FLOWSURFACE")
+                            .font(iced::Font {
+                                weight: iced::font::Weight::Bold,
+                                ..Default::default()
+                            })
+                            .size(crate::style::text_size::TITLE)
+                            .style(style::title_text),
+                    ]
+                    .height(24)
+                    .align_y(Alignment::Center)
+                    .padding(padding::top(4).left(8).right(8))
+                }
+            };
 
             let base = column![
                 header_title,
