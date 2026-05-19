@@ -29,6 +29,7 @@ pub(crate) enum Kind {
     View,
     Window,
     Help,
+    Settings,
     Pnl,
     Connections,
     Account,
@@ -37,13 +38,14 @@ pub(crate) enum Kind {
 }
 
 impl Kind {
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 12] = [
         Self::App,
         Self::File,
         Self::Edit,
         Self::View,
         Self::Window,
         Self::Help,
+        Self::Settings,
         Self::Pnl,
         Self::Connections,
         Self::Account,
@@ -59,6 +61,7 @@ impl Kind {
             Self::View => "View",
             Self::Window => "Window",
             Self::Help => "Help",
+            Self::Settings => "Settings",
             Self::Pnl => "PnL",
             Self::Connections => "Connections",
             Self::Account => "Account",
@@ -75,6 +78,7 @@ impl Kind {
             Self::View => "View",
             Self::Window => "Window",
             Self::Help => "Help",
+            Self::Settings => "Settings",
             Self::Pnl => "PnL",
             Self::Connections => "Connections",
             Self::Account => "Account",
@@ -87,12 +91,16 @@ impl Kind {
         match self {
             Self::Connections => Size::new(920.0, 680.0),
             Self::Pnl => Size::new(820.0, 560.0),
-            Self::App | Self::View => Size::new(860.0, 620.0),
+            Self::Settings => Size::new(860.0, 620.0),
             Self::Analytics => Size::new(760.0, 540.0),
             Self::Account => Size::new(680.0, 480.0),
-            Self::File | Self::Edit | Self::Window | Self::Help | Self::About => {
-                Size::new(560.0, 420.0)
-            }
+            Self::App
+            | Self::File
+            | Self::Edit
+            | Self::View
+            | Self::Window
+            | Self::Help
+            | Self::About => Size::new(560.0, 420.0),
         }
     }
 }
@@ -101,6 +109,7 @@ impl Kind {
 pub(crate) struct State {
     pub kind: Kind,
     show_trades: bool,
+    connection_feedback: Option<ConnectionAction>,
 }
 
 impl State {
@@ -108,12 +117,18 @@ impl State {
         Self {
             kind,
             show_trades: false,
+            connection_feedback: None,
         }
     }
 
     pub(crate) fn update(&mut self, message: PanelMessage) {
         match message {
             PanelMessage::Noop => {}
+            PanelMessage::ConnectionAction(action) => {
+                if self.kind == Kind::Connections {
+                    self.connection_feedback = Some(action);
+                }
+            }
             PanelMessage::TogglePnlTrades => {
                 if self.kind == Kind::Pnl {
                     self.show_trades = !self.show_trades;
@@ -124,7 +139,7 @@ impl State {
 
     pub(crate) fn view(&self) -> Element<'_, PanelMessage> {
         let body = match self.kind {
-            Kind::App => settings_panel("Hotkeys"),
+            Kind::App => app_panel(),
             Kind::File => default_panel(
                 "File actions",
                 "Common file operations are grouped here as a simple command template.",
@@ -149,7 +164,21 @@ impl State {
                     ("Preferences", "Template area for editor and input settings"),
                 ],
             ),
-            Kind::View => settings_panel("Display"),
+            Kind::View => default_panel(
+                "View options",
+                "Display controls can live here without crowding the trading dashboard.",
+                &[
+                    (
+                        "Compact mode",
+                        "Reduce spacing for denser market monitoring",
+                    ),
+                    (
+                        "Focus mode",
+                        "Highlight the active pane and mute secondary chrome",
+                    ),
+                    ("Reset zoom", "Return charts to their default viewport"),
+                ],
+            ),
             Kind::Window => default_panel(
                 "Window manager",
                 "Window-level actions can coordinate the main dashboard and popout panels.",
@@ -168,9 +197,21 @@ impl State {
                     ),
                 ],
             ),
-            Kind::Help => settings_panel("Other"),
+            Kind::Help => default_panel(
+                "Help",
+                "A compact support panel can keep references close to the workflow.",
+                &[
+                    (
+                        "Keyboard shortcuts",
+                        "List app-wide navigation and pane shortcuts",
+                    ),
+                    ("Documentation", "Open local or web-based product docs"),
+                    ("Report issue", "Collect logs and environment details"),
+                ],
+            ),
+            Kind::Settings => settings_panel("Hotkeys"),
             Kind::Pnl => pnl_panel(self.show_trades),
-            Kind::Connections => connections_panel(),
+            Kind::Connections => connections_panel(self.connection_feedback),
             Kind::Account => account_panel(),
             Kind::Analytics => analytics_panel(),
             Kind::About => about_panel(),
@@ -203,7 +244,43 @@ impl State {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PanelMessage {
     Noop,
+    ConnectionAction(ConnectionAction),
     TogglePnlTrades,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConnectionAction {
+    AddConnection,
+    MyProxy,
+    Refresh,
+    Confirm,
+    BecomeTrader,
+    OpenAccount,
+    RowSettings,
+    RowHelp,
+    RowDelete,
+}
+
+impl ConnectionAction {
+    pub(crate) fn feedback(self) -> &'static str {
+        match self {
+            Self::AddConnection => {
+                "[ui] Add connection pressed. A full exchange form can attach here next."
+            }
+            Self::MyProxy => "[ui] My proxy pressed. Proxy configuration placeholder selected.",
+            Self::Refresh => "[ui] Refresh pressed. Connection checks requested.",
+            Self::Confirm => "[ui] OK pressed. Connection template settings accepted.",
+            Self::BecomeTrader => {
+                "[ui] Become a trader pressed. External onboarding placeholder selected."
+            }
+            Self::OpenAccount => {
+                "[ui] Open an account pressed. Account onboarding placeholder selected."
+            }
+            Self::RowSettings => "[ui] Connection settings pressed for the selected row.",
+            Self::RowHelp => "[ui] Connection help pressed for the selected row.",
+            Self::RowDelete => "[ui] Delete connection pressed for the selected row.",
+        }
+    }
 }
 
 pub(crate) fn menu_bar<'a>() -> Element<'a, Message> {
@@ -219,6 +296,27 @@ pub(crate) fn menu_bar<'a>() -> Element<'a, Message> {
     }
 
     items.into()
+}
+
+fn app_panel<'a>() -> Element<'a, PanelMessage> {
+    column![
+        metric_row(&[
+            ("Workspace", "Dashboard"),
+            ("Mode", "Live market monitor"),
+            ("Layout", "Active"),
+        ]),
+        panel_card(
+            "Session",
+            column![
+                detail_row("Main dashboard", "Open"),
+                detail_row("Market streams", "Managed by active panes"),
+                detail_row("Utility panels", "Opened from the app menu"),
+            ]
+            .spacing(10),
+        ),
+    ]
+    .spacing(14)
+    .into()
 }
 
 fn default_panel<'a>(

@@ -2,10 +2,10 @@ use crate::style;
 
 use iced::{
     Alignment, Element, Length, Theme, padding,
-    widget::{column, container, row, text},
+    widget::{button, column, container, row, text},
 };
 
-use super::{PanelMessage, panel_card, utility_button, value_box};
+use super::{ConnectionAction, PanelMessage, panel_card, value_box};
 
 const CONNECTIONS: [ConnectionRow; 6] = [
     ConnectionRow::new(false, "Bybit", "Market data", "$", 0x7d55c7, "Direct", "-"),
@@ -89,7 +89,9 @@ impl ConnectionRow {
     }
 }
 
-pub(super) fn connections_panel<'a>() -> Element<'a, PanelMessage> {
+pub(super) fn connections_panel<'a>(
+    feedback: Option<ConnectionAction>,
+) -> Element<'a, PanelMessage> {
     let mut rows = column![connection_header()].spacing(0);
 
     for connection in CONNECTIONS {
@@ -103,9 +105,9 @@ pub(super) fn connections_panel<'a>() -> Element<'a, PanelMessage> {
                 rows,
                 row![
                     iced::widget::Space::new().width(Length::Fill),
-                    utility_button("+ Add connection"),
-                    utility_button("My proxy"),
-                    utility_button("Refresh"),
+                    connection_button("+ Add connection", ConnectionAction::AddConnection),
+                    connection_button("My proxy", ConnectionAction::MyProxy),
+                    connection_button("Refresh", ConnectionAction::Refresh),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -113,10 +115,10 @@ pub(super) fn connections_panel<'a>() -> Element<'a, PanelMessage> {
             .spacing(12),
         ),
         connection_notice(),
-        connection_support_log(),
+        connection_support_log(feedback),
         row![
             iced::widget::Space::new().width(Length::Fill),
-            utility_button("OK"),
+            connection_button("OK", ConnectionAction::Confirm),
         ]
         .align_y(Alignment::Center),
     ]
@@ -312,11 +314,20 @@ fn speed_text<'a>(speed: &'static str) -> Element<'a, PanelMessage> {
 
 fn connection_actions<'a>() -> Element<'a, PanelMessage> {
     row![
-        style::icon_text(style::Icon::Cog, 13),
-        text("?").size(style::text_size::BODY),
-        style::icon_text(style::Icon::TrashBin, 13),
+        icon_button(
+            style::icon_text(style::Icon::Cog, 13),
+            ConnectionAction::RowSettings
+        ),
+        icon_button(
+            text("?").size(style::text_size::BODY),
+            ConnectionAction::RowHelp
+        ),
+        icon_button(
+            style::icon_text(style::Icon::TrashBin, 13),
+            ConnectionAction::RowDelete
+        ),
     ]
-    .spacing(12)
+    .spacing(6)
     .align_y(Alignment::Center)
     .into()
 }
@@ -327,8 +338,8 @@ fn connection_notice<'a>() -> Element<'a, PanelMessage> {
             text("Become a prop company trader or open a personal account on favorable terms")
                 .size(style::text_size::BODY),
             iced::widget::Space::new().width(Length::Fill),
-            utility_button("Become a trader"),
-            utility_button("Open an account"),
+            connection_button("Become a trader", ConnectionAction::BecomeTrader),
+            connection_button("Open an account", ConnectionAction::OpenAccount),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -339,19 +350,49 @@ fn connection_notice<'a>() -> Element<'a, PanelMessage> {
     .into()
 }
 
-fn connection_support_log<'a>() -> Element<'a, PanelMessage> {
+fn connection_support_log<'a>(feedback: Option<ConnectionAction>) -> Element<'a, PanelMessage> {
+    let mut lines = column![
+        text("[02:32:08] [OKX: USDT-M / USDC-M] Connected").size(style::text_size::SMALL),
+        text("[02:32:08] [OKX: Spot (Margin)] Connected").size(style::text_size::SMALL),
+    ]
+    .spacing(3);
+
+    if let Some(action) = feedback {
+        lines = lines.push(text(action.feedback()).size(style::text_size::SMALL).style(
+            |theme: &Theme| text::Style {
+                color: Some(theme.extended_palette().secondary.strong.color),
+            },
+        ));
+    }
+
     panel_card(
         "Problems connecting? Contact support",
-        container(
-            column![
-                text("[02:32:08] [OKX: USDT-M / USDC-M] Connected").size(style::text_size::SMALL),
-                text("[02:32:08] [OKX: Spot (Margin)] Connected").size(style::text_size::SMALL),
-            ]
-            .spacing(3),
-        )
-        .height(Length::Fixed(170.0))
-        .width(Length::Fill)
-        .padding(10)
-        .style(style::panel_value_box),
+        container(lines)
+            .height(Length::Fixed(170.0))
+            .width(Length::Fill)
+            .padding(10)
+            .style(style::panel_value_box),
     )
+}
+
+fn connection_button<'a>(
+    label: &'static str,
+    action: ConnectionAction,
+) -> Element<'a, PanelMessage> {
+    button(text(label).size(style::text_size::SMALL))
+        .padding(padding::left(10).right(10).top(6).bottom(6))
+        .style(style::button::info)
+        .on_press(PanelMessage::ConnectionAction(action))
+        .into()
+}
+
+fn icon_button<'a>(
+    content: impl Into<Element<'a, PanelMessage>>,
+    action: ConnectionAction,
+) -> Element<'a, PanelMessage> {
+    button(content)
+        .padding(padding::left(5).right(5).top(4).bottom(4))
+        .style(style::button::info)
+        .on_press(PanelMessage::ConnectionAction(action))
+        .into()
 }
