@@ -516,6 +516,8 @@ impl canvas::Program<Message> for CscalpDom {
                     }
                 }
 
+                self.draw_open_position_range(frame, bounds, &grid, &cols, bid_color, ask_color);
+
                 self.draw_recent_prints(
                     frame, &grid, bounds, &cols, bid_color, ask_color, text_color,
                 );
@@ -542,6 +544,8 @@ impl canvas::Program<Message> for CscalpDom {
                     text_color,
                     footer_bg,
                     divider_color,
+                    bid_color,
+                    ask_color,
                 );
                 self.draw_vertical_splits(frame, bounds, &cols, divider_color, spread_row);
                 self.draw_price_ruler(frame, &grid, bounds, cursor, &cols, text_color);

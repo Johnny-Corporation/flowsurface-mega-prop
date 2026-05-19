@@ -192,6 +192,53 @@ impl CscalpDom {
         });
     }
 
+    pub(super) fn draw_open_position_range(
+        &self,
+        frame: &mut Frame,
+        bounds: Rectangle,
+        grid: &PriceGrid,
+        cols: &ColumnRanges,
+        bid_color: iced::Color,
+        ask_color: iced::Color,
+    ) {
+        let Some((entry, spread, is_profitable, is_long)) = self.paper_position_range(grid) else {
+            return;
+        };
+        let Some(entry_y) = self.price_to_screen_y(entry, grid, bounds.height) else {
+            return;
+        };
+        let Some(spread_y) = self.price_to_screen_y(spread, grid, bounds.height) else {
+            return;
+        };
+
+        let footer_y = bounds.height - ROW_HEIGHT * CLUSTER_FOOTER_ROWS;
+        let top = (entry_y.min(spread_y) - ROW_HEIGHT * 0.5).max(0.0);
+        let bottom = (entry_y.max(spread_y) + ROW_HEIGHT * 0.5).min(footer_y);
+        if bottom <= top {
+            return;
+        }
+
+        let fill_color = if is_profitable { bid_color } else { ask_color };
+        let x = cols.prints.0;
+        let width = (cols.price.1 - cols.prints.0).max(0.0);
+        if width <= 0.0 {
+            return;
+        }
+
+        frame.fill_rectangle(
+            Point::new(x, top),
+            Size::new(width, bottom - top),
+            fill_color.scale_alpha(0.24),
+        );
+
+        let entry_color = if is_long { bid_color } else { ask_color };
+        frame.fill_rectangle(
+            Point::new(x, entry_y - 1.0),
+            Size::new(width, 2.0),
+            entry_color.scale_alpha(0.72),
+        );
+    }
+
     pub(super) fn draw_trading_footer(
         &self,
         frame: &mut Frame,
@@ -200,6 +247,8 @@ impl CscalpDom {
         text_color: iced::Color,
         footer_bg: iced::Color,
         divider_color: iced::Color,
+        bid_color: iced::Color,
+        ask_color: iced::Color,
     ) {
         let footer_h = ROW_HEIGHT * CLUSTER_FOOTER_ROWS;
         if bounds.height <= footer_h {
@@ -208,6 +257,17 @@ impl CscalpDom {
 
         let footer_y = bounds.height - footer_h;
         let (position_dollars, pnl_percent, pnl_dollars) = self.paper_position_values();
+        let is_open = self.paper_position.is_open();
+        let position_fill = if is_open {
+            let tint = if pnl_dollars > 0.0 {
+                bid_color
+            } else {
+                ask_color
+            };
+            solid_mix(footer_bg, tint, 0.30)
+        } else {
+            footer_bg
+        };
         let cells = [
             ("$", signed_money(position_dollars)),
             ("CT", signed_contracts(self.paper_position.contracts)),
@@ -224,12 +284,17 @@ impl CscalpDom {
         frame.fill_rectangle(
             Point::new(x0, footer_y),
             Size::new(width, footer_h),
-            footer_bg.scale_alpha(0.94),
+            position_fill,
         );
 
         let cell_w = width / cells.len() as f32;
         for (idx, (label, value)) in cells.iter().enumerate() {
             let x = x0 + idx as f32 * cell_w;
+            frame.fill_rectangle(
+                Point::new(x, footer_y),
+                Size::new(cell_w, footer_h),
+                position_fill,
+            );
             frame.fill_rectangle(
                 Point::new(x.floor() + 0.5, footer_y),
                 Size::new(1.0, footer_h),
@@ -364,6 +429,33 @@ impl CscalpDom {
         self.paper_position.values(mark)
     }
 
+    fn paper_position_range(&self, grid: &PriceGrid) -> Option<(Price, Price, bool, bool)> {
+        let avg_entry = self.paper_position.avg_entry?;
+        let is_long = self.paper_position.contracts > POSITION_EPSILON;
+        let is_short = self.paper_position.contracts < -POSITION_EPSILON;
+        if !is_long && !is_short {
+            return None;
+        }
+
+        let spread = if is_long {
+            self.best_price(super::Side::Bid)
+        } else {
+            self.best_price(super::Side::Ask)
+        }
+        .or_else(|| self.mark_price())?;
+
+        let entry = Price::from_f32(avg_entry).round_to_step(grid.tick);
+        let spread = spread.round_to_step(grid.tick);
+        let spread_value = spread.to_f32_lossy();
+        let is_profitable = if is_long {
+            spread_value > avg_entry
+        } else {
+            spread_value < avg_entry
+        };
+
+        Some((entry, spread, is_profitable, is_long))
+    }
+
     fn mark_price(&self) -> Option<Price> {
         match (
             self.best_price(super::Side::Bid),
@@ -378,6 +470,10 @@ impl CscalpDom {
 }
 
 impl PaperPosition {
+    fn is_open(self) -> bool {
+        self.contracts.abs() > POSITION_EPSILON
+    }
+
     fn apply_fill(&mut self, side: PaperOrderSide, price: Price, contracts: f32) {
         let contracts = contracts.max(0.0);
         if contracts <= POSITION_EPSILON {
@@ -476,5 +572,16 @@ fn label_plate_color(text_color: iced::Color) -> iced::Color {
         iced::Color::BLACK.scale_alpha(0.26)
     } else {
         iced::Color::WHITE.scale_alpha(0.60)
+    }
+}
+
+fn solid_mix(base: iced::Color, tint: iced::Color, tint_weight: f32) -> iced::Color {
+    let tint_weight = tint_weight.clamp(0.0, 1.0);
+    let base_weight = 1.0 - tint_weight;
+    iced::Color {
+        r: base.r * base_weight + tint.r * tint_weight,
+        g: base.g * base_weight + tint.g * tint_weight,
+        b: base.b * base_weight + tint.b * tint_weight,
+        a: 1.0,
     }
 }
