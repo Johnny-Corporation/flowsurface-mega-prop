@@ -24,33 +24,41 @@ impl NativeMenu {
         let window = window_menu(&mut panel_items)?;
         let help = help_menu(&mut panel_items)?;
 
-        let pnl = panel_item("flowsurface-native-pnl", "PnL", panel_window::Kind::Pnl);
-        let connections = panel_item(
-            "flowsurface-native-connections",
+        let pnl = custom_panel_menu(
+            &mut panel_items,
+            "PnL",
+            "flowsurface-native-pnl",
+            "Open PnL Panel",
+            panel_window::Kind::Pnl,
+        )?;
+        let connections = custom_panel_menu(
+            &mut panel_items,
             "Connections",
+            "flowsurface-native-connections",
+            "Open Connections Panel",
             panel_window::Kind::Connections,
-        );
-        let account = panel_item(
-            "flowsurface-native-account",
+        )?;
+        let account = custom_panel_menu(
+            &mut panel_items,
             "Account",
+            "flowsurface-native-account",
+            "Open Account Panel",
             panel_window::Kind::Account,
-        );
-        let analytics = panel_item(
-            "flowsurface-native-analytics",
+        )?;
+        let analytics = custom_panel_menu(
+            &mut panel_items,
             "Analytics",
+            "flowsurface-native-analytics",
+            "Open Analytics Panel",
             panel_window::Kind::Analytics,
-        );
-        let about = panel_item(
-            "flowsurface-native-about",
+        )?;
+        let about = custom_panel_menu(
+            &mut panel_items,
             "About",
+            "flowsurface-native-about",
+            "Open About Panel",
             panel_window::Kind::About,
-        );
-
-        register(&mut panel_items, &pnl);
-        register(&mut panel_items, &connections);
-        register(&mut panel_items, &account);
-        register(&mut panel_items, &analytics);
-        register(&mut panel_items, &about);
+        )?;
 
         menu.append_items(&[
             &app,
@@ -243,6 +251,21 @@ fn help_menu(panel_items: &mut HashMap<MenuId, panel_window::Kind>) -> Result<Su
     submenu.set_as_help_menu_for_nsapp();
 
     Ok(submenu)
+}
+
+fn custom_panel_menu(
+    panel_items: &mut HashMap<MenuId, panel_window::Kind>,
+    title: &'static str,
+    item_id: &'static str,
+    item_label: &'static str,
+    kind: panel_window::Kind,
+) -> Result<Submenu, String> {
+    let open = panel_item(item_id, item_label, kind);
+    register(panel_items, &open);
+
+    // macOS menu bar roots are menus, not command items. The command lives inside.
+    Submenu::with_items(title, true, &[&open])
+        .map_err(|err| format!("Failed to build {title} menu: {err}"))
 }
 
 fn panel_item(id: &'static str, label: &'static str, kind: panel_window::Kind) -> MenuItem {
