@@ -7,6 +7,7 @@ mod layout;
 mod logger;
 mod modal;
 mod notify;
+mod panel_window;
 mod screen;
 mod style;
 mod version;
@@ -33,7 +34,7 @@ use widget::{
 use iced::{
     Alignment, Element, Subscription, Task, keyboard, padding,
     widget::{
-        button, column, container, pane_grid, pick_list, row, rule, scrollable, text,
+        Space, button, column, container, pane_grid, pick_list, row, rule, scrollable, text,
         tooltip::Position as TooltipPosition,
     },
 };
@@ -84,6 +85,7 @@ struct Flowsurface {
     timezone: data::UserTimezone,
     theme: data::Theme,
     notifications: Notifications,
+    panel_windows: HashMap<window::Id, panel_window::State>,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +110,8 @@ enum Message {
     SetTimezone(data::UserTimezone),
     ToggleTradeFetch(bool),
     ApplyVolumeSizeUnit(exchange::SizeUnit),
+    OpenPanel(panel_window::Kind),
+    PanelWindow(window::Id, panel_window::PanelMessage),
     RemoveNotification(usize),
     ToggleDialogModal(Option<screen::ConfirmDialog<Message>>),
     ThemeEditor(modal::theme_editor::Message),
@@ -153,6 +157,7 @@ impl Flowsurface {
             volume_size_unit: saved_state.volume_size_unit,
             theme: saved_state.theme,
             notifications: Notifications::new(),
+            panel_windows: HashMap::new(),
             network: NetworkManager::new(saved_state.proxy_cfg),
         };
 
@@ -254,6 +259,10 @@ impl Flowsurface {
             }
             Message::WindowEvent(event) => match event {
                 window::Event::CloseRequested(window) => {
+                    if self.panel_windows.remove(&window).is_some() {
+                        return window::close(window);
+                    }
+
                     let main_window = self.main_window.id;
                     let dashboard = self.active_dashboard_mut();
 
@@ -424,6 +433,14 @@ impl Flowsurface {
                             event: msg,
                         })
                         .chain(additional_task);
+                }
+            }
+            Message::OpenPanel(kind) => {
+                return self.open_panel_window(kind);
+            }
+            Message::PanelWindow(window, message) => {
+                if let Some(panel) = self.panel_windows.get_mut(&window) {
+                    panel.update(message);
                 }
             }
             Message::RemoveNotification(index) => {
@@ -678,27 +695,24 @@ impl Flowsurface {
                     event: msg,
                 });
 
-            let header_title = {
-                #[cfg(target_os = "macos")]
-                {
-                    iced::widget::center(
-                        text("FLOWSURFACE")
-                            .font(iced::Font {
-                                weight: iced::font::Weight::Bold,
-                                ..Default::default()
-                            })
-                            .size(crate::style::text_size::TITLE)
-                            .style(style::title_text),
-                    )
-                    .height(20)
-                    .align_y(Alignment::Center)
-                    .padding(padding::top(4))
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    column![]
-                }
-            };
+            let header_title = row![
+                panel_window::menu_bar(),
+                Space::new().width(iced::Length::Fill),
+                text("FLOWSURFACE")
+                    .font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..Default::default()
+                    })
+                    .size(crate::style::text_size::TITLE)
+                    .style(style::title_text),
+            ]
+            .height(24)
+            .align_y(Alignment::Center)
+            .padding(if cfg!(target_os = "macos") {
+                padding::top(4).left(76).right(8)
+            } else {
+                padding::top(4).left(8).right(8)
+            });
 
             let base = column![
                 header_title,
@@ -715,6 +729,14 @@ impl Flowsurface {
             } else {
                 base.into()
             }
+        } else if let Some(panel) = self.panel_windows.get(&id) {
+            container(
+                panel
+                    .view()
+                    .map(move |message| Message::PanelWindow(id, message)),
+            )
+            .padding(padding::top(style::TITLE_PADDING_TOP))
+            .into()
         } else {
             container(
                 dashboard
@@ -744,7 +766,11 @@ impl Flowsurface {
         self.theme.clone().into()
     }
 
-    fn title(&self, _window: window::Id) -> String {
+    fn title(&self, window: window::Id) -> String {
+        if let Some(panel) = self.panel_windows.get(&window) {
+            return format!("Flowsurface - {}", panel.kind.title());
+        }
+
         if let Some(id) = self.layout_manager.active_layout_id() {
             format!("Flowsurface [{}]", id.name)
         } else {
@@ -832,6 +858,20 @@ impl Flowsurface {
                 log::error!("Active layout missing after selection: {}", layout_uid);
                 Task::none()
             })
+    }
+
+    fn open_panel_window(&mut self, kind: panel_window::Kind) -> Task<Message> {
+        let (window, task) = window::open(window::Settings {
+            size: kind.default_size(),
+            exit_on_close_request: false,
+            min_size: Some(iced::Size::new(420.0, 320.0)),
+            ..window::settings()
+        });
+
+        self.panel_windows
+            .insert(window, panel_window::State::new(kind));
+
+        task.discard()
     }
 
     fn view_with_modal<'a>(

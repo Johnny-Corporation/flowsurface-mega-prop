@@ -100,6 +100,15 @@ pub fn title_text(theme: &Theme) -> iced::widget::text::Style {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn title_text(theme: &Theme) -> iced::widget::text::Style {
+    let palette = theme.extended_palette();
+
+    iced::widget::text::Style {
+        color: Some(palette.background.base.text),
+    }
+}
+
 pub fn tooltip(theme: &Theme) -> Style {
     let palette = theme.extended_palette();
 
@@ -355,6 +364,28 @@ pub mod button {
         }
     }
 
+    pub fn macos_menu(theme: &Theme, status: Status) -> Style {
+        let palette = theme.extended_palette();
+
+        let background = match status {
+            Status::Active => None,
+            Status::Hovered => Some(palette.background.strong.color.into()),
+            Status::Pressed => Some(palette.background.weak.color.into()),
+            Status::Disabled => None,
+        };
+
+        Style {
+            text_color: palette.background.base.text,
+            background,
+            border: Border {
+                radius: 3.0.into(),
+                width: 0.0,
+                color: iced::Color::TRANSPARENT,
+            },
+            ..Default::default()
+        }
+    }
+
     pub fn menu_body(theme: &Theme, status: Status, is_selected: bool) -> Style {
         let palette = theme.extended_palette();
 
@@ -560,6 +591,90 @@ pub fn modal_container(theme: &Theme) -> Style {
             color: Color::BLACK.scale_alpha(if palette.is_dark { 0.8 } else { 0.2 }),
         },
         snap: true,
+    }
+}
+
+pub fn panel_window(theme: &Theme) -> Style {
+    let palette = theme.extended_palette();
+
+    Style {
+        text_color: Some(palette.background.base.text),
+        background: Some(palette.background.base.color.into()),
+        ..Default::default()
+    }
+}
+
+pub fn panel_card(theme: &Theme) -> Style {
+    let palette = theme.extended_palette();
+
+    Style {
+        text_color: Some(palette.background.base.text),
+        background: Some(palette.background.weakest.color.into()),
+        border: Border {
+            width: 1.0,
+            color: palette.background.weak.color.scale_alpha(0.7),
+            radius: 4.0.into(),
+        },
+        snap: true,
+        ..Default::default()
+    }
+}
+
+pub fn panel_progress(theme: &Theme) -> Style {
+    let palette = theme.extended_palette();
+
+    Style {
+        background: Some(palette.secondary.strong.color.into()),
+        border: Border {
+            radius: 2.0.into(),
+            ..Default::default()
+        },
+        snap: true,
+        ..Default::default()
+    }
+}
+
+pub fn panel_progress_track(theme: &Theme) -> Style {
+    let palette = theme.extended_palette();
+
+    Style {
+        background: Some(palette.background.weak.color.into()),
+        border: Border {
+            radius: 2.0.into(),
+            ..Default::default()
+        },
+        snap: true,
+        ..Default::default()
+    }
+}
+
+pub fn panel_table_header(theme: &Theme) -> Style {
+    let palette = theme.extended_palette();
+
+    Style {
+        text_color: Some(palette.background.strong.text),
+        background: Some(palette.background.strong.color.into()),
+        border: Border {
+            width: 1.0,
+            color: palette.background.strong.color,
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+pub fn panel_table_cell(theme: &Theme) -> Style {
+    let palette = theme.extended_palette();
+
+    Style {
+        text_color: Some(palette.background.base.text),
+        background: Some(palette.background.weakest.color.into()),
+        border: Border {
+            width: 1.0,
+            color: palette.background.weak.color.scale_alpha(0.6),
+            radius: 3.0.into(),
+        },
+        ..Default::default()
     }
 }
 
