@@ -365,6 +365,7 @@ pub mod button {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     pub fn macos_menu(theme: &Theme, status: Status) -> Style {
         let palette = theme.extended_palette();
 
