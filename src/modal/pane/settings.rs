@@ -827,10 +827,24 @@ pub fn cscalp_dom_cfg_view<'a>(
                 )
             });
 
+        let view_mode = checkbox(cfg.view_mode)
+            .label("View Mode (paper fills)")
+            .on_toggle(move |value| {
+                Message::VisualConfigChanged(
+                    pane,
+                    VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                        view_mode: value,
+                        ..cfg
+                    }),
+                    false,
+                )
+            });
+
         column![
             text("Display Options").size(crate::style::text_size::SECTION),
             spread,
             ruler,
+            view_mode,
         ]
         .spacing(8)
     };
@@ -911,10 +925,39 @@ pub fn cscalp_dom_cfg_view<'a>(
     ]
     .spacing(8);
 
+    let trading_column = {
+        let order_contracts = cfg.paper_order_contracts.clamp(1.0, 100.0);
+        let slider_ui = slider(1.0..=100.0, order_contracts, move |value| {
+            Message::VisualConfigChanged(
+                pane,
+                VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                    paper_order_contracts: value.round().max(1.0),
+                    ..cfg
+                }),
+                false,
+            )
+        })
+        .step(1.0);
+
+        column![
+            text("Trading").size(crate::style::text_size::SECTION),
+            classic_slider_row(
+                text("Order size"),
+                slider_ui.into(),
+                Some(
+                    text(format!("{:.0} contracts", order_contracts))
+                        .size(crate::style::text_size::EMPHASIS),
+                ),
+            )
+        ]
+        .spacing(8)
+    };
+
     let content = split_column![
         display_options,
         clusters_column,
         history_column,
+        trading_column,
         row![
             space::horizontal(),
             sync_all_button(pane, VisualConfig::CscalpDom(cfg))

@@ -12,6 +12,10 @@ pub struct Config {
     pub show_spread: bool,
     #[serde(default)]
     pub show_ruler: bool,
+    #[serde(default = "default_view_mode")]
+    pub view_mode: bool,
+    #[serde(default = "default_paper_order_contracts")]
+    pub paper_order_contracts: f32,
     pub trade_retention: Duration,
     #[serde(default = "default_cluster_timeframe")]
     pub cluster_timeframe: Timeframe,
@@ -28,6 +32,8 @@ impl Default for Config {
         Self {
             show_spread: false,
             show_ruler: false,
+            view_mode: default_view_mode(),
+            paper_order_contracts: default_paper_order_contracts(),
             trade_retention: Duration::from_millis(TRADE_RETENTION_MS),
             cluster_timeframe: default_cluster_timeframe(),
             visible_cluster_columns: default_cluster_columns(),
@@ -110,4 +116,12 @@ fn default_cluster_split_ratio() -> f32 {
 
 fn default_orderbook_split_ratio() -> f32 {
     0.88
+}
+
+fn default_view_mode() -> bool {
+    true
+}
+
+fn default_paper_order_contracts() -> f32 {
+    1.0
 }

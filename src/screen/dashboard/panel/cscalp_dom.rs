@@ -1,7 +1,7 @@
 use super::Message;
 use crate::style;
 use data::panel::{
-    cscalp_dom::{ClusterCell, ClusterColumn, Config, build_time_clusters},
+    cscalp_dom::{ClusterColumn, Config, build_time_clusters},
     ladder::{GroupedDepth, Side, TradeStore},
 };
 use exchange::Trade;
@@ -9,22 +9,22 @@ use exchange::unit::qty::Qty;
 use exchange::unit::{Price, PriceStep};
 use exchange::{TickerInfo, UnixMs, depth::Depth};
 
-use iced::widget::canvas::{self, Path, Stroke, Text};
-use iced::{Alignment, Event, Point, Rectangle, Renderer, Size, Theme, mouse};
+use iced::widget::canvas::{self, Text};
+use iced::{Alignment, Event, Point, Rectangle, Renderer, Size, Theme, keyboard, mouse};
 
 use std::collections::BTreeMap;
 use std::time::Instant;
 
+mod clusters;
 mod orderbook;
+mod orders;
 mod prints;
 mod ruler;
 mod sections;
 mod types;
+use orders::{PaperOrder, PaperPosition};
 use sections::SectionDragState;
-use types::{
-    ColumnRanges, DomRow, LastPrintMarker, Maxima, PriceGrid, VisibleRow, cluster_column_geometry,
-    cluster_totals,
-};
+use types::{ColumnRanges, DomRow, LastPrintMarker, Maxima, PriceGrid, VisibleRow};
 
 const TEXT_SIZE: f32 = style::text_size::SMALL;
 const ROW_HEIGHT: f32 = 16.0;
@@ -57,6 +57,21 @@ impl super::Panel for CscalpDom {
         CscalpDom::invalidate(self, Some(Instant::now()));
     }
 
+    fn cancel_all_orders(&mut self) {
+        CscalpDom::cancel_all_orders(self);
+    }
+
+    fn handle_orderbook_click(
+        &mut self,
+        button: super::OrderClickButton,
+        cursor_x: f32,
+        cursor_y: f32,
+        width: f32,
+        height: f32,
+    ) {
+        CscalpDom::handle_orderbook_click(self, button, cursor_x, cursor_y, width, height);
+    }
+
     fn drag_section_split(&mut self, divider: super::SectionDivider, cursor_x: f32, width: f32) {
         CscalpDom::drag_section_split(self, divider, cursor_x, width);
     }
@@ -85,6 +100,9 @@ pub struct CscalpDom {
     pending_tick_size: Option<PriceStep>,
     raw_price_spread: Option<Price>,
     last_exchange_ts_ms: Option<UnixMs>,
+    working_orders: Vec<PaperOrder>,
+    paper_position: PaperPosition,
+    fill_sounds: Option<crate::audio::SoundCache>,
 }
 
 impl CscalpDom {
@@ -101,11 +119,15 @@ impl CscalpDom {
             raw_price_spread: None,
             pending_tick_size: None,
             last_exchange_ts_ms: None,
+            working_orders: Vec::new(),
+            paper_position: PaperPosition::default(),
+            fill_sounds: crate::audio::SoundCache::with_default_sounds(Some(45.0)).ok(),
         }
     }
 
     pub fn insert_trades(&mut self, buffer: &[Trade]) {
         self.trades.insert_trades(buffer, self.step);
+        self.fill_view_mode_limit_orders();
     }
 
     pub fn insert_depth(&mut self, depth: &Depth, update_t: UnixMs) {
@@ -130,6 +152,7 @@ impl CscalpDom {
 
         self.regroup_from_depth(depth);
         self.last_exchange_ts_ms = Some(update_t);
+        self.fill_view_mode_limit_orders();
     }
 
     pub fn set_tick_size(&mut self, step: PriceStep) {
@@ -179,7 +202,7 @@ impl CscalpDom {
         Self::format_rounded_volume(qty.to_f32_lossy())
     }
 
-    fn format_rounded_volume(value: f32) -> String {
+    pub(super) fn format_rounded_volume(value: f32) -> String {
         let abs_value = value.abs();
         let sign = if value < 0.0 { "-" } else { "" };
 
@@ -250,6 +273,11 @@ impl canvas::Program<Message> for CscalpDom {
         let cursor_position = cursor.position_in(bounds);
 
         match event {
+            Event::Keyboard(keyboard::Event::KeyPressed { key, .. })
+                if matches!(key, keyboard::Key::Named(keyboard::key::Named::Space)) =>
+            {
+                Some(canvas::Action::publish(Message::CancelAllOrders).and_capture())
+            }
             Event::Mouse(mouse_event) => match mouse_event {
                 mouse::Event::ButtonPressed(mouse::Button::Left) => {
                     let cursor_position = cursor_position?;
@@ -257,11 +285,39 @@ impl canvas::Program<Message> for CscalpDom {
                     {
                         _state.dragging = Some(divider);
                         Some(canvas::Action::capture())
+                    } else if self.is_in_orderbook_area(bounds.width, cursor_position.x) {
+                        Some(
+                            canvas::Action::publish(Message::OrderbookClicked {
+                                button: super::OrderClickButton::Left,
+                                cursor_x: cursor_position.x,
+                                cursor_y: cursor_position.y,
+                                width: bounds.width,
+                                height: bounds.height,
+                            })
+                            .and_capture(),
+                        )
                     } else {
                         Some(canvas::Action::publish(Message::ResetScroll).and_capture())
                     }
                 }
-                mouse::Event::ButtonPressed(mouse::Button::Middle | mouse::Button::Right) => {
+                mouse::Event::ButtonPressed(mouse::Button::Right) => {
+                    let cursor_position = cursor_position?;
+                    if self.is_in_orderbook_area(bounds.width, cursor_position.x) {
+                        Some(
+                            canvas::Action::publish(Message::OrderbookClicked {
+                                button: super::OrderClickButton::Right,
+                                cursor_x: cursor_position.x,
+                                cursor_y: cursor_position.y,
+                                width: bounds.width,
+                                height: bounds.height,
+                            })
+                            .and_capture(),
+                        )
+                    } else {
+                        Some(canvas::Action::publish(Message::ResetScroll).and_capture())
+                    }
+                }
+                mouse::Event::ButtonPressed(mouse::Button::Middle) => {
                     Some(canvas::Action::publish(Message::ResetScroll).and_capture())
                 }
                 mouse::Event::ButtonReleased(mouse::Button::Left) => {
@@ -477,6 +533,16 @@ impl canvas::Program<Message> for CscalpDom {
                     &cols,
                 );
 
+                self.draw_working_orders(frame, bounds, &grid, &visible_rows, &cols, text_color);
+                self.draw_view_mode_badge(frame, &cols, text_color);
+                self.draw_trading_footer(
+                    frame,
+                    bounds,
+                    &cols,
+                    text_color,
+                    footer_bg,
+                    divider_color,
+                );
                 self.draw_vertical_splits(frame, bounds, &cols, divider_color, spread_row);
                 self.draw_price_ruler(frame, &grid, bounds, cursor, &cols, text_color);
             }
@@ -487,270 +553,6 @@ impl canvas::Program<Message> for CscalpDom {
 }
 
 impl CscalpDom {
-    fn draw_row_guides(
-        &self,
-        frame: &mut iced::widget::canvas::Frame,
-        y: f32,
-        width: f32,
-        color: iced::Color,
-    ) {
-        frame.fill_rectangle(Point::new(0.0, y), Size::new(width, 1.0), color);
-    }
-
-    fn draw_cluster_cells(
-        &self,
-        frame: &mut iced::widget::canvas::Frame,
-        y: f32,
-        price: Price,
-        clusters: &[ClusterColumn],
-        max_cluster_qty: f32,
-        bid_color: iced::Color,
-        ask_color: iced::Color,
-        text_color: iced::Color,
-        cols: &ColumnRanges,
-    ) {
-        if clusters.is_empty() || max_cluster_qty <= 0.0 {
-            return;
-        }
-
-        let Some((first_x, col_width)) = cluster_column_geometry(cols.clusters, clusters.len())
-        else {
-            return;
-        };
-
-        for (idx, cluster) in clusters.iter().enumerate() {
-            let Some(cell) = cluster.cells.get(&price).copied() else {
-                continue;
-            };
-            let total = f32::from(cell.total());
-            if total <= 0.0 {
-                continue;
-            }
-
-            let x = first_x + idx as f32 * col_width;
-            self.draw_cluster_cell(
-                frame,
-                (x, x + col_width - CLUSTER_CELL_GAP),
-                y,
-                cell,
-                max_cluster_qty,
-                bid_color,
-                ask_color,
-                text_color,
-            );
-        }
-    }
-
-    fn draw_cluster_grid_row(
-        &self,
-        frame: &mut iced::widget::canvas::Frame,
-        y: f32,
-        clusters: &[ClusterColumn],
-        divider_color: iced::Color,
-        cols: &ColumnRanges,
-    ) {
-        if clusters.is_empty() {
-            return;
-        }
-
-        let Some((first_x, col_width)) = cluster_column_geometry(cols.clusters, clusters.len())
-        else {
-            return;
-        };
-
-        for idx in 0..clusters.len() {
-            let x = first_x + idx as f32 * col_width;
-            let x_end = x + col_width - CLUSTER_CELL_GAP;
-            if x_end <= x {
-                continue;
-            }
-
-            frame.fill_rectangle(
-                Point::new(x, y + 1.0),
-                Size::new((x_end - x).max(0.0), (ROW_HEIGHT - 2.0).max(0.0)),
-                divider_color.scale_alpha(0.045),
-            );
-
-            let outline = Path::rectangle(
-                Point::new(x.floor() + 0.5, y.floor() + 0.5),
-                Size::new((x_end - x).max(0.0), (ROW_HEIGHT - 1.0).max(0.0)),
-            );
-            frame.stroke(
-                &outline,
-                Stroke::default()
-                    .with_color(divider_color.scale_alpha(0.20))
-                    .with_width(1.0),
-            );
-
-            frame.fill_rectangle(
-                Point::new(x.floor() + 0.5, y),
-                Size::new(1.0, ROW_HEIGHT),
-                divider_color.scale_alpha(0.42),
-            );
-            frame.fill_rectangle(
-                Point::new(x, y.floor() + 0.5),
-                Size::new((x_end - x).max(0.0), 1.0),
-                divider_color.scale_alpha(0.20),
-            );
-        }
-    }
-
-    fn draw_cluster_cell(
-        &self,
-        frame: &mut iced::widget::canvas::Frame,
-        (x_start, x_end): (f32, f32),
-        y: f32,
-        cell: ClusterCell,
-        max_cluster_qty: f32,
-        bid_color: iced::Color,
-        ask_color: iced::Color,
-        text_color: iced::Color,
-    ) {
-        let total = f32::from(cell.total());
-        if total <= 0.0 || max_cluster_qty <= 0.0 {
-            return;
-        }
-
-        let sell = f32::from(cell.sell_qty);
-        let buy = f32::from(cell.buy_qty);
-        let dominant = if sell > buy { ask_color } else { bid_color };
-        let intensity = (total / max_cluster_qty).clamp(0.0, 1.0);
-        let cell_width = (x_end - x_start).max(0.0);
-        let inner_x = x_start + 1.0;
-        let inner_y = y + 1.0;
-        let inner_w = (cell_width - 2.0).max(0.0);
-        let inner_h = (ROW_HEIGHT - 2.0).max(0.0);
-        if inner_w <= 0.0 || inner_h <= 0.0 {
-            return;
-        }
-        let fill_w = (inner_w * intensity).max(2.0).min(inner_w);
-
-        frame.fill_rectangle(
-            Point::new(inner_x, inner_y),
-            Size::new(inner_w, inner_h),
-            dominant.scale_alpha(0.06),
-        );
-
-        frame.fill_rectangle(
-            Point::new(inner_x, inner_y),
-            Size::new(fill_w, inner_h),
-            dominant.scale_alpha(0.28 + intensity * 0.36),
-        );
-
-        let outline = Path::rectangle(Point::new(inner_x, inner_y), Size::new(inner_w, inner_h));
-        frame.stroke(
-            &outline,
-            Stroke::default()
-                .with_color(dominant.scale_alpha(0.35 + intensity * 0.35))
-                .with_width(1.0),
-        );
-
-        if buy > 0.0 && sell > 0.0 {
-            let other_side = if sell > buy { bid_color } else { ask_color };
-            frame.fill_rectangle(
-                Point::new(inner_x, inner_y + inner_h - 2.0),
-                Size::new(fill_w, 2.0),
-                other_side.scale_alpha(0.58),
-            );
-        }
-
-        let qty_txt = self.format_quantity(cell.total());
-        let label_width = qty_txt.chars().count() as f32 * TEXT_SIZE * MONO_CHAR_ADVANCE + 8.0;
-        if x_end - x_start >= label_width {
-            Self::draw_cell_text(
-                frame,
-                &qty_txt,
-                x_end - 4.0,
-                y,
-                text_color.scale_alpha(0.88),
-                Alignment::End,
-            );
-        }
-    }
-
-    fn draw_cluster_footer(
-        &self,
-        frame: &mut iced::widget::canvas::Frame,
-        bounds: Rectangle,
-        clusters: &[ClusterColumn],
-        bid_color: iced::Color,
-        ask_color: iced::Color,
-        text_color: iced::Color,
-        muted_text_color: iced::Color,
-        footer_bg: iced::Color,
-        divider_color: iced::Color,
-        cols: &ColumnRanges,
-    ) {
-        if clusters.is_empty() {
-            return;
-        }
-        let footer_h = ROW_HEIGHT * CLUSTER_FOOTER_ROWS;
-        if bounds.height <= footer_h {
-            return;
-        }
-
-        let Some((first_x, col_width)) = cluster_column_geometry(cols.clusters, clusters.len())
-        else {
-            return;
-        };
-
-        let footer_y = bounds.height - footer_h;
-        frame.fill_rectangle(
-            Point::new(cols.clusters.0, footer_y),
-            Size::new((cols.clusters.1 - cols.clusters.0).max(0.0), footer_h),
-            footer_bg.scale_alpha(0.94),
-        );
-        frame.fill_rectangle(
-            Point::new(cols.clusters.0, footer_y),
-            Size::new((cols.clusters.1 - cols.clusters.0).max(0.0), 1.0),
-            divider_color,
-        );
-
-        for (idx, cluster) in clusters.iter().enumerate() {
-            let x = first_x + idx as f32 * col_width;
-            let x_end = x + col_width - CLUSTER_CELL_GAP;
-            let (buy, sell) = cluster_totals(cluster);
-            let total = buy + sell;
-            let delta = buy - sell;
-
-            Self::draw_cell_text(
-                frame,
-                &self.format_quantity(total),
-                x_end - 4.0,
-                footer_y,
-                text_color,
-                Alignment::End,
-            );
-
-            let delta_color = if delta.units >= 0 {
-                bid_color
-            } else {
-                ask_color
-            };
-            Self::draw_cell_text(
-                frame,
-                &self.format_quantity(delta),
-                x_end - 4.0,
-                footer_y + ROW_HEIGHT,
-                delta_color,
-                Alignment::End,
-            );
-
-            let label = cluster
-                .bucket
-                .format_utc("%M:%S")
-                .unwrap_or_else(|| "--:--".to_string());
-            Self::draw_cell_text(
-                frame,
-                &label,
-                x_end - 4.0,
-                footer_y + ROW_HEIGHT * 2.0,
-                muted_text_color,
-                Alignment::End,
-            );
-        }
-    }
-
     fn draw_vertical_splits(
         &self,
         frame: &mut iced::widget::canvas::Frame,
@@ -824,25 +626,6 @@ impl CscalpDom {
             align_y: Alignment::Center.into(),
             ..Default::default()
         });
-    }
-
-    fn visible_cluster_max_qty(
-        &self,
-        clusters: &[ClusterColumn],
-        visible_rows: &[VisibleRow],
-    ) -> f32 {
-        let mut max_qty = 0.0_f32;
-        for row in visible_rows {
-            let Some(price) = row.row.price() else {
-                continue;
-            };
-            for cluster in clusters {
-                if let Some(cell) = cluster.cells.get(&price) {
-                    max_qty = max_qty.max(f32::from(cell.total()));
-                }
-            }
-        }
-        max_qty
     }
 
     fn last_print_marker(&self, grid: &PriceGrid) -> Option<LastPrintMarker> {
