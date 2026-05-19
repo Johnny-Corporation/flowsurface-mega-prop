@@ -2,4 +2,5 @@
 /target
 /.vscode
 *.log
+/logs/
 AGENTS.md
