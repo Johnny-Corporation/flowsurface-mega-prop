@@ -6,8 +6,6 @@ mod connector;
 mod layout;
 mod logger;
 mod modal;
-#[cfg(target_os = "macos")]
-mod native_menu;
 mod notify;
 mod panel_window;
 mod screen;
@@ -36,7 +34,7 @@ use widget::{
 use iced::{
     Alignment, Element, Subscription, Task, keyboard, padding,
     widget::{
-        button, column, container, pane_grid, pick_list, row, rule, scrollable, text,
+        Space, button, column, container, pane_grid, pick_list, row, rule, scrollable, text,
         tooltip::Position as TooltipPosition,
     },
 };
@@ -88,10 +86,6 @@ struct Flowsurface {
     theme: data::Theme,
     notifications: Notifications,
     panel_windows: HashMap<window::Id, panel_window::State>,
-    #[cfg(target_os = "macos")]
-    native_menu: Option<native_menu::NativeMenu>,
-    #[cfg(target_os = "macos")]
-    native_menu_install_failed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -116,7 +110,6 @@ enum Message {
     SetTimezone(data::UserTimezone),
     ToggleTradeFetch(bool),
     ApplyVolumeSizeUnit(exchange::SizeUnit),
-    #[cfg(not(target_os = "macos"))]
     OpenPanel(panel_window::Kind),
     PanelWindow(window::Id, panel_window::PanelMessage),
     RemoveNotification(usize),
@@ -165,10 +158,6 @@ impl Flowsurface {
             theme: saved_state.theme,
             notifications: Notifications::new(),
             panel_windows: HashMap::new(),
-            #[cfg(target_os = "macos")]
-            native_menu: None,
-            #[cfg(target_os = "macos")]
-            native_menu_install_failed: false,
             network: NetworkManager::new(saved_state.proxy_cfg),
         };
 
@@ -257,19 +246,6 @@ impl Flowsurface {
                 }
             }
             Message::Tick(now) => {
-                #[cfg(target_os = "macos")]
-                {
-                    self.install_native_menu();
-
-                    if let Some(kind) = self
-                        .native_menu
-                        .as_ref()
-                        .and_then(native_menu::NativeMenu::poll_panel_selection)
-                    {
-                        return self.open_panel_window(kind);
-                    }
-                }
-
                 let main_window_id = self.main_window.id;
                 let handles = self.handles.clone();
 
@@ -459,8 +435,9 @@ impl Flowsurface {
                         .chain(additional_task);
                 }
             }
-            #[cfg(not(target_os = "macos"))]
-            Message::OpenPanel(kind) => return self.open_panel_window(kind),
+            Message::OpenPanel(kind) => {
+                return self.open_panel_window(kind);
+            }
             Message::PanelWindow(window, message) => {
                 if let Some(panel) = self.panel_windows.get_mut(&window) {
                     panel.update(message);
@@ -718,40 +695,24 @@ impl Flowsurface {
                     event: msg,
                 });
 
-            let header_title = {
-                #[cfg(target_os = "macos")]
-                {
-                    iced::widget::center(
-                        text("FLOWSURFACE")
-                            .font(iced::Font {
-                                weight: iced::font::Weight::Bold,
-                                ..Default::default()
-                            })
-                            .size(crate::style::text_size::TITLE)
-                            .style(style::title_text),
-                    )
-                    .height(20)
-                    .align_y(Alignment::Center)
-                    .padding(padding::top(4))
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    row![
-                        panel_window::menu_bar(),
-                        iced::widget::Space::new().width(iced::Length::Fill),
-                        text("FLOWSURFACE")
-                            .font(iced::Font {
-                                weight: iced::font::Weight::Bold,
-                                ..Default::default()
-                            })
-                            .size(crate::style::text_size::TITLE)
-                            .style(style::title_text),
-                    ]
-                    .height(24)
-                    .align_y(Alignment::Center)
-                    .padding(padding::top(4).left(8).right(8))
-                }
-            };
+            let header_title = row![
+                panel_window::menu_bar(),
+                Space::new().width(iced::Length::Fill),
+                text("FLOWSURFACE")
+                    .font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..Default::default()
+                    })
+                    .size(crate::style::text_size::TITLE)
+                    .style(style::title_text),
+            ]
+            .height(24)
+            .align_y(Alignment::Center)
+            .padding(if cfg!(target_os = "macos") {
+                padding::top(4).left(76).right(8)
+            } else {
+                padding::top(4).left(8).right(8)
+            });
 
             let base = column![
                 header_title,
@@ -897,23 +858,6 @@ impl Flowsurface {
                 log::error!("Active layout missing after selection: {}", layout_uid);
                 Task::none()
             })
-    }
-
-    #[cfg(target_os = "macos")]
-    fn install_native_menu(&mut self) {
-        if self.native_menu.is_some() || self.native_menu_install_failed {
-            return;
-        }
-
-        match native_menu::NativeMenu::install() {
-            Ok(menu) => {
-                self.native_menu = Some(menu);
-            }
-            Err(err) => {
-                self.native_menu_install_failed = true;
-                self.notifications.push(Toast::error(err));
-            }
-        }
     }
 
     fn open_panel_window(&mut self, kind: panel_window::Kind) -> Task<Message> {

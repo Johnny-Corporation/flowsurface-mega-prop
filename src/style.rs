@@ -92,7 +92,6 @@ pub fn venue_icon(venue: exchange::adapter::Venue) -> Icon {
 }
 
 #[cfg(target_os = "macos")]
-#[allow(dead_code)]
 pub fn title_text(theme: &Theme) -> iced::widget::text::Style {
     let palette = theme.extended_palette();
 
@@ -365,7 +364,6 @@ pub mod button {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
     pub fn macos_menu(theme: &Theme, status: Status) -> Style {
         let palette = theme.extended_palette();
 

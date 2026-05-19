@@ -1,6 +1,4 @@
-#[cfg(not(target_os = "macos"))]
-use crate::Message;
-use crate::style;
+use crate::{Message, style};
 
 use iced::{
     Alignment, Element, Length, Point, Rectangle, Renderer, Size, Theme, mouse, padding,
@@ -48,7 +46,6 @@ pub(crate) enum Kind {
 }
 
 impl Kind {
-    #[cfg(not(target_os = "macos"))]
     pub(crate) const ALL: [Self; 11] = [
         Self::App,
         Self::File,
@@ -63,7 +60,6 @@ impl Kind {
         Self::About,
     ];
 
-    #[cfg(not(target_os = "macos"))]
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::App => "Flowsurface",
@@ -273,7 +269,6 @@ impl TradeRow {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 pub(crate) fn menu_bar<'a>() -> Element<'a, Message> {
     let mut items = row![].spacing(2).align_y(Alignment::Center);
 

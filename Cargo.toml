@@ -68,8 +68,5 @@ iced_wgpu = "0.14.0"
 exchange.workspace = true
 data.workspace = true
 
-[target.'cfg(target_os = "macos")'.dependencies]
-muda = { version = "0.19.1", default-features = false }
-
 [features]
 debug = ["iced/hot"]
