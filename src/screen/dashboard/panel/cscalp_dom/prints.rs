@@ -10,6 +10,16 @@ use iced::{
     widget::canvas::{Path, Stroke, Text},
 };
 
+struct PrintBubble {
+    position: Point,
+    radius: f32,
+    age: f32,
+    is_sell: bool,
+    label: String,
+    label_box: Option<LabelBox>,
+    priority: f32,
+}
+
 impl CscalpDom {
     pub(super) fn draw_recent_prints(
         &self,
@@ -45,7 +55,7 @@ impl CscalpDom {
         let x_min = cols.prints.0 + PRINT_BUBBLE_MAX_RADIUS + 3.0;
         let x_max = cols.prints.1 - PRINT_BUBBLE_MAX_RADIUS - 3.0;
         let count = recent.len();
-        let mut label_candidates: Vec<(f32, LabelBox, String, Point)> = Vec::new();
+        let mut bubbles: Vec<PrintBubble> = Vec::new();
 
         for (idx, trade) in recent.iter().rev().enumerate() {
             let grouped_price = trade.price.round_to_side_step(trade.is_sell, grid.tick);
@@ -70,45 +80,26 @@ impl CscalpDom {
                 continue;
             }
 
-            self.draw_print_bubble(
-                frame,
-                x,
-                y,
-                radius,
-                age,
-                trade.is_sell,
-                bid_color,
-                ask_color,
-            );
-            self.queue_print_label(
-                &mut label_candidates,
-                trade,
-                x,
-                y,
-                radius,
-                age,
-                size_ratio,
-                print_width,
-            );
+            bubbles.push(self.print_bubble(trade, x, y, radius, age, size_ratio, print_width));
         }
 
-        self.draw_print_labels(frame, label_candidates, text_color);
+        self.draw_print_links(frame, &bubbles, bid_color, ask_color);
+        for bubble in &bubbles {
+            self.draw_print_bubble(frame, bubble, bid_color, ask_color);
+        }
+        self.draw_print_labels(frame, &bubbles, text_color);
     }
 
     fn draw_print_bubble(
         &self,
         frame: &mut iced::widget::canvas::Frame,
-        x: f32,
-        y: f32,
-        radius: f32,
-        age: f32,
-        is_sell: bool,
+        bubble: &PrintBubble,
         bid_color: iced::Color,
         ask_color: iced::Color,
     ) {
-        let color = if is_sell { ask_color } else { bid_color };
-        let alpha = 0.24 + age * 0.62;
-        let circle = Path::circle(Point::new(x, y), radius);
+        let color = if bubble.is_sell { ask_color } else { bid_color };
+        let alpha = 0.30 + bubble.age * 0.62;
+        let circle = Path::circle(bubble.position, bubble.radius);
         frame.fill(&circle, color.scale_alpha(alpha));
         frame.stroke(
             &circle,
@@ -118,9 +109,29 @@ impl CscalpDom {
         );
     }
 
-    fn queue_print_label(
+    fn draw_print_links(
         &self,
-        label_candidates: &mut Vec<(f32, LabelBox, String, Point)>,
+        frame: &mut iced::widget::canvas::Frame,
+        bubbles: &[PrintBubble],
+        bid_color: iced::Color,
+        ask_color: iced::Color,
+    ) {
+        for pair in bubbles.windows(2) {
+            let from = &pair[0];
+            let to = &pair[1];
+            let color = if to.is_sell { ask_color } else { bid_color };
+            let line = Path::line(from.position, to.position);
+            frame.stroke(
+                &line,
+                Stroke::default()
+                    .with_color(color.scale_alpha(0.26 + to.age * 0.16))
+                    .with_width(0.8),
+            );
+        }
+    }
+
+    fn print_bubble(
+        &self,
         trade: &Trade,
         x: f32,
         y: f32,
@@ -128,28 +139,49 @@ impl CscalpDom {
         age: f32,
         size_ratio: f32,
         print_width: f32,
-    ) {
-        if radius < PRINT_LABEL_MIN_RADIUS || print_width < 48.0 {
-            return;
-        }
-
-        let content = self.format_quantity(trade.qty);
-        let label_box = text_box(x, y, content.len(), style::text_size::TINY, 3.0);
+    ) -> PrintBubble {
+        let label = self.format_quantity(trade.qty);
+        let label_box = if radius >= PRINT_LABEL_MIN_RADIUS && print_width >= 48.0 {
+            Some(text_box(
+                x,
+                y,
+                label.chars().count(),
+                style::text_size::TINY,
+                4.0,
+            ))
+        } else {
+            None
+        };
         let priority = age * 2.0 + size_ratio;
-        label_candidates.push((priority, label_box, content, Point::new(x, y)));
+        PrintBubble {
+            position: Point::new(x, y),
+            radius,
+            age,
+            is_sell: trade.is_sell,
+            label,
+            label_box,
+            priority,
+        }
     }
 
     fn draw_print_labels(
         &self,
         frame: &mut iced::widget::canvas::Frame,
-        mut label_candidates: Vec<(f32, LabelBox, String, Point)>,
+        bubbles: &[PrintBubble],
         text_color: iced::Color,
     ) {
-        label_candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut label_candidates: Vec<&PrintBubble> = bubbles
+            .iter()
+            .filter(|bubble| bubble.label_box.is_some())
+            .collect();
+        label_candidates.sort_by(|a, b| b.priority.total_cmp(&a.priority));
         let mut label_boxes: Vec<LabelBox> = Vec::new();
-        let mut labels: Vec<(String, Point)> = Vec::new();
+        let mut labels: Vec<&PrintBubble> = Vec::new();
 
-        for (_, label_box, content, position) in label_candidates {
+        for bubble in label_candidates {
+            let Some(label_box) = bubble.label_box else {
+                continue;
+            };
             if labels.len() >= PRINT_LABEL_MAX_COUNT {
                 break;
             }
@@ -161,19 +193,31 @@ impl CscalpDom {
             }
 
             label_boxes.push(label_box);
-            labels.push((content, position));
+            labels.push(bubble);
         }
 
-        labels.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
-        for (content, position) in labels {
+        labels.sort_by(|a, b| a.position.x.total_cmp(&b.position.x));
+        let (plate_color, shadow_color) = label_contrast_colors(text_color);
+        for bubble in labels {
+            let width = bubble.label.chars().count() as f32 * style::text_size::TINY * 0.66 + 8.0;
             frame.fill_rectangle(
-                Point::new(position.x - 16.0, position.y - 6.5),
-                Size::new(32.0, 13.0),
-                iced::Color::WHITE.scale_alpha(0.16),
+                Point::new(bubble.position.x - width * 0.5, bubble.position.y - 6.5),
+                Size::new(width, 13.0),
+                plate_color,
             );
             frame.fill_text(Text {
-                content,
-                position,
+                content: bubble.label.clone(),
+                position: Point::new(bubble.position.x + 0.7, bubble.position.y + 0.7),
+                color: shadow_color,
+                size: style::text_size::TINY.into(),
+                font: style::AZERET_MONO,
+                align_x: Alignment::Center.into(),
+                align_y: Alignment::Center.into(),
+                ..Default::default()
+            });
+            frame.fill_text(Text {
+                content: bubble.label.clone(),
+                position: bubble.position,
                 color: text_color.scale_alpha(0.92),
                 size: style::text_size::TINY.into(),
                 font: style::AZERET_MONO,
@@ -182,5 +226,20 @@ impl CscalpDom {
                 ..Default::default()
             });
         }
+    }
+}
+
+fn label_contrast_colors(text_color: iced::Color) -> (iced::Color, iced::Color) {
+    let luminance = 0.2126 * text_color.r + 0.7152 * text_color.g + 0.0722 * text_color.b;
+    if luminance > 0.5 {
+        (
+            iced::Color::BLACK.scale_alpha(0.36),
+            iced::Color::BLACK.scale_alpha(0.55),
+        )
+    } else {
+        (
+            iced::Color::WHITE.scale_alpha(0.72),
+            iced::Color::WHITE.scale_alpha(0.55),
+        )
     }
 }

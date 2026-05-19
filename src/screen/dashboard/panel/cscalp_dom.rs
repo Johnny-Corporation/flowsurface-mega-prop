@@ -15,6 +15,7 @@ use iced::{Alignment, Event, Point, Rectangle, Renderer, Size, Theme, mouse};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
+mod orderbook;
 mod prints;
 mod types;
 use types::{
@@ -38,8 +39,8 @@ const ORDER_QTY_MAX_WIDTH: f32 = 92.0;
 const RECENT_PRINT_LIMIT: usize = 64;
 const PRINT_BUBBLE_MIN_RADIUS: f32 = 4.0;
 const PRINT_BUBBLE_MAX_RADIUS: f32 = 18.0;
-const PRINT_LABEL_MIN_RADIUS: f32 = 10.5;
-const PRINT_LABEL_MAX_COUNT: usize = 10;
+const PRINT_LABEL_MIN_RADIUS: f32 = 8.0;
+const PRINT_LABEL_MAX_COUNT: usize = 18;
 const CLUSTER_FOOTER_ROWS: f32 = 3.0;
 
 impl super::Panel for CscalpDom {
@@ -168,7 +169,55 @@ impl CscalpDom {
     }
 
     fn format_quantity(&self, qty: Qty) -> String {
-        data::util::abbr_large_numbers(qty.to_f32_lossy())
+        Self::format_rounded_volume(qty.to_f32_lossy())
+    }
+
+    fn format_rounded_volume(value: f32) -> String {
+        let abs_value = value.abs();
+        let sign = if value < 0.0 { "-" } else { "" };
+
+        match abs_value {
+            v if v >= 1_000_000_000.0 => {
+                format!(
+                    "{}{}B",
+                    sign,
+                    Self::trim_decimal(format!("{:.1}", v / 1_000_000_000.0))
+                )
+            }
+            v if v >= 1_000_000.0 => {
+                format!(
+                    "{}{}M",
+                    sign,
+                    Self::trim_decimal(format!("{:.1}", v / 1_000_000.0))
+                )
+            }
+            v if v >= 1_000.0 => format!("{}{:.0}K", sign, v / 1_000.0),
+            v if v >= 100.0 => format!("{}{:.0}", sign, v),
+            v if v >= 10.0 => format!("{}{:.1}", sign, v),
+            v if v >= 1.0 => format!("{}{:.2}", sign, v),
+            v if v >= 0.001 => format!("{}{:.3}", sign, v),
+            v if v >= 0.0001 => format!("{}{:.4}", sign, v),
+            v if v >= 0.00001 => format!("{}{:.5}", sign, v),
+            _ => {
+                if abs_value == 0.0 {
+                    "0".to_string()
+                } else {
+                    Self::trim_decimal(format!("{}{:.3}", sign, abs_value))
+                }
+            }
+        }
+    }
+
+    fn trim_decimal(mut value: String) -> String {
+        if value.contains('.') {
+            while value.ends_with('0') {
+                value.pop();
+            }
+            if value.ends_with('.') {
+                value.pop();
+            }
+        }
+        value
     }
 
     fn cluster_columns(&self) -> Vec<ClusterColumn> {
@@ -429,71 +478,6 @@ impl CscalpDom {
         color: iced::Color,
     ) {
         frame.fill_rectangle(Point::new(0.0, y), Size::new(width, 1.0), color);
-    }
-
-    fn draw_orderbook_row(
-        &self,
-        frame: &mut iced::widget::canvas::Frame,
-        y: f32,
-        price: Price,
-        order_qty: Qty,
-        side_color: iced::Color,
-        text_color: iced::Color,
-        max_order_qty: f32,
-        last_print: Option<LastPrintMarker>,
-        cols: &ColumnRanges,
-    ) {
-        let row_color = match last_print {
-            Some(marker) if marker.price == price => {
-                if marker.is_sell {
-                    side_color.scale_alpha(0.44)
-                } else {
-                    side_color.scale_alpha(0.42)
-                }
-            }
-            _ => side_color.scale_alpha(0.13),
-        };
-
-        frame.fill_rectangle(
-            Point::new(cols.price.0, y),
-            Size::new((cols.price.1 - cols.price.0).max(0.0), ROW_HEIGHT),
-            row_color,
-        );
-
-        let order_qty_f32 = f32::from(order_qty);
-        Self::fill_bar(
-            frame,
-            cols.order_qty,
-            y,
-            ROW_HEIGHT,
-            order_qty_f32,
-            max_order_qty,
-            side_color,
-            false,
-            0.26,
-        );
-
-        if order_qty_f32 > 0.0 {
-            let qty_txt = self.format_quantity(order_qty);
-            Self::draw_cell_text(
-                frame,
-                &qty_txt,
-                cols.order_qty.1 - 5.0,
-                y,
-                text_color,
-                Alignment::End,
-            );
-        }
-
-        let price_text = self.format_price(price);
-        Self::draw_cell_text(
-            frame,
-            &price_text,
-            cols.price.1 - 5.0,
-            y,
-            text_color,
-            Alignment::End,
-        );
     }
 
     fn draw_cluster_cells(
@@ -804,36 +788,6 @@ impl CscalpDom {
                 divider_color,
             );
         }
-    }
-
-    fn fill_bar(
-        frame: &mut iced::widget::canvas::Frame,
-        (x_start, x_end): (f32, f32),
-        y: f32,
-        height: f32,
-        value: f32,
-        scale_value_max: f32,
-        color: iced::Color,
-        from_left: bool,
-        alpha: f32,
-    ) {
-        if scale_value_max <= 0.0 || value <= 0.0 {
-            return;
-        }
-        let col_width = x_end - x_start;
-        let mut bar_width = (value / scale_value_max) * col_width.max(1.0);
-        bar_width = bar_width.min(col_width);
-        let bar_x = if from_left {
-            x_start
-        } else {
-            x_end - bar_width
-        };
-
-        frame.fill_rectangle(
-            Point::new(bar_x, y),
-            Size::new(bar_width, height),
-            color.scale_alpha(alpha),
-        );
     }
 
     fn draw_cell_text(
