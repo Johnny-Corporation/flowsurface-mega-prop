@@ -38,8 +38,8 @@ impl CscalpDom {
 
         let ruler_color = ruler_color(text_color);
         frame.fill_rectangle(
-            Point::new(0.0, y - 0.5),
-            Size::new(bounds.width, 1.0),
+            Point::new(0.0, y - ROW_HEIGHT * 0.5),
+            Size::new(bounds.width, ROW_HEIGHT),
             ruler_color,
         );
 
@@ -69,7 +69,7 @@ impl CscalpDom {
         text_color: iced::Color,
     ) {
         let width = label.chars().count() as f32 * style::text_size::TINY * 0.66 + 8.0;
-        let x = (cols.price.0 - width - 4.0).max(cols.order_qty.0 + 2.0);
+        let x = (cols.prints.1 - width - 4.0).max(cols.prints.0 + 2.0);
         let plate_color = label_plate_color(text_color);
 
         frame.fill_rectangle(
