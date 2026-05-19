@@ -15,6 +15,10 @@ pub struct Config {
     pub cluster_timeframe: Timeframe,
     #[serde(default = "default_cluster_columns")]
     pub visible_cluster_columns: u8,
+    #[serde(default = "default_cluster_split_ratio")]
+    pub cluster_split_ratio: f32,
+    #[serde(default = "default_orderbook_split_ratio")]
+    pub orderbook_split_ratio: f32,
 }
 
 impl Default for Config {
@@ -24,6 +28,8 @@ impl Default for Config {
             trade_retention: Duration::from_millis(TRADE_RETENTION_MS),
             cluster_timeframe: default_cluster_timeframe(),
             visible_cluster_columns: default_cluster_columns(),
+            cluster_split_ratio: default_cluster_split_ratio(),
+            orderbook_split_ratio: default_orderbook_split_ratio(),
         }
     }
 }
@@ -93,4 +99,12 @@ fn default_cluster_timeframe() -> Timeframe {
 
 fn default_cluster_columns() -> u8 {
     5
+}
+
+fn default_cluster_split_ratio() -> f32 {
+    0.48
+}
+
+fn default_orderbook_split_ratio() -> f32 {
+    0.88
 }

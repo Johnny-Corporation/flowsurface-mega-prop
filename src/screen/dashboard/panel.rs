@@ -13,9 +13,20 @@ pub enum Message {
     Scrolled(f32),
     ResetScroll,
     Invalidate(Option<Instant>),
+    SectionSplitDragged {
+        divider: SectionDivider,
+        cursor_x: f32,
+        width: f32,
+    },
 }
 
 pub enum Action {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectionDivider {
+    First,
+    Second,
+}
 
 pub trait Panel: canvas::Program<Message> {
     fn scroll(&mut self, scroll: f32);
@@ -25,6 +36,8 @@ pub trait Panel: canvas::Program<Message> {
     fn invalidate(&mut self, now: Option<Instant>) -> Option<Action>;
 
     fn is_empty(&self) -> bool;
+
+    fn drag_section_split(&mut self, _divider: SectionDivider, _cursor_x: f32, _width: f32) {}
 }
 
 pub fn view<T: Panel>(panel: &'_ T, _timezone: data::UserTimezone) -> Element<'_, Message> {
@@ -51,6 +64,13 @@ pub fn update<T: Panel>(panel: &mut T, message: Message) {
         }
         Message::Invalidate(now) => {
             panel.invalidate(now);
+        }
+        Message::SectionSplitDragged {
+            divider,
+            cursor_x,
+            width,
+        } => {
+            panel.drag_section_split(divider, cursor_x, width);
         }
     }
 }

@@ -17,10 +17,12 @@ use std::time::Instant;
 
 mod orderbook;
 mod prints;
+mod sections;
 mod types;
+use sections::SectionDragState;
 use types::{
-    ColumnRanges, DomRow, LastPrintMarker, Maxima, PriceGrid, PriceLayout, VisibleRow,
-    cluster_column_geometry, cluster_totals,
+    ColumnRanges, DomRow, LastPrintMarker, Maxima, PriceGrid, VisibleRow, cluster_column_geometry,
+    cluster_totals,
 };
 
 const TEXT_SIZE: f32 = style::text_size::SMALL;
@@ -28,13 +30,13 @@ const ROW_HEIGHT: f32 = 16.0;
 const COL_PADDING: f32 = 4.0;
 const CLUSTER_CELL_GAP: f32 = 1.0;
 
-const CLUSTERS_COL_WEIGHT: f32 = 0.54;
-const PRINTS_COL_WEIGHT: f32 = 0.46;
-
 const MONO_CHAR_ADVANCE: f32 = 0.62;
 const PRICE_TEXT_SIDE_PAD_MIN: f32 = 10.0;
 const ORDER_QTY_MIN_WIDTH: f32 = 54.0;
 const ORDER_QTY_MAX_WIDTH: f32 = 92.0;
+const SECTION_DIVIDER_HIT_SLOP: f32 = 6.0;
+const MIN_CLUSTER_SECTION_WIDTH: f32 = 110.0;
+const MIN_PRINTS_SECTION_WIDTH: f32 = 120.0;
 
 const RECENT_PRINT_LIMIT: usize = 64;
 const PRINT_BUBBLE_MIN_RADIUS: f32 = 4.0;
@@ -52,6 +54,10 @@ impl super::Panel for CscalpDom {
     fn reset_scroll(&mut self) {
         self.scroll_px = 0.0;
         CscalpDom::invalidate(self, Some(Instant::now()));
+    }
+
+    fn drag_section_split(&mut self, divider: super::SectionDivider, cursor_x: f32, width: f32) {
+        CscalpDom::drag_section_split(self, divider, cursor_x, width);
     }
 
     fn invalidate(&mut self, now: Option<Instant>) -> Option<super::Action> {
@@ -231,7 +237,7 @@ impl CscalpDom {
 }
 
 impl canvas::Program<Message> for CscalpDom {
-    type State = ();
+    type State = SectionDragState;
 
     fn update(
         &self,
@@ -240,22 +246,75 @@ impl canvas::Program<Message> for CscalpDom {
         bounds: iced::Rectangle,
         cursor: iced_core::mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        let _cursor_position = cursor.position_in(bounds)?;
+        let cursor_position = cursor.position_in(bounds);
 
         match event {
-            Event::Mouse(mouse::Event::ButtonPressed(
-                mouse::Button::Middle | mouse::Button::Left | mouse::Button::Right,
-            )) => Some(canvas::Action::publish(Message::ResetScroll).and_capture()),
-            Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                let scroll_amount = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => -(*y) * ROW_HEIGHT,
-                    mouse::ScrollDelta::Pixels { y, .. } => -*y,
-                };
+            Event::Mouse(mouse_event) => match mouse_event {
+                mouse::Event::ButtonPressed(mouse::Button::Left) => {
+                    let cursor_position = cursor_position?;
+                    if let Some(divider) = self.hit_section_divider(bounds.width, cursor_position.x)
+                    {
+                        _state.dragging = Some(divider);
+                        Some(canvas::Action::capture())
+                    } else {
+                        Some(canvas::Action::publish(Message::ResetScroll).and_capture())
+                    }
+                }
+                mouse::Event::ButtonPressed(mouse::Button::Middle | mouse::Button::Right) => {
+                    Some(canvas::Action::publish(Message::ResetScroll).and_capture())
+                }
+                mouse::Event::ButtonReleased(mouse::Button::Left) => {
+                    if _state.dragging.take().is_some() {
+                        Some(canvas::Action::capture())
+                    } else {
+                        None
+                    }
+                }
+                mouse::Event::CursorMoved { .. } => {
+                    let divider = _state.dragging?;
+                    let cursor_position = cursor_position?;
+                    Some(
+                        canvas::Action::publish(Message::SectionSplitDragged {
+                            divider,
+                            cursor_x: cursor_position.x,
+                            width: bounds.width,
+                        })
+                        .and_capture(),
+                    )
+                }
+                mouse::Event::WheelScrolled { delta } => {
+                    let scroll_amount = match delta {
+                        mouse::ScrollDelta::Lines { y, .. } => -(*y) * ROW_HEIGHT,
+                        mouse::ScrollDelta::Pixels { y, .. } => -*y,
+                    };
 
-                Some(canvas::Action::publish(Message::Scrolled(scroll_amount)).and_capture())
-            }
+                    Some(canvas::Action::publish(Message::Scrolled(scroll_amount)).and_capture())
+                }
+                _ => None,
+            },
             _ => None,
         }
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &Self::State,
+        bounds: iced::Rectangle,
+        cursor: iced_core::mouse::Cursor,
+    ) -> iced_core::mouse::Interaction {
+        if state.dragging.is_some() {
+            return mouse::Interaction::ResizingHorizontally;
+        }
+
+        if let Some(cursor_position) = cursor.position_in(bounds)
+            && self
+                .hit_section_divider(bounds.width, cursor_position.x)
+                .is_some()
+        {
+            return mouse::Interaction::ResizingHorizontally;
+        }
+
+        mouse::Interaction::default()
     }
 
     fn draw(
@@ -418,58 +477,6 @@ impl canvas::Program<Message> for CscalpDom {
 }
 
 impl CscalpDom {
-    fn price_sample_text(&self, grid: &PriceGrid) -> String {
-        let a = self.format_price(grid.best_ask);
-        let b = self.format_price(grid.best_bid);
-        if a.len() >= b.len() { a } else { b }
-    }
-
-    fn mono_text_width_px(text_len: usize) -> f32 {
-        (text_len as f32) * TEXT_SIZE * MONO_CHAR_ADVANCE
-    }
-
-    fn price_layout_for(&self, total_width: f32, grid: &PriceGrid) -> PriceLayout {
-        let sample = self.price_sample_text(grid);
-        let text_px = Self::mono_text_width_px(sample.len());
-        let price_px = (text_px + 2.0 * PRICE_TEXT_SIDE_PAD_MIN).min(total_width.max(0.0));
-        PriceLayout { price_px }
-    }
-
-    fn column_ranges(&self, width: f32, price_px: f32) -> ColumnRanges {
-        let width = width.max(0.0);
-        let price_width = price_px.min(width);
-        let target_order_qty = (width * 0.10).clamp(ORDER_QTY_MIN_WIDTH, ORDER_QTY_MAX_WIDTH);
-        let orderbook_width = (price_width + target_order_qty).min(width);
-        let orderbook_start = width - orderbook_width;
-
-        let order_qty_width = (orderbook_width - price_width).max(0.0);
-        let order_qty = (orderbook_start, orderbook_start + order_qty_width);
-        let price = (order_qty.1, width);
-        let orderbook = (orderbook_start, width);
-
-        let content_width = (orderbook_start - COL_PADDING * 2.0).max(0.0);
-        let total_weight = CLUSTERS_COL_WEIGHT + PRINTS_COL_WEIGHT;
-        let clusters_width = if total_weight > 0.0 {
-            content_width * (CLUSTERS_COL_WEIGHT / total_weight)
-        } else {
-            0.0
-        };
-        let clusters = (0.0, clusters_width);
-        let prints = (
-            clusters.1 + COL_PADDING,
-            (clusters.1 + COL_PADDING + (content_width - clusters_width).max(0.0))
-                .min(orderbook_start - COL_PADDING),
-        );
-
-        ColumnRanges {
-            clusters,
-            prints,
-            orderbook,
-            order_qty,
-            price,
-        }
-    }
-
     fn draw_row_guides(
         &self,
         frame: &mut iced::widget::canvas::Frame,
@@ -772,7 +779,6 @@ impl CscalpDom {
         };
 
         draw_vsplit(cols.clusters.1, spread_row);
-        draw_vsplit(cols.prints.1, spread_row);
         draw_vsplit(cols.orderbook.0, spread_row);
         draw_vsplit(cols.price.0, spread_row);
 

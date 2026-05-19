@@ -1233,7 +1233,10 @@ impl State {
                 _ => {}
             },
             Event::PanelInteraction(msg) => match &mut self.content {
-                Content::CscalpDom(Some(p)) => super::panel::update(p, msg),
+                Content::CscalpDom(Some(p)) => {
+                    super::panel::update(p, msg);
+                    self.settings.visual_config = Some(VisualConfig::CscalpDom(p.config));
+                }
                 Content::Ladder(Some(p)) => super::panel::update(p, msg),
                 Content::TimeAndSales(Some(p)) => super::panel::update(p, msg),
                 _ => {}
