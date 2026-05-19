@@ -13,7 +13,7 @@ mod connections;
 mod settings;
 mod trades;
 
-use connections::connections_panel;
+use connections::{ConnectionPanelState, connections_panel};
 use settings::settings_panel;
 use trades::trades_table;
 
@@ -109,7 +109,7 @@ impl Kind {
 pub(crate) struct State {
     pub kind: Kind,
     show_trades: bool,
-    connection_feedback: Option<ConnectionAction>,
+    connection_state: ConnectionPanelState,
 }
 
 impl State {
@@ -117,7 +117,7 @@ impl State {
         Self {
             kind,
             show_trades: false,
-            connection_feedback: None,
+            connection_state: ConnectionPanelState::default(),
         }
     }
 
@@ -126,7 +126,7 @@ impl State {
             PanelMessage::Noop => {}
             PanelMessage::ConnectionAction(action) => {
                 if self.kind == Kind::Connections {
-                    self.connection_feedback = Some(action);
+                    self.connection_state.update(action);
                 }
             }
             PanelMessage::TogglePnlTrades => {
@@ -134,6 +134,12 @@ impl State {
                     self.show_trades = !self.show_trades;
                 }
             }
+        }
+    }
+
+    pub(crate) fn tick(&mut self, now: std::time::Instant) {
+        if self.kind == Kind::Connections {
+            self.connection_state.tick(now);
         }
     }
 
@@ -211,7 +217,7 @@ impl State {
             ),
             Kind::Settings => settings_panel("Hotkeys"),
             Kind::Pnl => pnl_panel(self.show_trades),
-            Kind::Connections => connections_panel(self.connection_feedback),
+            Kind::Connections => connections_panel(&self.connection_state),
             Kind::Account => account_panel(),
             Kind::Analytics => analytics_panel(),
             Kind::About => about_panel(),
@@ -250,37 +256,16 @@ pub(crate) enum PanelMessage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConnectionAction {
+    Toggle(usize),
     AddConnection,
     MyProxy,
     Refresh,
     Confirm,
     BecomeTrader,
     OpenAccount,
-    RowSettings,
-    RowHelp,
-    RowDelete,
-}
-
-impl ConnectionAction {
-    pub(crate) fn feedback(self) -> &'static str {
-        match self {
-            Self::AddConnection => {
-                "[ui] Add connection pressed. A full exchange form can attach here next."
-            }
-            Self::MyProxy => "[ui] My proxy pressed. Proxy configuration placeholder selected.",
-            Self::Refresh => "[ui] Refresh pressed. Connection checks requested.",
-            Self::Confirm => "[ui] OK pressed. Connection template settings accepted.",
-            Self::BecomeTrader => {
-                "[ui] Become a trader pressed. External onboarding placeholder selected."
-            }
-            Self::OpenAccount => {
-                "[ui] Open an account pressed. Account onboarding placeholder selected."
-            }
-            Self::RowSettings => "[ui] Connection settings pressed for the selected row.",
-            Self::RowHelp => "[ui] Connection help pressed for the selected row.",
-            Self::RowDelete => "[ui] Delete connection pressed for the selected row.",
-        }
-    }
+    RowSettings(usize),
+    RowHelp(usize),
+    RowDelete(usize),
 }
 
 pub(crate) fn menu_bar<'a>() -> Element<'a, Message> {

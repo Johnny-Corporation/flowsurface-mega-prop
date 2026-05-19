@@ -710,34 +710,6 @@ pub fn panel_table_cell(theme: &Theme) -> Style {
     }
 }
 
-pub fn panel_status_toggle(theme: &Theme, enabled: bool) -> Style {
-    let palette = theme.extended_palette();
-
-    Style {
-        text_color: Some(if enabled {
-            palette.background.base.text
-        } else {
-            palette.background.weak.text
-        }),
-        background: Some(if enabled {
-            palette.success.weak.color.into()
-        } else {
-            palette.background.base.color.into()
-        }),
-        border: Border {
-            width: 1.0,
-            color: if enabled {
-                palette.success.base.color
-            } else {
-                palette.background.weak.color
-            },
-            radius: 11.0.into(),
-        },
-        snap: true,
-        ..Default::default()
-    }
-}
-
 pub fn panel_swatch(theme: &Theme, color: Color, selected: bool) -> Style {
     let palette = theme.extended_palette();
 

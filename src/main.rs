@@ -246,6 +246,10 @@ impl Flowsurface {
                 }
             }
             Message::Tick(now) => {
+                for panel in self.panel_windows.values_mut() {
+                    panel.tick(now);
+                }
+
                 let main_window_id = self.main_window.id;
                 let handles = self.handles.clone();
 
