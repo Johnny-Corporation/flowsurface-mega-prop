@@ -1063,15 +1063,16 @@ impl canvas::Program<Message> for KlineChart {
                 }
             }
 
-            super::tools::draw_level_lines(chart, frame, palette, region);
+            super::tools::draw_annotations(chart, frame, palette, region);
             chart.draw_last_price_line(frame, palette, region);
         });
 
         let crosshair = chart.cache.crosshair.draw(renderer, bounds_size, |frame| {
             let visible_region = chart.visible_region(bounds_size);
             let visible_range = chart.interval_range(&visible_region);
+            let cursor_position = cursor.position_in(bounds);
 
-            if let Some(cursor_position) = cursor.position_in(bounds) {
+            if let Some(cursor_position) = cursor_position {
                 let (_, rounded_aggregation) =
                     chart.draw_crosshair(frame, theme, bounds_size, cursor_position, interaction);
 
@@ -1095,6 +1096,25 @@ impl canvas::Program<Message> for KlineChart {
                     visible_range,
                 );
             }
+
+            let draft = match interaction {
+                Interaction::DrawingAnnotation { tool, start } => Some((*tool, *start)),
+                _ => None,
+            };
+
+            let center = Vector::new(bounds.width / 2.0, bounds.height / 2.0);
+            frame.translate(center);
+            frame.scale(chart.scaling);
+            frame.translate(chart.translation);
+            super::tools::draw_annotation_overlay(
+                chart,
+                frame,
+                palette,
+                bounds_size,
+                cursor_position,
+                draft,
+                visible_region,
+            );
         });
 
         vec![klines, crosshair]
@@ -1109,7 +1129,9 @@ impl canvas::Program<Message> for KlineChart {
         match interaction {
             Interaction::Panning { .. } => mouse::Interaction::Grabbing,
             Interaction::Zoomin { .. } => mouse::Interaction::ZoomIn,
-            Interaction::None | Interaction::Ruler { .. } => {
+            Interaction::None
+            | Interaction::Ruler { .. }
+            | Interaction::DrawingAnnotation { .. } => {
                 if cursor.is_over(bounds) {
                     mouse::Interaction::Crosshair
                 } else {

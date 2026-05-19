@@ -15,7 +15,7 @@ use exchange::unit::{Price, PriceStep};
 use scale::linear::PriceInfoLabel;
 use scale::{AxisLabelsX, AxisLabelsY};
 pub use tools::ChartTool;
-use tools::LevelLine;
+use tools::{AnnotationId, ChartPoint, SegmentKind};
 
 use iced::theme::palette::Extended;
 use iced::widget::canvas::{self, Cache, Canvas, Event, Frame, LineDash, Path, Stroke};
@@ -41,6 +41,10 @@ pub enum Interaction {
     Ruler {
         start: Option<Point>,
     },
+    DrawingAnnotation {
+        tool: ChartTool,
+        start: ChartPoint,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -61,8 +65,14 @@ pub enum Message {
     SplitDragged(usize, f32),
     DoubleClick(AxisScaleClicked),
     ToolSelected(ChartTool),
-    LevelPlaced(u64),
-    ClearLevelLines,
+    LevelPlaced(Price),
+    AnnotationFinished {
+        tool: ChartTool,
+        start: ChartPoint,
+        end: ChartPoint,
+    },
+    AnnotationDeleted(AnnotationId),
+    ClearAnnotations,
 }
 
 pub trait Chart: PlotConstants + canvas::Program<Message> {
@@ -116,8 +126,10 @@ fn canvas_interaction<T: Chart>(
         }
     }
 
-    if let Interaction::Ruler { .. } = interaction
-        && cursor_position.is_none()
+    if matches!(
+        interaction,
+        Interaction::Ruler { .. } | Interaction::DrawingAnnotation { .. }
+    ) && cursor_position.is_none()
     {
         *interaction = Interaction::None;
     }
@@ -131,32 +143,64 @@ fn canvas_interaction<T: Chart>(
                     let cursor_in_bounds = cursor_position?;
 
                     if let mouse::Button::Left = button {
+                        let cursor_in_chart = cursor.position_in(bounds)?;
+                        let visible_region = state.visible_region(bounds.size());
+                        let cursor_chart = state.cursor_chart_point(
+                            cursor_in_chart,
+                            bounds.size(),
+                            visible_region,
+                        );
+
+                        if let Some(id) = state.hovered_delete_marker(cursor_chart, visible_region)
+                        {
+                            return Some(
+                                canvas::Action::publish(Message::AnnotationDeleted(id))
+                                    .and_capture(),
+                            );
+                        }
+
                         match state.selected_tool {
-                            ChartTool::Levels => {
-                                let cursor_in_chart = cursor.position_in(bounds)?;
-                                let visible_region = state.visible_region(bounds.size());
-                                let (anchor, _) = state.snap_x_to_index(
-                                    cursor_in_chart.x,
+                            ChartTool::Level => {
+                                let point = state.snapped_point(
+                                    cursor_in_chart,
+                                    bounds.size(),
+                                    visible_region,
+                                );
+                                return Some(
+                                    canvas::Action::publish(Message::LevelPlaced(point.price))
+                                        .and_capture(),
+                                );
+                            }
+                            ChartTool::Rectangle | ChartTool::Line | ChartTool::Ray => {
+                                let tool = state.selected_tool;
+                                let point = state.snapped_point(
+                                    cursor_in_chart,
                                     bounds.size(),
                                     visible_region,
                                 );
 
-                                return Some(
-                                    canvas::Action::publish(Message::LevelPlaced(anchor))
-                                        .and_capture(),
-                                );
+                                match *interaction {
+                                    Interaction::DrawingAnnotation {
+                                        tool: draft_tool,
+                                        start,
+                                    } if draft_tool == tool => {
+                                        *interaction = Interaction::None;
+                                        return Some(
+                                            canvas::Action::publish(Message::AnnotationFinished {
+                                                tool,
+                                                start,
+                                                end: point,
+                                            })
+                                            .and_capture(),
+                                        );
+                                    }
+                                    _ => {
+                                        *interaction =
+                                            Interaction::DrawingAnnotation { tool, start: point };
+                                    }
+                                }
                             }
-                            ChartTool::Ruler => match interaction {
-                                Interaction::Ruler { start: Some(_) } => {
-                                    *interaction = Interaction::Ruler { start: None };
-                                }
-                                _ => {
-                                    *interaction = Interaction::Ruler {
-                                        start: Some(cursor_in_bounds),
-                                    };
-                                }
-                            },
-                            ChartTool::Cursor => match interaction {
+                            ChartTool::Hand => match interaction {
                                 Interaction::None
                                 | Interaction::Panning { .. }
                                 | Interaction::Zoomin { .. } => {
@@ -173,6 +217,9 @@ fn canvas_interaction<T: Chart>(
                                 Interaction::Ruler { .. } => {
                                     *interaction = Interaction::None;
                                 }
+                                Interaction::DrawingAnnotation { .. } => {
+                                    *interaction = Interaction::None;
+                                }
                             },
                         }
                     }
@@ -186,7 +233,9 @@ fn canvas_interaction<T: Chart>(
                         );
                         Some(canvas::Action::publish(msg).and_capture())
                     }
-                    Interaction::None | Interaction::Ruler { .. } => {
+                    Interaction::None
+                    | Interaction::Ruler { .. }
+                    | Interaction::DrawingAnnotation { .. } => {
                         Some(canvas::Action::publish(Message::CrosshairMoved))
                     }
                     _ => None,
@@ -527,22 +576,24 @@ pub fn update<T: Chart>(chart: &mut T, message: &Message) {
             let state = chart.mut_state();
             state.selected_tool = *tool;
         }
-        Message::LevelPlaced(anchor) => {
+        Message::LevelPlaced(price) => {
+            tools::add_level(chart.mut_state(), *price);
+        }
+        Message::AnnotationFinished { tool, start, end } => {
             let state = chart.mut_state();
 
-            if let Some(index) = state
-                .level_lines
-                .iter()
-                .position(|line| line.anchor == *anchor)
-            {
-                state.level_lines.remove(index);
-            } else {
-                state.level_lines.push(LevelLine::new(*anchor));
-                state.level_lines.sort_unstable_by_key(|line| line.anchor);
+            match tool {
+                ChartTool::Rectangle => tools::add_rectangle(state, *start, *end),
+                ChartTool::Line => tools::add_segment(state, *start, *end, SegmentKind::Line),
+                ChartTool::Ray => tools::add_segment(state, *start, *end, SegmentKind::Ray),
+                ChartTool::Hand | ChartTool::Level => {}
             }
         }
-        Message::ClearLevelLines => {
-            chart.mut_state().level_lines.clear();
+        Message::AnnotationDeleted(id) => {
+            tools::delete_annotation(chart.mut_state(), *id);
+        }
+        Message::ClearAnnotations => {
+            tools::clear_annotations(chart.mut_state());
         }
     }
     chart.invalidate_all();
@@ -663,7 +714,7 @@ pub fn view<'a, T: Chart>(
 
     let chart_view: Element<_> = if chart.supports_chart_tools() {
         column![
-            tools::toolbar(state.selected_tool, !state.level_lines.is_empty()),
+            tools::toolbar(state.selected_tool, tools::has_annotations(state)),
             rule::horizontal(1).style(style::split_ruler),
             content,
             rule::horizontal(1).style(style::split_ruler),
@@ -733,7 +784,9 @@ pub struct ViewState {
     ticker_info: TickerInfo,
     layout: ViewConfig,
     selected_tool: ChartTool,
-    level_lines: Vec<LevelLine>,
+    price_levels: Vec<tools::PriceLevel>,
+    rectangles: Vec<tools::ChartRectangle>,
+    segments: Vec<tools::ChartSegment>,
 }
 
 impl ViewState {
@@ -762,7 +815,9 @@ impl ViewState {
             ticker_info,
             layout,
             selected_tool: ChartTool::default(),
-            level_lines: Vec::new(),
+            price_levels: Vec::new(),
+            rectangles: Vec::new(),
+            segments: Vec::new(),
         }
     }
 
