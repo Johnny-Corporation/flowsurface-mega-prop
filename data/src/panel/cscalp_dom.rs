@@ -73,11 +73,17 @@ pub fn build_time_clusters(
         }
     }
 
-    let skip_count = by_bucket.len().saturating_sub(max_columns);
-    by_bucket
-        .into_iter()
-        .skip(skip_count)
-        .map(|(bucket, cells)| ClusterColumn { bucket, cells })
+    let Some(latest_bucket) = by_bucket.keys().next_back().copied() else {
+        return Vec::new();
+    };
+
+    let first_offset = 1_i64.saturating_sub(max_columns as i64);
+    (first_offset..=0)
+        .map(|offset| {
+            let bucket = latest_bucket.offset_by_timeframe(timeframe, offset);
+            let cells = by_bucket.remove(&bucket).unwrap_or_default();
+            ClusterColumn { bucket, cells }
+        })
         .collect()
 }
 
@@ -86,5 +92,5 @@ fn default_cluster_timeframe() -> Timeframe {
 }
 
 fn default_cluster_columns() -> u8 {
-    2
+    5
 }

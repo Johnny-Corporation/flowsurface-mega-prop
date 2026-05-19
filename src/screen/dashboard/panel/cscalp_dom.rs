@@ -25,6 +25,7 @@ use types::{
 const TEXT_SIZE: f32 = style::text_size::SMALL;
 const ROW_HEIGHT: f32 = 16.0;
 const COL_PADDING: f32 = 4.0;
+const CLUSTER_CELL_GAP: f32 = 1.0;
 
 const CLUSTERS_COL_WEIGHT: f32 = 0.54;
 const PRINTS_COL_WEIGHT: f32 = 0.46;
@@ -528,7 +529,7 @@ impl CscalpDom {
             let x = first_x + idx as f32 * col_width;
             self.draw_cluster_cell(
                 frame,
-                (x, x + col_width - COL_PADDING),
+                (x, x + col_width - CLUSTER_CELL_GAP),
                 y,
                 cell,
                 max_cluster_qty,
@@ -558,10 +559,27 @@ impl CscalpDom {
 
         for idx in 0..clusters.len() {
             let x = first_x + idx as f32 * col_width;
-            let x_end = x + col_width - COL_PADDING;
+            let x_end = x + col_width - CLUSTER_CELL_GAP;
             if x_end <= x {
                 continue;
             }
+
+            frame.fill_rectangle(
+                Point::new(x, y + 1.0),
+                Size::new((x_end - x).max(0.0), (ROW_HEIGHT - 2.0).max(0.0)),
+                divider_color.scale_alpha(0.045),
+            );
+
+            let outline = Path::rectangle(
+                Point::new(x.floor() + 0.5, y.floor() + 0.5),
+                Size::new((x_end - x).max(0.0), (ROW_HEIGHT - 1.0).max(0.0)),
+            );
+            frame.stroke(
+                &outline,
+                Stroke::default()
+                    .with_color(divider_color.scale_alpha(0.20))
+                    .with_width(1.0),
+            );
 
             frame.fill_rectangle(
                 Point::new(x.floor() + 0.5, y),
@@ -601,11 +619,21 @@ impl CscalpDom {
         let inner_y = y + 1.0;
         let inner_w = (cell_width - 2.0).max(0.0);
         let inner_h = (ROW_HEIGHT - 2.0).max(0.0);
+        if inner_w <= 0.0 || inner_h <= 0.0 {
+            return;
+        }
+        let fill_w = (inner_w * intensity).max(2.0).min(inner_w);
 
         frame.fill_rectangle(
             Point::new(inner_x, inner_y),
             Size::new(inner_w, inner_h),
-            dominant.scale_alpha(0.08 + intensity * 0.18),
+            dominant.scale_alpha(0.06),
+        );
+
+        frame.fill_rectangle(
+            Point::new(inner_x, inner_y),
+            Size::new(fill_w, inner_h),
+            dominant.scale_alpha(0.28 + intensity * 0.36),
         );
 
         let outline = Path::rectangle(Point::new(inner_x, inner_y), Size::new(inner_w, inner_h));
@@ -616,33 +644,24 @@ impl CscalpDom {
                 .with_width(1.0),
         );
 
-        let split_h = (inner_h * 0.34).clamp(2.0, inner_h);
-        let total_width = (inner_w * intensity).clamp(2.0, inner_w);
-        let volume_x = x_end - total_width - 2.0;
-
-        if sell > 0.0 {
+        if buy > 0.0 && sell > 0.0 {
+            let other_side = if sell > buy { bid_color } else { ask_color };
             frame.fill_rectangle(
-                Point::new(volume_x, y + 1.0),
-                Size::new(total_width, split_h),
-                ask_color.scale_alpha(0.34 + intensity * 0.22),
+                Point::new(inner_x, inner_y + inner_h - 2.0),
+                Size::new(fill_w, 2.0),
+                other_side.scale_alpha(0.58),
             );
         }
 
-        if buy > 0.0 {
-            frame.fill_rectangle(
-                Point::new(volume_x, y + ROW_HEIGHT - split_h - 1.0),
-                Size::new(total_width, split_h),
-                bid_color.scale_alpha(0.34 + intensity * 0.22),
-            );
-        }
-
-        if x_end - x_start >= 34.0 {
+        let qty_txt = self.format_quantity(cell.total());
+        let label_width = qty_txt.chars().count() as f32 * TEXT_SIZE * MONO_CHAR_ADVANCE + 8.0;
+        if x_end - x_start >= label_width {
             Self::draw_cell_text(
                 frame,
-                &self.format_quantity(cell.total()),
+                &qty_txt,
                 x_end - 4.0,
                 y,
-                text_color.scale_alpha(0.80),
+                text_color.scale_alpha(0.88),
                 Alignment::End,
             );
         }
@@ -688,7 +707,7 @@ impl CscalpDom {
 
         for (idx, cluster) in clusters.iter().enumerate() {
             let x = first_x + idx as f32 * col_width;
-            let x_end = x + col_width - COL_PADDING;
+            let x_end = x + col_width - CLUSTER_CELL_GAP;
             let (buy, sell) = cluster_totals(cluster);
             let total = buy + sell;
             let delta = buy - sell;

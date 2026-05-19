@@ -245,7 +245,7 @@ impl std::fmt::Display for ContentKind {
             ContentKind::CandlestickChart => "Candlestick Chart",
             ContentKind::ComparisonChart => "Comparison Chart",
             ContentKind::TimeAndSales => "Time&Sales",
-            ContentKind::CscalpDom => "DOM/Clusters",
+            ContentKind::CscalpDom => "CSCALP DOM (Time Grid)",
             ContentKind::Ladder => "DOM/Ladder",
         };
         write!(f, "{s}")

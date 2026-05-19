@@ -127,7 +127,7 @@ impl Dashboard {
         let ticker = Self::default_ticker(symbol);
 
         Configuration::Pane(pane::State::from_config(
-            pane::Content::Ladder(None),
+            pane::Content::CscalpDom(None),
             vec![
                 PersistStreamKind::Depth(PersistDepth {
                     ticker,
