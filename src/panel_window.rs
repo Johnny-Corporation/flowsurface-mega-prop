@@ -14,7 +14,7 @@ mod settings;
 mod trades;
 
 use connections::{ConnectionPanelState, connections_panel};
-use settings::settings_panel;
+use settings::{SettingsSection, settings_panel};
 use trades::trades_table;
 
 const PNL_POINTS: [f32; 12] = [
@@ -89,7 +89,7 @@ impl Kind {
 
     pub(crate) fn default_size(self) -> Size {
         match self {
-            Self::Connections => Size::new(920.0, 680.0),
+            Self::Connections => Size::new(1_080.0, 700.0),
             Self::Pnl => Size::new(820.0, 560.0),
             Self::Settings => Size::new(860.0, 620.0),
             Self::Analytics => Size::new(760.0, 540.0),
@@ -105,11 +105,12 @@ impl Kind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct State {
     pub kind: Kind,
     show_trades: bool,
     connection_state: ConnectionPanelState,
+    settings_section: SettingsSection,
 }
 
 impl State {
@@ -118,6 +119,7 @@ impl State {
             kind,
             show_trades: false,
             connection_state: ConnectionPanelState::default(),
+            settings_section: SettingsSection::General,
         }
     }
 
@@ -127,6 +129,11 @@ impl State {
             PanelMessage::ConnectionAction(action) => {
                 if self.kind == Kind::Connections {
                     self.connection_state.update(action);
+                }
+            }
+            PanelMessage::SettingsSection(section) => {
+                if self.kind == Kind::Settings {
+                    self.settings_section = section;
                 }
             }
             PanelMessage::TogglePnlTrades => {
@@ -215,7 +222,7 @@ impl State {
                     ("Report issue", "Collect logs and environment details"),
                 ],
             ),
-            Kind::Settings => settings_panel("Hotkeys"),
+            Kind::Settings => settings_panel(self.settings_section),
             Kind::Pnl => pnl_panel(self.show_trades),
             Kind::Connections => connections_panel(&self.connection_state),
             Kind::Account => account_panel(),
@@ -251,12 +258,14 @@ impl State {
 pub(crate) enum PanelMessage {
     Noop,
     ConnectionAction(ConnectionAction),
+    SettingsSection(SettingsSection),
     TogglePnlTrades,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConnectionAction {
     Toggle(usize),
+    SetColor(usize, u32),
     AddConnection,
     MyProxy,
     Refresh,

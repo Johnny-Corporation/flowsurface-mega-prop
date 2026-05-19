@@ -7,14 +7,33 @@ use iced::{
 
 use super::{PanelMessage, utility_button, value_box};
 
-const SETTINGS_NAV: [&str; 4] = ["Hotkeys", "Display", "Sound notifications", "Other"];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsSection {
+    General,
+    Appearance,
+    Network,
+    About,
+}
 
-pub(super) fn settings_panel<'a>(active: &'static str) -> Element<'a, PanelMessage> {
+impl SettingsSection {
+    const ALL: [Self; 4] = [Self::General, Self::Appearance, Self::Network, Self::About];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Appearance => "Appearance",
+            Self::Network => "Network & data",
+            Self::About => "About",
+        }
+    }
+}
+
+pub(super) fn settings_panel<'a>(active: SettingsSection) -> Element<'a, PanelMessage> {
     let content = match active {
-        "Display" => settings_display_content(),
-        "Sound notifications" => settings_sound_content(),
-        "Other" => settings_other_content(),
-        _ => settings_hotkeys_content(),
+        SettingsSection::General => settings_general_content(),
+        SettingsSection::Appearance => settings_appearance_content(),
+        SettingsSection::Network => settings_network_content(),
+        SettingsSection::About => settings_about_content(),
     };
 
     row![
@@ -41,11 +60,11 @@ pub(super) fn settings_panel<'a>(active: &'static str) -> Element<'a, PanelMessa
     .into()
 }
 
-fn settings_nav<'a>(active: &'static str) -> Element<'a, PanelMessage> {
+fn settings_nav<'a>(active: SettingsSection) -> Element<'a, PanelMessage> {
     let mut nav = column![].spacing(4).width(Length::Fixed(190.0));
 
-    for item in SETTINGS_NAV {
-        nav = nav.push(settings_nav_item(item, item == active));
+    for section in SettingsSection::ALL {
+        nav = nav.push(settings_nav_item(section, section == active));
     }
 
     container(nav)
@@ -55,44 +74,35 @@ fn settings_nav<'a>(active: &'static str) -> Element<'a, PanelMessage> {
         .into()
 }
 
-fn settings_nav_item<'a>(label: &'static str, active: bool) -> Element<'a, PanelMessage> {
-    container(text(label).size(style::text_size::BODY))
+fn settings_nav_item<'a>(section: SettingsSection, active: bool) -> Element<'a, PanelMessage> {
+    button(text(section.label()).size(style::text_size::BODY))
         .width(Length::Fill)
         .padding(padding::left(10).right(10).top(8).bottom(8))
-        .style(move |theme| {
-            if active {
-                style::panel_nav_active(theme)
-            } else {
-                style::panel_table_cell(theme)
-            }
-        })
+        .style(move |theme, status| style::button::bordered_toggle(theme, status, active))
+        .on_press(PanelMessage::SettingsSection(section))
         .into()
 }
 
-fn settings_hotkeys_content<'a>() -> Element<'a, PanelMessage> {
+fn settings_general_content<'a>() -> Element<'a, PanelMessage> {
     column![
-        section_header("Common"),
-        settings_pair("Focus fires", "F1", true),
-        settings_pair("Show trades", "F2", true),
-        settings_pair("Line notifications", "F5", true),
-        settings_pair("Switch to previous tab", "Shift+Tab", false),
-        settings_pair("Switch tab", "Tab", true),
-        settings_pair("Show spread", "LeftShift", true),
-        section_header("Orderbook"),
-        settings_pair("Buy order", "LBM", false),
-        settings_pair("Sell order", "RBM", false),
-        settings_pair("Ticker settings", "F4", true),
-        settings_pair("Traded amount 1", "1", false),
-        settings_pair("Traded amount 2", "2", false),
-        settings_pair("Traded amounts mode", "M", true),
+        section_header("Workspace"),
+        settings_value("Open data folder", "Application Support / flowsurface"),
+        section_header("Interface"),
+        settings_choice("Sidebar position", &["Left", "Right"], 0),
+        settings_choice("Time zone", &["Local", "UTC"], 0),
+        settings_stepper("Interface scale", "100%"),
+        checkbox_line("Size in quote currency", true),
+        section_header("Experimental"),
+        checkbox_line("Fetch trades (Binance)", false),
     ]
-    .spacing(10)
+    .spacing(12)
     .into()
 }
 
-fn settings_display_content<'a>() -> Element<'a, PanelMessage> {
+fn settings_appearance_content<'a>() -> Element<'a, PanelMessage> {
     column![
-        section_header("Themes"),
+        section_header("Theme"),
+        settings_value("Current theme", "App theme"),
         row![
             theme_swatch(0xf5f6f8, true),
             theme_swatch(0x555555, false),
@@ -106,54 +116,39 @@ fn settings_display_content<'a>() -> Element<'a, PanelMessage> {
         ]
         .spacing(12)
         .align_y(Alignment::Center),
-        section_header("Interface"),
-        settings_value("Application language", "en"),
-        settings_value("Orderbook font size", "11"),
-        settings_value("Charts font size", "11"),
-        settings_value("Orderbook FPS", "30"),
-        checkbox_line("Hide positions data", false),
-        checkbox_line("Adaptive font size in position information", false),
-        checkbox_line("Right-aligned amounts in the orderbook", true),
-        checkbox_line("Split best bid/ask in the aggregated orderbook", true),
-        checkbox_line("Digit grouping for amounts in the orderbook", true),
+        section_header("Theme editor"),
+        settings_value("Editor", "Open theme editor"),
+        settings_value("Custom theme", "Optional custom theme slot"),
     ]
     .spacing(12)
     .into()
 }
 
-fn settings_sound_content<'a>() -> Element<'a, PanelMessage> {
+fn settings_network_content<'a>() -> Element<'a, PanelMessage> {
     column![
-        section_header("Sound notifications"),
-        settings_value("Audio output", "System default"),
-        settings_value("Volume", "Enabled"),
-        checkbox_line("Play sound for trades", true),
-        checkbox_line("Play sound for connection changes", true),
-        checkbox_line("Mute inactive layouts", false),
-        section_header("Streams"),
-        settings_pair(
-            "Retry audio initialization",
-            "Available from Settings",
-            true
-        ),
-        settings_pair("Audio status", "Ready", true),
-    ]
-    .spacing(12)
-    .into()
-}
-
-fn settings_other_content<'a>() -> Element<'a, PanelMessage> {
-    column![
-        section_header("Workspace"),
-        settings_value("Main dashboard", "Open"),
-        settings_value("Market streams", "Managed by active panes"),
-        settings_value("Utility panels", "Opened from the app menu"),
-        section_header("Data"),
-        settings_value("Data folder", "Application Support / flowsurface"),
-        settings_value("Trade fetching", "Binance footprint template"),
-        settings_value("Size display", "Quote or base currency"),
         section_header("Network"),
+        settings_value("Network editor", "Open network panel"),
         settings_value("Proxy mode", "Direct connection"),
-        checkbox_line("Restart required after proxy changes", true),
+        checkbox_line("Use direct exchange connections", true),
+        section_header("Market data"),
+        checkbox_line("Fetch trades (Binance)", false),
+        settings_value("Footprint trades", "Experimental fetcher"),
+        settings_value("Data folder", "Open from General"),
+    ]
+    .spacing(12)
+    .into()
+}
+
+fn settings_about_content<'a>() -> Element<'a, PanelMessage> {
+    column![
+        section_header("Build"),
+        settings_value("Version", env!("CARGO_PKG_VERSION")),
+        settings_value("Repository", env!("CARGO_PKG_REPOSITORY")),
+        settings_value("Build metadata", "Available in the app gear menu"),
+        section_header("Utility panels"),
+        settings_value("Menu panels", "Opened from the top in-window menu"),
+        settings_value("Connections", "Stateful template with live pings"),
+        settings_value("PnL", "Chart and trades template"),
     ]
     .spacing(12)
     .into()
@@ -174,39 +169,55 @@ fn section_header<'a>(title: &'static str) -> Element<'a, PanelMessage> {
     .into()
 }
 
-fn settings_pair<'a>(
+fn settings_choice<'a>(
     label: &'static str,
-    value: &'static str,
-    enabled: bool,
+    values: &[&'static str],
+    active_index: usize,
 ) -> Element<'a, PanelMessage> {
-    row![
-        checkbox_mark(enabled),
-        text(label)
-            .size(style::text_size::BODY)
-            .width(Length::Fixed(250.0))
-            .style(move |theme: &Theme| text::Style {
-                color: Some(setting_text_color(theme, enabled)),
-            }),
-        text(value)
-            .size(style::text_size::BODY)
-            .style(move |theme: &Theme| text::Style {
-                color: Some(setting_text_color(theme, enabled)),
-            }),
-    ]
-    .spacing(10)
-    .height(Length::Fixed(24.0))
-    .align_y(Alignment::Center)
-    .into()
+    let mut choices = row![].spacing(6).align_y(Alignment::Center);
+
+    for (index, value) in values.iter().enumerate() {
+        let active = index == active_index;
+
+        choices = choices.push(
+            button(text(*value).size(style::text_size::SMALL))
+                .padding(padding::left(10).right(10).top(6).bottom(6))
+                .style(move |theme, status| style::button::bordered_toggle(theme, status, active))
+                .on_press(PanelMessage::Noop),
+        );
+    }
+
+    setting_row(label, choices)
+}
+
+fn settings_stepper<'a>(label: &'static str, value: &'static str) -> Element<'a, PanelMessage> {
+    setting_row(
+        label,
+        row![
+            utility_button("-"),
+            value_box(value, Length::Fixed(74.0)),
+            utility_button("+"),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+    )
 }
 
 fn settings_value<'a>(label: &'static str, value: &'static str) -> Element<'a, PanelMessage> {
+    setting_row(label, value_box(value, Length::Fixed(240.0)))
+}
+
+fn setting_row<'a>(
+    label: &'static str,
+    control: impl Into<Element<'a, PanelMessage>>,
+) -> Element<'a, PanelMessage> {
     row![
         iced::widget::Space::new().width(Length::Fixed(24.0)),
         text(label)
             .size(style::text_size::BODY)
-            .width(Length::Fixed(220.0))
+            .width(Length::Fixed(190.0))
             .align_x(Alignment::End),
-        value_box(value, Length::Fixed(180.0)),
+        control.into(),
     ]
     .spacing(12)
     .height(Length::Fixed(32.0))
@@ -260,16 +271,6 @@ fn checkbox_style(theme: &Theme, checked: bool) -> iced::widget::container::Styl
         },
         snap: true,
         ..Default::default()
-    }
-}
-
-fn setting_text_color(theme: &Theme, enabled: bool) -> iced::Color {
-    let palette = theme.extended_palette();
-
-    if enabled {
-        palette.background.base.text
-    } else {
-        palette.background.weak.text
     }
 }
 

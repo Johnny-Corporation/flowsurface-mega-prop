@@ -1,10 +1,19 @@
-use std::time::{Duration, Instant};
+use std::{
+    net::{TcpStream, ToSocketAddrs},
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
+    time::{Duration, Instant},
+};
 
 use crate::style;
 
 use iced::{
-    Alignment, Element, Length, Theme, padding,
-    widget::{button, column, container, row, text},
+    Alignment, Element, Length, Point, Rectangle, Renderer, Theme, mouse, padding,
+    widget::{
+        Canvas, button,
+        canvas::{self, Geometry, Path, Stroke},
+        column, container, row, text,
+    },
 };
 
 use super::{ConnectionAction, PanelMessage, panel_card, value_box};
@@ -58,6 +67,9 @@ const CONNECTIONS: [ConnectionTemplate; 7] = [
         94,
     ),
 ];
+const COLOR_CHOICES: [u32; 6] = [0x7d55c7, 0x2d9cdb, 0x6ca889, 0xd6a23a, 0xc64058, 0x3447b8];
+const MEXC_PING_TARGET: (&str, u16) = ("api.mexc.com", 443);
+const MEXC_PING_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy)]
 struct ConnectionTemplate {
@@ -92,7 +104,7 @@ impl ConnectionTemplate {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct ConnectionPanelState {
     rows: Vec<ConnectionRow>,
     logs: Vec<String>,
@@ -100,10 +112,16 @@ pub(super) struct ConnectionPanelState {
     proxy_enabled: bool,
     ping_tick: u32,
     last_ping_update: Option<Instant>,
+    mexc_ping_tx: Sender<MexcPingResult>,
+    mexc_ping_rx: Receiver<MexcPingResult>,
+    mexc_probe_inflight: bool,
+    last_mexc_probe: Option<Instant>,
+    mexc_status: String,
 }
 
 impl Default for ConnectionPanelState {
     fn default() -> Self {
+        let (mexc_ping_tx, mexc_ping_rx) = mpsc::channel();
         let mut rows = CONNECTIONS
             .iter()
             .copied()
@@ -115,12 +133,17 @@ impl Default for ConnectionPanelState {
             logs: vec![
                 "[02:32:08] [OKX: USDT-M / USDC-M] Connected".to_string(),
                 "[02:32:08] [OKX: Spot (Margin)] Connected".to_string(),
-                "[02:32:09] [MEXC: Spot] Connected with fake live ping".to_string(),
+                "[02:32:09] [MEXC: Spot] Real TCP ping pending".to_string(),
             ],
             last_action: "Ready",
             proxy_enabled: false,
             ping_tick: 0,
             last_ping_update: None,
+            mexc_ping_tx,
+            mexc_ping_rx,
+            mexc_probe_inflight: false,
+            last_mexc_probe: None,
+            mexc_status: "MEXC real TCP ping pending".to_string(),
         };
 
         state.rows.append(&mut rows);
@@ -131,6 +154,8 @@ impl Default for ConnectionPanelState {
 
 impl ConnectionPanelState {
     pub(super) fn tick(&mut self, now: Instant) {
+        self.poll_mexc_ping();
+
         let should_update = self.last_ping_update.map_or(true, |last| {
             now.duration_since(last) >= Duration::from_millis(350)
         });
@@ -139,11 +164,14 @@ impl ConnectionPanelState {
             self.last_ping_update = Some(now);
             self.refresh_pings();
         }
+
+        self.start_mexc_ping_if_needed(now);
     }
 
     pub(super) fn update(&mut self, action: ConnectionAction) {
         match action {
             ConnectionAction::Toggle(index) => self.toggle(index),
+            ConnectionAction::SetColor(index, color) => self.set_color(index, color),
             ConnectionAction::AddConnection => self.add_connection(),
             ConnectionAction::MyProxy => {
                 self.proxy_enabled = !self.proxy_enabled;
@@ -194,7 +222,11 @@ impl ConnectionPanelState {
         };
 
         row.enabled = !row.enabled;
-        row.ping_ms = row.enabled.then_some(row.base_ping_ms);
+        row.ping_ms = if row.enabled && !row.real_ping {
+            Some(row.base_ping_ms)
+        } else {
+            None
+        };
 
         let label = row.exchange.clone();
         let state = if row.enabled {
@@ -206,6 +238,17 @@ impl ConnectionPanelState {
         self.last_action = "Toggle";
         self.push_log(format!("[ui] {label} {state}"));
         self.refresh_pings();
+    }
+
+    fn set_color(&mut self, index: usize, color: u32) {
+        let Some(row) = self.rows.get_mut(index) else {
+            return;
+        };
+
+        row.color = color;
+        let label = row.exchange.clone();
+        self.last_action = "Color";
+        self.push_log(format!("[ui] {label} color changed"));
     }
 
     fn add_connection(&mut self) {
@@ -221,6 +264,8 @@ impl ConnectionPanelState {
             proxy: "Direct".to_string(),
             base_ping_ms: 82 + (number as u16 * 11),
             ping_ms: None,
+            ping_history: Vec::new(),
+            real_ping: false,
         });
 
         self.last_action = "Add connection";
@@ -243,14 +288,61 @@ impl ConnectionPanelState {
         self.ping_tick = self.ping_tick.wrapping_add(1);
 
         for (index, row) in self.rows.iter_mut().enumerate() {
+            if row.real_ping {
+                if !row.enabled {
+                    row.ping_ms = None;
+                }
+                continue;
+            }
+
             if row.enabled {
                 let wave = ((self.ping_tick as i32 * (index as i32 + 5)) % 43) - 21;
                 let ping = (row.base_ping_ms as i32 + wave).clamp(18, 480) as u16;
-                row.ping_ms = Some(ping);
+                row.push_ping(ping);
             } else {
                 row.ping_ms = None;
             }
         }
+    }
+
+    fn poll_mexc_ping(&mut self) {
+        while let Ok(result) = self.mexc_ping_rx.try_recv() {
+            self.mexc_probe_inflight = false;
+
+            match result {
+                Ok(ping_ms) => {
+                    if let Some(row) = self.rows.iter_mut().find(|row| row.real_ping) {
+                        row.push_ping(ping_ms);
+                    }
+                    self.mexc_status = format!("MEXC real TCP ping: {ping_ms}ms");
+                }
+                Err(error) => {
+                    self.mexc_status = format!("MEXC real TCP ping failed: {error}");
+                    if let Some(row) = self.rows.iter_mut().find(|row| row.real_ping) {
+                        row.ping_ms = None;
+                    }
+                }
+            }
+        }
+    }
+
+    fn start_mexc_ping_if_needed(&mut self, now: Instant) {
+        if self.mexc_probe_inflight
+            || !self.rows.iter().any(|row| row.enabled && row.real_ping)
+            || self
+                .last_mexc_probe
+                .is_some_and(|last| now.duration_since(last) < MEXC_PING_INTERVAL)
+        {
+            return;
+        }
+
+        self.mexc_probe_inflight = true;
+        self.last_mexc_probe = Some(now);
+        let tx = self.mexc_ping_tx.clone();
+
+        thread::spawn(move || {
+            let _ = tx.send(measure_mexc_tcp_ping());
+        });
     }
 
     fn push_log(&mut self, message: String) {
@@ -274,7 +366,8 @@ impl ConnectionPanelState {
 
     fn ping_status(&self) -> String {
         format!(
-            "Live fake pings: {} online / {} total | refresh #{}",
+            "{} | fake pings: {} online / {} total | refresh #{}",
+            self.mexc_status,
             self.online_count(),
             self.rows.len(),
             self.ping_tick
@@ -292,6 +385,8 @@ struct ConnectionRow {
     proxy: String,
     base_ping_ms: u16,
     ping_ms: Option<u16>,
+    ping_history: Vec<u16>,
+    real_ping: bool,
 }
 
 impl ConnectionRow {
@@ -305,22 +400,47 @@ impl ConnectionRow {
             proxy: template.proxy.to_string(),
             base_ping_ms: template.base_ping_ms,
             ping_ms: None,
+            ping_history: Vec::new(),
+            real_ping: template.exchange.starts_with("MEXC"),
         }
     }
 
-    fn color(&self) -> iced::Color {
-        iced::Color::from_rgb8(
-            ((self.color >> 16) & 0xff) as u8,
-            ((self.color >> 8) & 0xff) as u8,
-            (self.color & 0xff) as u8,
-        )
+    fn speed_label(&self) -> String {
+        match (self.enabled, self.ping_ms, self.real_ping) {
+            (false, _, _) => "-".to_string(),
+            (true, Some(ping), true) => format!("{ping}ms real"),
+            (true, Some(ping), false) => format!("{ping}ms fake"),
+            (true, None, true) => "checking".to_string(),
+            (true, None, false) => "-".to_string(),
+        }
     }
 
-    fn speed_label(&self) -> String {
-        self.ping_ms
-            .map(|ping| format!("{ping}ms"))
-            .unwrap_or_else(|| "-".to_string())
+    fn push_ping(&mut self, ping_ms: u16) {
+        self.ping_ms = Some(ping_ms);
+        self.ping_history.push(ping_ms);
+
+        while self.ping_history.len() > 36 {
+            self.ping_history.remove(0);
+        }
     }
+}
+
+type MexcPingResult = Result<u16, String>;
+
+fn measure_mexc_tcp_ping() -> MexcPingResult {
+    let start = Instant::now();
+    let mut addrs = MEXC_PING_TARGET
+        .to_socket_addrs()
+        .map_err(|error| error.to_string())?;
+
+    let addr = addrs
+        .next()
+        .ok_or_else(|| "DNS returned no addresses".to_string())?;
+
+    TcpStream::connect_timeout(&addr, Duration::from_millis(1_200))
+        .map_err(|error| error.to_string())?;
+
+    Ok(start.elapsed().as_millis().clamp(1, u16::MAX as u128) as u16)
 }
 
 pub(super) fn connections_panel<'a>(state: &'a ConnectionPanelState) -> Element<'a, PanelMessage> {
@@ -405,7 +525,7 @@ fn connection_header<'a>() -> Element<'a, PanelMessage> {
         ),
         connection_cell(
             text("Color").size(style::text_size::SMALL),
-            Length::Fixed(70.0),
+            Length::Fixed(128.0),
             true,
             false
         ),
@@ -417,7 +537,13 @@ fn connection_header<'a>() -> Element<'a, PanelMessage> {
         ),
         connection_cell(
             text("Speed").size(style::text_size::SMALL),
-            Length::Fixed(86.0),
+            Length::Fixed(96.0),
+            true,
+            false
+        ),
+        connection_cell(
+            text("Trend").size(style::text_size::SMALL),
+            Length::Fixed(132.0),
             true,
             false
         ),
@@ -477,8 +603,8 @@ fn connection_row<'a>(
             selected
         ),
         connection_cell(
-            small_color_chip(connection.color()),
-            Length::Fixed(70.0),
+            color_picker(index, connection.color),
+            Length::Fixed(128.0),
             false,
             selected
         ),
@@ -490,7 +616,13 @@ fn connection_row<'a>(
         ),
         connection_cell(
             speed_text(connection.speed_label(), connection.enabled),
-            Length::Fixed(86.0),
+            Length::Fixed(96.0),
+            false,
+            selected,
+        ),
+        connection_cell(
+            ping_sparkline(connection),
+            Length::Fixed(132.0),
             false,
             selected,
         ),
@@ -562,12 +694,28 @@ fn key_badge<'a>(key: &str) -> Element<'a, PanelMessage> {
         .into()
 }
 
-fn small_color_chip<'a>(color: iced::Color) -> Element<'a, PanelMessage> {
-    container("")
-        .width(Length::Fixed(24.0))
-        .height(Length::Fixed(22.0))
-        .style(move |theme| style::panel_swatch(theme, color, false))
-        .into()
+fn color_picker<'a>(index: usize, selected: u32) -> Element<'a, PanelMessage> {
+    let mut swatches = row![].spacing(3).align_y(Alignment::Center);
+
+    for color in COLOR_CHOICES {
+        swatches = swatches.push(
+            button(
+                container("")
+                    .width(Length::Fixed(14.0))
+                    .height(Length::Fixed(14.0))
+                    .style(move |theme| style::panel_swatch(theme, rgb(color), color == selected)),
+            )
+            .padding(1)
+            .style(move |theme, status| {
+                style::button::bordered_toggle(theme, status, color == selected)
+            })
+            .on_press(PanelMessage::ConnectionAction(ConnectionAction::SetColor(
+                index, color,
+            ))),
+        );
+    }
+
+    swatches.into()
 }
 
 fn speed_text<'a>(speed: String, online: bool) -> Element<'a, PanelMessage> {
@@ -581,6 +729,17 @@ fn speed_text<'a>(speed: String, online: bool) -> Element<'a, PanelMessage> {
             }),
         })
         .into()
+}
+
+fn ping_sparkline<'a>(connection: &ConnectionRow) -> Element<'a, PanelMessage> {
+    Canvas::new(PingSparkline {
+        points: connection.ping_history.clone(),
+        online: connection.enabled,
+        real: connection.real_ping,
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(30.0))
+    .into()
 }
 
 fn connection_actions<'a>(index: usize, last_action: &'static str) -> Element<'a, PanelMessage> {
@@ -604,6 +763,80 @@ fn connection_actions<'a>(index: usize, last_action: &'static str) -> Element<'a
     .spacing(6)
     .align_y(Alignment::Center)
     .into()
+}
+
+fn rgb(value: u32) -> iced::Color {
+    iced::Color::from_rgb8(
+        ((value >> 16) & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        (value & 0xff) as u8,
+    )
+}
+
+struct PingSparkline {
+    points: Vec<u16>,
+    online: bool,
+    real: bool,
+}
+
+impl canvas::Program<PanelMessage> for PingSparkline {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let palette = theme.extended_palette();
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let width = bounds.width.max(1.0);
+        let height = bounds.height.max(1.0);
+        let mid_y = height * 0.62;
+
+        let color = if !self.online {
+            palette.background.weak.text.scale_alpha(0.55)
+        } else if self.real {
+            palette.success.strong.color
+        } else {
+            palette.success.weak.color
+        };
+
+        frame.stroke(
+            &Path::line(Point::new(2.0, mid_y), Point::new(width - 2.0, mid_y)),
+            Stroke::default()
+                .with_color(color.scale_alpha(0.45))
+                .with_width(1.0),
+        );
+
+        if self.points.len() >= 2 && self.online {
+            let min = self.points.iter().copied().min().unwrap_or(0) as f32;
+            let max = self.points.iter().copied().max().unwrap_or(1) as f32;
+            let range = (max - min).max(12.0);
+            let step = (width - 4.0) / (self.points.len() - 1) as f32;
+
+            let mut previous = None;
+            for (index, value) in self.points.iter().copied().enumerate() {
+                let x = 2.0 + index as f32 * step;
+                let normalized = (value as f32 - min) / range;
+                let y = (height - 4.0) - normalized * (height - 8.0);
+                let point = Point::new(x, y.clamp(3.0, height - 3.0));
+
+                if let Some(prev) = previous {
+                    frame.stroke(
+                        &Path::line(prev, point),
+                        Stroke::default().with_color(color).with_width(2.0),
+                    );
+                }
+
+                previous = Some(point);
+            }
+        }
+
+        vec![frame.into_geometry()]
+    }
 }
 
 fn connection_notice<'a>(state: &ConnectionPanelState) -> Element<'a, PanelMessage> {
