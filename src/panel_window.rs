@@ -9,25 +9,16 @@ use iced::{
     },
 };
 
+mod connections;
+mod settings;
+mod trades;
+
+use connections::connections_panel;
+use settings::settings_panel;
+use trades::trades_table;
+
 const PNL_POINTS: [f32; 12] = [
     0.0, 420.0, -120.0, 780.0, 620.0, 1_240.0, 980.0, 1_540.0, 1_310.0, 1_860.0, 2_220.0, 2_050.0,
-];
-
-const TRADES: [TradeRow; 6] = [
-    TradeRow::new("09:31:02", "BTCUSDT", "Buy", 0.42, 68420.5, 245.0),
-    TradeRow::new("09:47:18", "ETHUSDT", "Sell", 3.20, 3638.8, -118.0),
-    TradeRow::new("10:06:44", "SOLUSDT", "Buy", 18.0, 182.4, 92.0),
-    TradeRow::new("10:28:11", "BTCUSDT", "Sell", 0.31, 68880.0, 404.0),
-    TradeRow::new("10:55:09", "BNBUSDT", "Buy", 9.5, 612.1, -46.0),
-    TradeRow::new("11:22:37", "ETHUSDT", "Buy", 2.1, 3664.2, 188.0),
-];
-
-const CONNECTIONS: [(&str, &str, &str); 5] = [
-    ("Binance", "Market data", "Online"),
-    ("Bybit", "Market data", "Online"),
-    ("MEXC", "Market data", "Online"),
-    ("Hyperliquid", "Trading", "Sandbox"),
-    ("Local cache", "Storage", "Ready"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,15 +85,14 @@ impl Kind {
 
     pub(crate) fn default_size(self) -> Size {
         match self {
-            Self::Pnl | Self::Analytics => Size::new(760.0, 540.0),
-            Self::Connections | Self::Account => Size::new(680.0, 480.0),
-            Self::App
-            | Self::File
-            | Self::Edit
-            | Self::View
-            | Self::Window
-            | Self::Help
-            | Self::About => Size::new(560.0, 420.0),
+            Self::Connections => Size::new(920.0, 680.0),
+            Self::Pnl => Size::new(820.0, 560.0),
+            Self::App | Self::View => Size::new(860.0, 620.0),
+            Self::Analytics => Size::new(760.0, 540.0),
+            Self::Account => Size::new(680.0, 480.0),
+            Self::File | Self::Edit | Self::Window | Self::Help | Self::About => {
+                Size::new(560.0, 420.0)
+            }
         }
     }
 }
@@ -123,6 +113,7 @@ impl State {
 
     pub(crate) fn update(&mut self, message: PanelMessage) {
         match message {
+            PanelMessage::Noop => {}
             PanelMessage::TogglePnlTrades => {
                 if self.kind == Kind::Pnl {
                     self.show_trades = !self.show_trades;
@@ -133,7 +124,7 @@ impl State {
 
     pub(crate) fn view(&self) -> Element<'_, PanelMessage> {
         let body = match self.kind {
-            Kind::App => app_panel(),
+            Kind::App => settings_panel("Hotkeys"),
             Kind::File => default_panel(
                 "File actions",
                 "Common file operations are grouped here as a simple command template.",
@@ -158,21 +149,7 @@ impl State {
                     ("Preferences", "Template area for editor and input settings"),
                 ],
             ),
-            Kind::View => default_panel(
-                "View options",
-                "Display controls can live here without crowding the trading dashboard.",
-                &[
-                    (
-                        "Compact mode",
-                        "Reduce spacing for denser market monitoring",
-                    ),
-                    (
-                        "Focus mode",
-                        "Highlight the active pane and mute secondary chrome",
-                    ),
-                    ("Reset zoom", "Return charts to their default viewport"),
-                ],
-            ),
+            Kind::View => settings_panel("Display"),
             Kind::Window => default_panel(
                 "Window manager",
                 "Window-level actions can coordinate the main dashboard and popout panels.",
@@ -191,18 +168,7 @@ impl State {
                     ),
                 ],
             ),
-            Kind::Help => default_panel(
-                "Help",
-                "A compact support panel can keep references close to the workflow.",
-                &[
-                    (
-                        "Keyboard shortcuts",
-                        "List app-wide navigation and pane shortcuts",
-                    ),
-                    ("Documentation", "Open local or web-based product docs"),
-                    ("Report issue", "Collect logs and environment details"),
-                ],
-            ),
+            Kind::Help => settings_panel("Other"),
             Kind::Pnl => pnl_panel(self.show_trades),
             Kind::Connections => connections_panel(),
             Kind::Account => account_panel(),
@@ -236,37 +202,8 @@ impl State {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PanelMessage {
+    Noop,
     TogglePnlTrades,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TradeRow {
-    time: &'static str,
-    symbol: &'static str,
-    side: &'static str,
-    qty: f32,
-    price: f32,
-    pnl: f32,
-}
-
-impl TradeRow {
-    const fn new(
-        time: &'static str,
-        symbol: &'static str,
-        side: &'static str,
-        qty: f32,
-        price: f32,
-        pnl: f32,
-    ) -> Self {
-        Self {
-            time,
-            symbol,
-            side,
-            qty,
-            price,
-            pnl,
-        }
-    }
 }
 
 pub(crate) fn menu_bar<'a>() -> Element<'a, Message> {
@@ -282,27 +219,6 @@ pub(crate) fn menu_bar<'a>() -> Element<'a, Message> {
     }
 
     items.into()
-}
-
-fn app_panel<'a>() -> Element<'a, PanelMessage> {
-    column![
-        metric_row(&[
-            ("Workspace", "Dashboard"),
-            ("Mode", "Live market monitor"),
-            ("Layout", "Active"),
-        ]),
-        panel_card(
-            "Session",
-            column![
-                detail_row("Main dashboard", "Open"),
-                detail_row("Market streams", "Managed by active panes"),
-                detail_row("Utility panels", "Opened from the macOS-style menu"),
-            ]
-            .spacing(10),
-        ),
-    ]
-    .spacing(14)
-    .into()
 }
 
 fn default_panel<'a>(
@@ -383,21 +299,6 @@ fn pnl_panel<'a>(show_trades: bool) -> Element<'a, PanelMessage> {
             ]
             .spacing(12),
         ),
-    ]
-    .spacing(14)
-    .into()
-}
-
-fn connections_panel<'a>() -> Element<'a, PanelMessage> {
-    let mut rows = column![table_header(&["Venue", "Channel", "Status"])].spacing(4);
-
-    for (venue, channel, status) in CONNECTIONS {
-        rows = rows.push(table_row(&[venue, channel, status]));
-    }
-
-    column![
-        metric_row(&[("Online", "3"), ("Sandbox", "1"), ("Local", "1"),]),
-        panel_card("Connections", rows),
     ]
     .spacing(14)
     .into()
@@ -524,7 +425,7 @@ fn metric_card<'a>(label: &'static str, value: &'static str) -> Element<'a, Pane
     .into()
 }
 
-fn panel_card<'a>(
+pub(super) fn panel_card<'a>(
     title: &'static str,
     content: impl Into<Element<'a, PanelMessage>>,
 ) -> Element<'a, PanelMessage> {
@@ -561,6 +462,22 @@ fn detail_row<'a>(label: impl Into<String>, value: impl Into<String>) -> Element
     .into()
 }
 
+pub(super) fn value_box<'a>(value: impl Into<String>, width: Length) -> Element<'a, PanelMessage> {
+    container(text(value.into()).size(style::text_size::BODY))
+        .width(width)
+        .padding(padding::left(10).right(10).top(6).bottom(6))
+        .style(style::panel_value_box)
+        .into()
+}
+
+pub(super) fn utility_button<'a>(label: &'static str) -> Element<'a, PanelMessage> {
+    button(text(label).size(style::text_size::SMALL))
+        .padding(padding::left(10).right(10).top(6).bottom(6))
+        .style(style::button::info)
+        .on_press(PanelMessage::Noop)
+        .into()
+}
+
 fn progress_row<'a>(
     label: &'static str,
     percent: f32,
@@ -586,63 +503,7 @@ fn progress_row<'a>(
     .into()
 }
 
-fn trades_table<'a>() -> Element<'a, PanelMessage> {
-    let mut rows = column![table_header(&[
-        "Time", "Symbol", "Side", "Qty", "Price", "PnL"
-    ])]
-    .spacing(4);
-
-    for trade in TRADES {
-        rows = rows.push(table_row(&[
-            trade.time.to_string(),
-            trade.symbol.to_string(),
-            trade.side.to_string(),
-            format!("{:.2}", trade.qty),
-            format!("{:.1}", trade.price),
-            format_money(trade.pnl),
-        ]));
-    }
-
-    rows.into()
-}
-
-fn table_header<'a, S>(labels: &[S]) -> Element<'a, PanelMessage>
-where
-    S: AsRef<str>,
-{
-    table_row_styled(labels, true)
-}
-
-fn table_row<'a, S>(labels: &[S]) -> Element<'a, PanelMessage>
-where
-    S: AsRef<str>,
-{
-    table_row_styled(labels, false)
-}
-
-fn table_row_styled<'a, S>(labels: &[S], is_header: bool) -> Element<'a, PanelMessage>
-where
-    S: AsRef<str>,
-{
-    let mut row = row![].spacing(4);
-
-    for label in labels {
-        row = row.push(
-            container(text(label.as_ref().to_string()).size(style::text_size::SMALL))
-                .width(Length::Fill)
-                .padding(padding::left(8).right(8).top(5).bottom(5))
-                .style(if is_header {
-                    style::panel_table_header
-                } else {
-                    style::panel_table_cell
-                }),
-        );
-    }
-
-    row.into()
-}
-
-fn format_money(value: f32) -> String {
+pub(super) fn format_money(value: f32) -> String {
     if value < 0.0 {
         format!("-${:.0}", value.abs())
     } else {

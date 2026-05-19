@@ -620,6 +620,38 @@ pub fn panel_card(theme: &Theme) -> Style {
     }
 }
 
+pub fn panel_nav_active(theme: &Theme) -> Style {
+    let palette = theme.extended_palette();
+
+    Style {
+        text_color: Some(palette.background.base.text),
+        background: Some(palette.background.weak.color.into()),
+        border: Border {
+            width: 1.0,
+            color: palette.secondary.weak.color.scale_alpha(0.6),
+            radius: 3.0.into(),
+        },
+        snap: true,
+        ..Default::default()
+    }
+}
+
+pub fn panel_value_box(theme: &Theme) -> Style {
+    let palette = theme.extended_palette();
+
+    Style {
+        text_color: Some(palette.background.base.text),
+        background: Some(palette.background.base.color.into()),
+        border: Border {
+            width: 1.0,
+            color: palette.background.weak.color.scale_alpha(0.8),
+            radius: 3.0.into(),
+        },
+        snap: true,
+        ..Default::default()
+    }
+}
+
 pub fn panel_progress(theme: &Theme) -> Style {
     let palette = theme.extended_palette();
 
@@ -674,6 +706,53 @@ pub fn panel_table_cell(theme: &Theme) -> Style {
             color: palette.background.weak.color.scale_alpha(0.6),
             radius: 3.0.into(),
         },
+        ..Default::default()
+    }
+}
+
+pub fn panel_status_toggle(theme: &Theme, enabled: bool) -> Style {
+    let palette = theme.extended_palette();
+
+    Style {
+        text_color: Some(if enabled {
+            palette.background.base.text
+        } else {
+            palette.background.weak.text
+        }),
+        background: Some(if enabled {
+            palette.success.weak.color.into()
+        } else {
+            palette.background.base.color.into()
+        }),
+        border: Border {
+            width: 1.0,
+            color: if enabled {
+                palette.success.base.color
+            } else {
+                palette.background.weak.color
+            },
+            radius: 11.0.into(),
+        },
+        snap: true,
+        ..Default::default()
+    }
+}
+
+pub fn panel_swatch(theme: &Theme, color: Color, selected: bool) -> Style {
+    let palette = theme.extended_palette();
+
+    Style {
+        background: Some(color.into()),
+        border: Border {
+            width: if selected { 2.0 } else { 1.0 },
+            color: if selected {
+                palette.secondary.strong.color
+            } else {
+                palette.background.weak.color
+            },
+            radius: 3.0.into(),
+        },
+        snap: true,
         ..Default::default()
     }
 }
