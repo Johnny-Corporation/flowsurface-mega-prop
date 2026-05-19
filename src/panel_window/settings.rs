@@ -124,7 +124,7 @@ pub(super) fn settings_panel<'a>(state: &'a SettingsPanelState) -> Element<'a, P
         container(
             column![
                 content,
-                iced::widget::Space::new().height(Length::Fill),
+                rule::horizontal(1).style(style::split_ruler),
                 row![
                     text(format!("Last action: {}", state.last_action))
                         .size(style::text_size::SMALL),
@@ -136,13 +136,12 @@ pub(super) fn settings_panel<'a>(state: &'a SettingsPanelState) -> Element<'a, P
                 .spacing(8)
                 .align_y(Alignment::Center),
             ]
-            .spacing(14),
+            .spacing(18),
         )
         .width(Length::Fill)
         .padding(padding::left(14)),
     ]
     .spacing(14)
-    .height(Length::Fill)
     .into()
 }
 
@@ -154,7 +153,6 @@ fn settings_nav<'a>(active: SettingsSection) -> Element<'a, PanelMessage> {
     }
 
     container(nav)
-        .height(Length::Fill)
         .padding(padding::right(12))
         .style(style::panel_card)
         .into()

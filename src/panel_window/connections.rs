@@ -505,57 +505,57 @@ fn connection_status_strip<'a>(state: &ConnectionPanelState) -> Element<'a, Pane
 
 fn connection_header<'a>() -> Element<'a, PanelMessage> {
     row![
+        connection_cell(table_header_text("State"), Length::Fixed(78.0), true, false),
         connection_cell(
-            text("State").size(style::text_size::SMALL),
-            Length::Fixed(74.0),
-            true,
-            false
-        ),
-        connection_cell(
-            text("Exchange").size(style::text_size::SMALL),
+            table_header_text("Exchange"),
             Length::FillPortion(4),
             true,
             false
         ),
+        connection_cell(table_header_text("Key"), Length::Fixed(66.0), true, false),
         connection_cell(
-            text("Key").size(style::text_size::SMALL),
-            Length::Fixed(62.0),
+            table_header_text("Color"),
+            Length::Fixed(144.0),
             true,
             false
         ),
         connection_cell(
-            text("Color").size(style::text_size::SMALL),
-            Length::Fixed(128.0),
-            true,
-            false
-        ),
-        connection_cell(
-            text("Proxy").size(style::text_size::SMALL),
+            table_header_text("Proxy"),
             Length::FillPortion(3),
             true,
             false
         ),
         connection_cell(
-            text("Speed").size(style::text_size::SMALL),
-            Length::Fixed(96.0),
+            table_header_text("Speed"),
+            Length::Fixed(108.0),
             true,
             false
         ),
         connection_cell(
-            text("Trend").size(style::text_size::SMALL),
-            Length::Fixed(132.0),
+            table_header_text("Trend"),
+            Length::Fixed(150.0),
             true,
             false
         ),
         connection_cell(
-            text("Actions").size(style::text_size::SMALL),
-            Length::Fixed(112.0),
+            table_header_text("Actions"),
+            Length::Fixed(118.0),
             true,
             false
         ),
     ]
     .spacing(0)
     .into()
+}
+
+fn table_header_text<'a>(label: &'static str) -> Element<'a, PanelMessage> {
+    text(label)
+        .size(style::text_size::BODY)
+        .font(style::AZERET_MONO)
+        .style(|theme: &Theme| text::Style {
+            color: Some(theme.extended_palette().background.base.text),
+        })
+        .into()
 }
 
 fn connection_row<'a>(
@@ -573,7 +573,7 @@ fn connection_row<'a>(
     row![
         connection_cell(
             connection_toggle(index, connection.enabled),
-            Length::Fixed(74.0),
+            Length::Fixed(78.0),
             false,
             selected
         ),
@@ -581,7 +581,12 @@ fn connection_row<'a>(
             row![
                 exchange_badge(&connection.exchange),
                 column![
-                    text(connection.exchange.clone()).size(style::text_size::BODY),
+                    text(connection.exchange.clone())
+                        .size(style::text_size::EMPHASIS)
+                        .font(iced::Font {
+                            weight: iced::font::Weight::Bold,
+                            ..Default::default()
+                        }),
                     text(connection.market.clone())
                         .size(style::text_size::TINY)
                         .style(|theme: &Theme| text::Style {
@@ -598,13 +603,13 @@ fn connection_row<'a>(
         ),
         connection_cell(
             key_badge(&connection.key),
-            Length::Fixed(62.0),
+            Length::Fixed(66.0),
             false,
             selected
         ),
         connection_cell(
             color_picker(index, connection.color),
-            Length::Fixed(128.0),
+            Length::Fixed(144.0),
             false,
             selected
         ),
@@ -616,19 +621,19 @@ fn connection_row<'a>(
         ),
         connection_cell(
             speed_text(connection.speed_label(), connection.enabled),
-            Length::Fixed(96.0),
+            Length::Fixed(108.0),
             false,
             selected,
         ),
         connection_cell(
             ping_sparkline(connection),
-            Length::Fixed(132.0),
+            Length::Fixed(150.0),
             false,
             selected,
         ),
         connection_cell(
             connection_actions(index, state.last_action),
-            Length::Fixed(112.0),
+            Length::Fixed(118.0),
             false,
             selected,
         ),
@@ -645,8 +650,8 @@ fn connection_cell<'a>(
 ) -> Element<'a, PanelMessage> {
     container(content.into())
         .width(width)
-        .height(Length::Fixed(if is_header { 30.0 } else { 44.0 }))
-        .padding(padding::left(8).right(8).top(5).bottom(5))
+        .height(Length::Fixed(if is_header { 36.0 } else { 52.0 }))
+        .padding(padding::left(11).right(11).top(7).bottom(7))
         .align_y(Alignment::Center)
         .style(move |theme| {
             if is_header {
@@ -662,9 +667,9 @@ fn connection_cell<'a>(
 
 fn connection_toggle<'a>(index: usize, enabled: bool) -> Element<'a, PanelMessage> {
     button(text(if enabled { "ON" } else { "OFF" }).size(style::text_size::TINY))
-        .width(Length::Fixed(48.0))
-        .height(Length::Fixed(24.0))
-        .padding(padding::left(4).right(4).top(3).bottom(3))
+        .width(Length::Fixed(52.0))
+        .height(Length::Fixed(26.0))
+        .padding(padding::left(5).right(5).top(3).bottom(3))
         .style(move |theme, status| style::button::bordered_toggle(theme, status, enabled))
         .on_press(PanelMessage::ConnectionAction(ConnectionAction::Toggle(
             index,
@@ -685,27 +690,31 @@ fn exchange_badge<'a>(exchange: &str) -> Element<'a, PanelMessage> {
 }
 
 fn key_badge<'a>(key: &str) -> Element<'a, PanelMessage> {
-    container(text(key.to_string()).size(style::text_size::TINY))
-        .width(Length::Fixed(24.0))
-        .height(Length::Fixed(22.0))
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(style::panel_value_box)
-        .into()
+    container(
+        text(key.to_string())
+            .size(style::text_size::TINY)
+            .font(style::AZERET_MONO),
+    )
+    .width(Length::Fixed(28.0))
+    .height(Length::Fixed(24.0))
+    .align_x(Alignment::Center)
+    .align_y(Alignment::Center)
+    .style(style::panel_value_box)
+    .into()
 }
 
 fn color_picker<'a>(index: usize, selected: u32) -> Element<'a, PanelMessage> {
-    let mut swatches = row![].spacing(3).align_y(Alignment::Center);
+    let mut swatches = row![].spacing(4).align_y(Alignment::Center);
 
     for color in COLOR_CHOICES {
         swatches = swatches.push(
             button(
                 container("")
-                    .width(Length::Fixed(14.0))
-                    .height(Length::Fixed(14.0))
+                    .width(Length::Fixed(16.0))
+                    .height(Length::Fixed(16.0))
                     .style(move |theme| style::panel_swatch(theme, rgb(color), color == selected)),
             )
-            .padding(1)
+            .padding(2)
             .style(move |theme, status| {
                 style::button::bordered_toggle(theme, status, color == selected)
             })
@@ -721,6 +730,7 @@ fn color_picker<'a>(index: usize, selected: u32) -> Element<'a, PanelMessage> {
 fn speed_text<'a>(speed: String, online: bool) -> Element<'a, PanelMessage> {
     text(speed)
         .size(style::text_size::BODY)
+        .font(style::AZERET_MONO)
         .style(move |theme: &Theme| text::Style {
             color: Some(if online {
                 theme.extended_palette().success.strong.color
@@ -738,7 +748,7 @@ fn ping_sparkline<'a>(connection: &ConnectionRow) -> Element<'a, PanelMessage> {
         real: connection.real_ping,
     })
     .width(Length::Fill)
-    .height(Length::Fixed(30.0))
+    .height(Length::Fixed(34.0))
     .into()
 }
 
@@ -816,23 +826,36 @@ impl canvas::Program<PanelMessage> for PingSparkline {
             let max = self.points.iter().copied().max().unwrap_or(1) as f32;
             let range = (max - min).max(12.0);
             let step = (width - 4.0) / (self.points.len() - 1) as f32;
+            let points = self
+                .points
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, value)| {
+                    let x = 2.0 + index as f32 * step;
+                    let normalized = (value as f32 - min) / range;
+                    let y = (height - 4.0) - normalized * (height - 8.0);
+                    Point::new(x, y.clamp(3.0, height - 3.0))
+                })
+                .collect::<Vec<_>>();
 
-            let mut previous = None;
-            for (index, value) in self.points.iter().copied().enumerate() {
-                let x = 2.0 + index as f32 * step;
-                let normalized = (value as f32 - min) / range;
-                let y = (height - 4.0) - normalized * (height - 8.0);
-                let point = Point::new(x, y.clamp(3.0, height - 3.0));
+            let path = Path::new(|builder| {
+                builder.move_to(points[0]);
 
-                if let Some(prev) = previous {
-                    frame.stroke(
-                        &Path::line(prev, point),
-                        Stroke::default().with_color(color).with_width(2.0),
+                for pair in points.windows(2) {
+                    let from = pair[0];
+                    let to = pair[1];
+                    let control_dx = (to.x - from.x) * 0.45;
+
+                    builder.bezier_curve_to(
+                        Point::new(from.x + control_dx, from.y),
+                        Point::new(to.x - control_dx, to.y),
+                        to,
                     );
                 }
+            });
 
-                previous = Some(point);
-            }
+            frame.stroke(&path, Stroke::default().with_color(color).with_width(2.15));
         }
 
         vec![frame.into_geometry()]

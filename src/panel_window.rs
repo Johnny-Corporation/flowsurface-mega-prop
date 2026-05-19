@@ -89,7 +89,7 @@ impl Kind {
 
     pub(crate) fn default_size(self) -> Size {
         match self {
-            Self::Connections => Size::new(1_080.0, 700.0),
+            Self::Connections => Size::new(1_140.0, 720.0),
             Self::Pnl => Size::new(820.0, 560.0),
             Self::Settings => Size::new(860.0, 620.0),
             Self::Analytics => Size::new(760.0, 540.0),
