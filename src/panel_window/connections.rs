@@ -68,8 +68,8 @@ const CONNECTIONS: [ConnectionTemplate; 7] = [
     ),
 ];
 const COLOR_CHOICES: [u32; 6] = [0x7d55c7, 0x2d9cdb, 0x6ca889, 0xd6a23a, 0xc64058, 0x3447b8];
-const MEXC_PING_TARGET: (&str, u16) = ("api.mexc.com", 443);
-const MEXC_PING_INTERVAL: Duration = Duration::from_secs(2);
+const MEXC_EDGE_PING_TARGET: (&str, u16) = ("api.mexc.com", 443);
+const MEXC_EDGE_PING_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy)]
 struct ConnectionTemplate {
@@ -133,7 +133,8 @@ impl Default for ConnectionPanelState {
             logs: vec![
                 "[02:32:08] [OKX: USDT-M / USDC-M] Connected".to_string(),
                 "[02:32:08] [OKX: Spot (Margin)] Connected".to_string(),
-                "[02:32:09] [MEXC: Spot] Real TCP ping pending".to_string(),
+                "[02:32:09] [MEXC: Spot] CDN edge TCP probe pending; engine latency unknown"
+                    .to_string(),
             ],
             last_action: "Ready",
             proxy_enabled: false,
@@ -143,7 +144,7 @@ impl Default for ConnectionPanelState {
             mexc_ping_rx,
             mexc_probe_inflight: false,
             last_mexc_probe: None,
-            mexc_status: "MEXC real TCP ping pending".to_string(),
+            mexc_status: "MEXC CDN edge TCP pending; engine latency unknown".to_string(),
         };
 
         state.rows.append(&mut rows);
@@ -188,7 +189,7 @@ impl ConnectionPanelState {
             ConnectionAction::Refresh => {
                 self.last_action = "Refresh";
                 self.refresh_pings();
-                self.push_log("[ui] Manual refresh requested; fake pings updated".to_string());
+                self.push_log("[ui] Manual refresh requested; demo pings updated".to_string());
             }
             ConnectionAction::Confirm => {
                 self.last_action = "OK";
@@ -222,7 +223,7 @@ impl ConnectionPanelState {
         };
 
         row.enabled = !row.enabled;
-        row.ping_ms = if row.enabled && !row.real_ping {
+        row.ping_ms = if row.enabled && !row.edge_ping {
             Some(row.base_ping_ms)
         } else {
             None
@@ -265,7 +266,7 @@ impl ConnectionPanelState {
             base_ping_ms: 82 + (number as u16 * 11),
             ping_ms: None,
             ping_history: Vec::new(),
-            real_ping: false,
+            edge_ping: false,
         });
 
         self.last_action = "Add connection";
@@ -288,7 +289,7 @@ impl ConnectionPanelState {
         self.ping_tick = self.ping_tick.wrapping_add(1);
 
         for (index, row) in self.rows.iter_mut().enumerate() {
-            if row.real_ping {
+            if row.edge_ping {
                 if !row.enabled {
                     row.ping_ms = None;
                 }
@@ -311,14 +312,14 @@ impl ConnectionPanelState {
 
             match result {
                 Ok(ping_ms) => {
-                    if let Some(row) = self.rows.iter_mut().find(|row| row.real_ping) {
+                    if let Some(row) = self.rows.iter_mut().find(|row| row.edge_ping) {
                         row.push_ping(ping_ms);
                     }
-                    self.mexc_status = format!("MEXC real TCP ping: {ping_ms}ms");
+                    self.mexc_status = format!("MEXC CDN edge TCP: {ping_ms}ms; engine unknown");
                 }
                 Err(error) => {
-                    self.mexc_status = format!("MEXC real TCP ping failed: {error}");
-                    if let Some(row) = self.rows.iter_mut().find(|row| row.real_ping) {
+                    self.mexc_status = format!("MEXC CDN edge TCP failed: {error}");
+                    if let Some(row) = self.rows.iter_mut().find(|row| row.edge_ping) {
                         row.ping_ms = None;
                     }
                 }
@@ -328,10 +329,10 @@ impl ConnectionPanelState {
 
     fn start_mexc_ping_if_needed(&mut self, now: Instant) {
         if self.mexc_probe_inflight
-            || !self.rows.iter().any(|row| row.enabled && row.real_ping)
+            || !self.rows.iter().any(|row| row.enabled && row.edge_ping)
             || self
                 .last_mexc_probe
-                .is_some_and(|last| now.duration_since(last) < MEXC_PING_INTERVAL)
+                .is_some_and(|last| now.duration_since(last) < MEXC_EDGE_PING_INTERVAL)
         {
             return;
         }
@@ -341,7 +342,7 @@ impl ConnectionPanelState {
         let tx = self.mexc_ping_tx.clone();
 
         thread::spawn(move || {
-            let _ = tx.send(measure_mexc_tcp_ping());
+            let _ = tx.send(measure_mexc_edge_tcp_ping());
         });
     }
 
@@ -366,7 +367,7 @@ impl ConnectionPanelState {
 
     fn ping_status(&self) -> String {
         format!(
-            "{} | fake pings: {} online / {} total | refresh #{}",
+            "{} | other rows use demo pings: {} online / {} total | refresh #{}",
             self.mexc_status,
             self.online_count(),
             self.rows.len(),
@@ -386,7 +387,7 @@ struct ConnectionRow {
     base_ping_ms: u16,
     ping_ms: Option<u16>,
     ping_history: Vec<u16>,
-    real_ping: bool,
+    edge_ping: bool,
 }
 
 impl ConnectionRow {
@@ -401,16 +402,16 @@ impl ConnectionRow {
             base_ping_ms: template.base_ping_ms,
             ping_ms: None,
             ping_history: Vec::new(),
-            real_ping: template.exchange.starts_with("MEXC"),
+            edge_ping: template.exchange.starts_with("MEXC"),
         }
     }
 
     fn speed_label(&self) -> String {
-        match (self.enabled, self.ping_ms, self.real_ping) {
+        match (self.enabled, self.ping_ms, self.edge_ping) {
             (false, _, _) => "-".to_string(),
-            (true, Some(ping), true) => format!("{ping}ms real"),
-            (true, Some(ping), false) => format!("{ping}ms fake"),
-            (true, None, true) => "checking".to_string(),
+            (true, Some(ping), true) => format!("{ping}ms edge"),
+            (true, Some(ping), false) => format!("{ping}ms demo"),
+            (true, None, true) => "edge check".to_string(),
             (true, None, false) => "-".to_string(),
         }
     }
@@ -427,9 +428,9 @@ impl ConnectionRow {
 
 type MexcPingResult = Result<u16, String>;
 
-fn measure_mexc_tcp_ping() -> MexcPingResult {
+fn measure_mexc_edge_tcp_ping() -> MexcPingResult {
     let start = Instant::now();
-    let mut addrs = MEXC_PING_TARGET
+    let mut addrs = MEXC_EDGE_PING_TARGET
         .to_socket_addrs()
         .map_err(|error| error.to_string())?;
 
@@ -437,6 +438,7 @@ fn measure_mexc_tcp_ping() -> MexcPingResult {
         .next()
         .ok_or_else(|| "DNS returned no addresses".to_string())?;
 
+    // This is only the nearest CDN/API edge TCP connect time, not matching-engine latency.
     TcpStream::connect_timeout(&addr, Duration::from_millis(1_200))
         .map_err(|error| error.to_string())?;
 
@@ -745,7 +747,7 @@ fn ping_sparkline<'a>(connection: &ConnectionRow) -> Element<'a, PanelMessage> {
     Canvas::new(PingSparkline {
         points: connection.ping_history.clone(),
         online: connection.enabled,
-        real: connection.real_ping,
+        edge: connection.edge_ping,
     })
     .width(Length::Fill)
     .height(Length::Fixed(34.0))
@@ -786,7 +788,7 @@ fn rgb(value: u32) -> iced::Color {
 struct PingSparkline {
     points: Vec<u16>,
     online: bool,
-    real: bool,
+    edge: bool,
 }
 
 impl canvas::Program<PanelMessage> for PingSparkline {
@@ -808,7 +810,7 @@ impl canvas::Program<PanelMessage> for PingSparkline {
 
         let color = if !self.online {
             palette.background.weak.text.scale_alpha(0.55)
-        } else if self.real {
+        } else if self.edge {
             palette.success.strong.color
         } else {
             palette.success.weak.color
