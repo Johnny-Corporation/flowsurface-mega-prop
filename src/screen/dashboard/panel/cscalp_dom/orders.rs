@@ -256,7 +256,8 @@ impl CscalpDom {
             return;
         }
 
-        let footer_y = bounds.height - footer_h;
+        let footer_y = (bounds.height - footer_h).floor();
+        let footer_h = bounds.height - footer_y;
         let (position_dollars, pnl_percent, pnl_dollars) = self.paper_position_values();
         let panel_fill = trading_footer_panel_color(text_color);
         let cells = [
@@ -267,7 +268,7 @@ impl CscalpDom {
         ];
 
         let x0 = cols.orderbook.0;
-        let x1 = cols.price.1.max(cols.orderbook.1);
+        let x1 = bounds.width.max(cols.price.1).max(cols.orderbook.1);
         let width = (x1 - x0).max(0.0);
         if width <= 0.0 {
             return;

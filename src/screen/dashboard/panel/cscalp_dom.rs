@@ -543,6 +543,8 @@ impl canvas::Program<Message> for CscalpDom {
 
                 self.draw_working_orders(frame, bounds, &grid, &visible_rows, &cols, text_color);
                 self.draw_view_mode_badge(frame, &cols, text_color);
+                self.draw_vertical_splits(frame, bounds, &cols, divider_color, spread_row);
+                self.draw_price_ruler(frame, &grid, bounds, cursor, &cols, text_color);
                 self.draw_trading_footer(
                     frame,
                     bounds,
@@ -552,8 +554,6 @@ impl canvas::Program<Message> for CscalpDom {
                     bid_color,
                     ask_color,
                 );
-                self.draw_vertical_splits(frame, bounds, &cols, divider_color, spread_row);
-                self.draw_price_ruler(frame, &grid, bounds, cursor, &cols, text_color);
             }
         });
 
