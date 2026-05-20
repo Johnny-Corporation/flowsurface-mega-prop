@@ -409,9 +409,9 @@ impl ConnectionRow {
     fn speed_label(&self) -> String {
         match (self.enabled, self.ping_ms, self.edge_ping) {
             (false, _, _) => "-".to_string(),
-            (true, Some(ping), true) => format!("{ping}ms edge"),
+            (true, Some(_), true) => "engine unknown".to_string(),
             (true, Some(ping), false) => format!("{ping}ms demo"),
-            (true, None, true) => "edge check".to_string(),
+            (true, None, true) => "edge only".to_string(),
             (true, None, false) => "-".to_string(),
         }
     }
