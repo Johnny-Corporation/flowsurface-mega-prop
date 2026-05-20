@@ -247,7 +247,6 @@ impl CscalpDom {
         bounds: Rectangle,
         cols: &ColumnRanges,
         text_color: iced::Color,
-        footer_bg: iced::Color,
         divider_color: iced::Color,
         bid_color: iced::Color,
         ask_color: iced::Color,
@@ -259,16 +258,17 @@ impl CscalpDom {
 
         let footer_y = bounds.height - footer_h;
         let (position_dollars, pnl_percent, pnl_dollars) = self.paper_position_values();
-        let panel_fill = trading_footer_panel_color(text_color, footer_bg);
+        let panel_fill = trading_footer_panel_color(text_color);
         let cells = [
             ("$", signed_money(position_dollars)),
-            ("CT", signed_contracts(self.paper_position.contracts)),
-            ("P%", format!("{:+.2}%", pnl_percent)),
-            ("P$", signed_money(pnl_dollars)),
+            ("C", signed_contracts(self.paper_position.contracts)),
+            ("%", format!("{:+.2}%", pnl_percent)),
+            ("P", signed_money(pnl_dollars)),
         ];
 
         let x0 = cols.orderbook.0;
-        let width = (cols.orderbook.1 - cols.orderbook.0).max(0.0);
+        let x1 = cols.price.1.max(cols.orderbook.1);
+        let width = (x1 - x0).max(0.0);
         if width <= 0.0 {
             return;
         }
@@ -286,11 +286,7 @@ impl CscalpDom {
             let row = idx / 2;
             let x = x0 + col as f32 * cell_w;
             let y = footer_y + row as f32 * cell_h;
-            frame.fill_rectangle(
-                Point::new(x + 1.0, y + 1.0),
-                Size::new((cell_w - 2.0).max(0.0), (cell_h - 2.0).max(0.0)),
-                panel_fill,
-            );
+            frame.fill_rectangle(Point::new(x, y), Size::new(cell_w, cell_h), panel_fill);
             frame.fill_rectangle(
                 Point::new(x.floor() + 0.5, y),
                 Size::new(1.0, cell_h),
@@ -301,27 +297,16 @@ impl CscalpDom {
                 Size::new(cell_w, 1.0),
                 divider_color,
             );
-            let value_color = footer_value_color(*label, value, text_color, bid_color, ask_color);
-            let label_x = x + 4.0;
-            let value_x = x + cell_w - 4.0;
+            let content = format!("{label} {value}");
+            let text_color = footer_value_color(*label, value, text_color, bid_color, ask_color);
             let center_y = y + cell_h * 0.5;
             frame.fill_text(Text {
-                content: (*label).to_string(),
-                position: Point::new(label_x, center_y),
-                color: text_color.scale_alpha(0.62),
-                size: fit_footer_text_size(label, cell_w * 0.30).into(),
+                content: content.clone(),
+                position: Point::new(x + cell_w * 0.5, center_y),
+                color: text_color,
+                size: fit_footer_text_size(&content, cell_w - 8.0).into(),
                 font: style::AZERET_MONO,
-                align_x: Alignment::Start.into(),
-                align_y: Alignment::Center.into(),
-                ..Default::default()
-            });
-            frame.fill_text(Text {
-                content: value.clone(),
-                position: Point::new(value_x, center_y),
-                color: value_color,
-                size: fit_footer_text_size(value, cell_w * 0.70).into(),
-                font: style::AZERET_MONO,
-                align_x: Alignment::End.into(),
+                align_x: Alignment::Center.into(),
                 align_y: Alignment::Center.into(),
                 ..Default::default()
             });
@@ -571,9 +556,9 @@ fn label_plate_color(text_color: iced::Color) -> iced::Color {
     }
 }
 
-fn trading_footer_panel_color(text_color: iced::Color, footer_bg: iced::Color) -> iced::Color {
+fn trading_footer_panel_color(text_color: iced::Color) -> iced::Color {
     let luminance = 0.2126 * text_color.r + 0.7152 * text_color.g + 0.0722 * text_color.b;
-    let panel = if luminance > 0.5 {
+    if luminance > 0.5 {
         iced::Color {
             r: 0.02,
             g: 0.02,
@@ -587,8 +572,7 @@ fn trading_footer_panel_color(text_color: iced::Color, footer_bg: iced::Color) -
             b: 0.86,
             a: 1.0,
         }
-    };
-    solid_mix(footer_bg, panel, 0.88)
+    }
 }
 
 fn footer_value_color(
@@ -598,7 +582,7 @@ fn footer_value_color(
     bid_color: iced::Color,
     ask_color: iced::Color,
 ) -> iced::Color {
-    if matches!(label, "P%" | "P$") {
+    if matches!(label, "%" | "P") {
         if value.starts_with('-') || value.starts_with("$-") {
             return ask_color;
         }

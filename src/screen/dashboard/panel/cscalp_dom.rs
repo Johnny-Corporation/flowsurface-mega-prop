@@ -548,7 +548,6 @@ impl canvas::Program<Message> for CscalpDom {
                     bounds,
                     &cols,
                     text_color,
-                    footer_bg,
                     divider_color,
                     bid_color,
                     ask_color,
