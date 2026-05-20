@@ -409,8 +409,13 @@ impl canvas::Program<Message> for CscalpDom {
                 let last_print = self.last_print_marker(&grid);
 
                 let mut spread_row: Option<(f32, f32)> = None;
+                let footer_top = bounds.height - ROW_HEIGHT * CLUSTER_FOOTER_ROWS;
 
                 for visible_row in visible_rows.iter() {
+                    if visible_row.y + ROW_HEIGHT > footer_top {
+                        continue;
+                    }
+
                     self.draw_row_guides(
                         frame,
                         visible_row.y,
