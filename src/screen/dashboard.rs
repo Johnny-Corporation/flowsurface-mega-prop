@@ -127,7 +127,7 @@ impl Dashboard {
         let ticker = Self::default_ticker(symbol);
 
         Configuration::Pane(pane::State::from_config(
-            pane::Content::Ladder(None),
+            pane::Content::CscalpDom(None),
             vec![
                 PersistStreamKind::Depth(PersistDepth {
                     ticker,
@@ -338,6 +338,9 @@ impl Dashboard {
                                             ) | (
                                                 data::layout::pane::VisualConfig::TimeAndSales(_),
                                                 pane::Content::TimeAndSales(_)
+                                            ) | (
+                                                data::layout::pane::VisualConfig::CscalpDom(_),
+                                                pane::Content::CscalpDom(_)
                                             ) | (
                                                 data::layout::pane::VisualConfig::Comparison(_),
                                                 pane::Content::Comparison(_)
@@ -1093,6 +1096,11 @@ impl Dashboard {
                                 panel.insert_depth(depth, update_t);
                             }
                         }
+                        pane::Content::CscalpDom(panel) => {
+                            if let Some(panel) = panel {
+                                panel.insert_depth(depth, update_t);
+                            }
+                        }
                         _ => {
                             log::error!("No chart found for the stream: {stream:?}");
                         }
@@ -1142,6 +1150,11 @@ impl Dashboard {
                             }
                         }
                         pane::Content::Ladder(panel) => {
+                            if let Some(p) = panel {
+                                p.insert_trades(buffer);
+                            }
+                        }
+                        pane::Content::CscalpDom(panel) => {
                             if let Some(p) = panel {
                                 p.insert_trades(buffer);
                             }

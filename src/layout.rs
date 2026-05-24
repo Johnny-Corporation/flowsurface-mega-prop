@@ -161,6 +161,11 @@ impl From<&pane::State> for data::Pane {
                 settings: pane.settings.clone(),
                 link_group: pane.link_group,
             },
+            pane::Content::CscalpDom(_) => data::Pane::CscalpDom {
+                stream_type: streams,
+                settings: pane.settings.clone(),
+                link_group: pane.link_group,
+            },
             pane::Content::Ladder(_) => data::Pane::Ladder {
                 stream_type: streams,
                 settings: pane.settings.clone(),
@@ -285,6 +290,20 @@ pub fn configuration(pane: data::Pane) -> Configuration<pane::State> {
             link_group,
         } => {
             let content = pane::Content::TimeAndSales(None);
+
+            Configuration::Pane(pane::State::from_config(
+                content,
+                stream_type,
+                settings,
+                link_group,
+            ))
+        }
+        data::Pane::CscalpDom {
+            stream_type,
+            settings,
+            link_group,
+        } => {
+            let content = pane::Content::CscalpDom(None);
 
             Configuration::Pane(pane::State::from_config(
                 content,

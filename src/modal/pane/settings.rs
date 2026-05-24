@@ -13,9 +13,10 @@ use data::chart::{
     kline::ClusterKind,
 };
 use data::layout::pane::VisualConfig;
-use data::panel::ladder;
 use data::panel::timeandsales::{StackedBar, StackedBarRatio};
+use data::panel::{cscalp_dom as cscalp_dom_data, ladder};
 use data::util::format_with_commas;
+use exchange::Timeframe;
 
 use iced::widget::{checkbox, space};
 use iced::{
@@ -786,6 +787,194 @@ pub fn ladder_cfg_view<'a>(cfg: ladder::Config, pane: pane_grid::Pane) -> Elemen
         row![
             space::horizontal(),
             sync_all_button(pane, VisualConfig::Ladder(cfg))
+        ],
+        ; spacing = 12, align_x = Alignment::Start
+    ];
+
+    cfg_view_container(320, content)
+}
+
+pub fn cscalp_dom_cfg_view<'a>(
+    cfg: cscalp_dom_data::Config,
+    pane: pane_grid::Pane,
+) -> Element<'a, Message> {
+    const CLUSTER_TIMEFRAMES: [Timeframe; 3] = [Timeframe::M1, Timeframe::M3, Timeframe::M5];
+
+    let display_options = {
+        let spread = checkbox(cfg.show_spread)
+            .label("Show Spread")
+            .on_toggle(move |value| {
+                Message::VisualConfigChanged(
+                    pane,
+                    VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                        show_spread: value,
+                        ..cfg
+                    }),
+                    false,
+                )
+            });
+
+        let ruler = checkbox(cfg.show_ruler)
+            .label("Show Price Ruler")
+            .on_toggle(move |value| {
+                Message::VisualConfigChanged(
+                    pane,
+                    VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                        show_ruler: value,
+                        ..cfg
+                    }),
+                    false,
+                )
+            });
+
+        let view_mode = checkbox(cfg.view_mode)
+            .label("View Mode (paper fills)")
+            .on_toggle(move |value| {
+                Message::VisualConfigChanged(
+                    pane,
+                    VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                        view_mode: value,
+                        ..cfg
+                    }),
+                    false,
+                )
+            });
+
+        let transparent_fills = checkbox(cfg.transparent_liquidity_fills)
+            .label("Transparent grid heatmaps")
+            .on_toggle(move |value| {
+                Message::VisualConfigChanged(
+                    pane,
+                    VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                        transparent_liquidity_fills: value,
+                        ..cfg
+                    }),
+                    false,
+                )
+            });
+
+        column![
+            text("Display Options").size(crate::style::text_size::SECTION),
+            spread,
+            ruler,
+            view_mode,
+            transparent_fills,
+        ]
+        .spacing(8)
+    };
+
+    let cluster_timeframe_picklist = pick_list(
+        CLUSTER_TIMEFRAMES,
+        Some(cfg.cluster_timeframe),
+        move |timeframe| {
+            Message::VisualConfigChanged(
+                pane,
+                VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                    cluster_timeframe: timeframe,
+                    ..cfg
+                }),
+                false,
+            )
+        },
+    );
+
+    let cluster_columns_slider = {
+        let columns = cfg.visible_cluster_columns.clamp(1, 6);
+        let slider_ui = slider(1..=6, columns, move |value| {
+            Message::VisualConfigChanged(
+                pane,
+                VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                    visible_cluster_columns: value,
+                    ..cfg
+                }),
+                false,
+            )
+        })
+        .step(1);
+
+        classic_slider_row(
+            text("Visible cluster columns"),
+            slider_ui.into(),
+            Some(text(columns.to_string()).size(crate::style::text_size::EMPHASIS)),
+        )
+    };
+
+    let clusters_column = column![
+        text("Time Clusters").size(crate::style::text_size::SECTION),
+        text("Bucket"),
+        cluster_timeframe_picklist,
+        cluster_columns_slider,
+    ]
+    .spacing(8);
+
+    let retention_slider = {
+        let retention_minutes = (cfg.trade_retention.as_secs_f32() / 60.0).max(1.0);
+
+        let slider_ui = slider(1.0..=60.0, retention_minutes, move |new_minutes| {
+            let mins = new_minutes.round().max(1.0) as u64;
+            Message::VisualConfigChanged(
+                pane,
+                VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                    trade_retention: Duration::from_secs(mins * 60),
+                    ..cfg
+                }),
+                false,
+            )
+        })
+        .step(1.0);
+
+        classic_slider_row(
+            text("Keep trades for"),
+            slider_ui.into(),
+            Some(
+                text(format!("≈ {} min", retention_minutes.round() as u64))
+                    .size(crate::style::text_size::EMPHASIS),
+            ),
+        )
+    };
+
+    let history_column = column![
+        text("History").size(crate::style::text_size::SECTION),
+        retention_slider
+    ]
+    .spacing(8);
+
+    let trading_column = {
+        let order_contracts = cfg.paper_order_contracts.clamp(1.0, 100.0);
+        let slider_ui = slider(1.0..=100.0, order_contracts, move |value| {
+            Message::VisualConfigChanged(
+                pane,
+                VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                    paper_order_contracts: value.round().max(1.0),
+                    ..cfg
+                }),
+                false,
+            )
+        })
+        .step(1.0);
+
+        column![
+            text("Trading").size(crate::style::text_size::SECTION),
+            classic_slider_row(
+                text("Order size"),
+                slider_ui.into(),
+                Some(
+                    text(format!("{:.0} contracts", order_contracts))
+                        .size(crate::style::text_size::EMPHASIS),
+                ),
+            )
+        ]
+        .spacing(8)
+    };
+
+    let content = split_column![
+        display_options,
+        clusters_column,
+        history_column,
+        trading_column,
+        row![
+            space::horizontal(),
+            sync_all_button(pane, VisualConfig::CscalpDom(cfg))
         ],
         ; spacing = 12, align_x = Alignment::Start
     ];
