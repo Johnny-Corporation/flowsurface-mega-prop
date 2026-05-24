@@ -3,6 +3,7 @@ pub mod heatmap;
 pub mod indicator;
 pub mod kline;
 mod scale;
+mod tools;
 
 use crate::connector::fetcher::{FetchRange, FetchSpec, RequestHandler};
 use crate::style;
@@ -13,6 +14,8 @@ use exchange::TickerInfo;
 use exchange::unit::{Price, PriceStep};
 use scale::linear::PriceInfoLabel;
 use scale::{AxisLabelsX, AxisLabelsY};
+pub use tools::ChartTool;
+use tools::{AnnotationId, ChartPoint, SegmentKind};
 
 use iced::theme::palette::Extended;
 use iced::widget::canvas::{self, Cache, Canvas, Event, Frame, LineDash, Path, Stroke};
@@ -38,6 +41,10 @@ pub enum Interaction {
     Ruler {
         start: Option<Point>,
     },
+    DrawingAnnotation {
+        tool: ChartTool,
+        start: ChartPoint,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -57,6 +64,15 @@ pub enum Message {
     BoundsChanged(Rectangle),
     SplitDragged(usize, f32),
     DoubleClick(AxisScaleClicked),
+    ToolSelected(ChartTool),
+    LevelPlaced(Price),
+    AnnotationFinished {
+        tool: ChartTool,
+        start: ChartPoint,
+        end: ChartPoint,
+    },
+    AnnotationDeleted(AnnotationId),
+    ClearAnnotations,
 }
 
 pub trait Chart: PlotConstants + canvas::Program<Message> {
@@ -79,6 +95,10 @@ pub trait Chart: PlotConstants + canvas::Program<Message> {
     fn autoscaled_coords(&self) -> Vector;
 
     fn supports_fit_autoscaling(&self) -> bool;
+
+    fn supports_chart_tools(&self) -> bool {
+        false
+    }
 
     fn is_empty(&self) -> bool;
 }
@@ -106,8 +126,10 @@ fn canvas_interaction<T: Chart>(
         }
     }
 
-    if let Interaction::Ruler { .. } = interaction
-        && cursor_position.is_none()
+    if matches!(
+        interaction,
+        Interaction::Ruler { .. } | Interaction::DrawingAnnotation { .. }
+    ) && cursor_position.is_none()
     {
         *interaction = Interaction::None;
     }
@@ -121,23 +143,84 @@ fn canvas_interaction<T: Chart>(
                     let cursor_in_bounds = cursor_position?;
 
                     if let mouse::Button::Left = button {
-                        match interaction {
-                            Interaction::None
-                            | Interaction::Panning { .. }
-                            | Interaction::Zoomin { .. } => {
-                                *interaction = Interaction::Panning {
-                                    translation: state.translation,
-                                    start: cursor_in_bounds,
-                                };
+                        let cursor_in_chart = cursor.position_in(bounds)?;
+                        let visible_region = state.visible_region(bounds.size());
+                        let cursor_chart = state.cursor_chart_point(
+                            cursor_in_chart,
+                            bounds.size(),
+                            visible_region,
+                        );
+
+                        if let Some(id) = state.hovered_delete_marker(cursor_chart, visible_region)
+                        {
+                            return Some(
+                                canvas::Action::publish(Message::AnnotationDeleted(id))
+                                    .and_capture(),
+                            );
+                        }
+
+                        match state.selected_tool {
+                            ChartTool::Level => {
+                                let point = state.snapped_point(
+                                    cursor_in_chart,
+                                    bounds.size(),
+                                    visible_region,
+                                );
+                                return Some(
+                                    canvas::Action::publish(Message::LevelPlaced(point.price))
+                                        .and_capture(),
+                                );
                             }
-                            Interaction::Ruler { start } if start.is_none() => {
-                                *interaction = Interaction::Ruler {
-                                    start: Some(cursor_in_bounds),
-                                };
+                            ChartTool::Rectangle | ChartTool::Line | ChartTool::Ray => {
+                                let tool = state.selected_tool;
+                                let point = state.snapped_point(
+                                    cursor_in_chart,
+                                    bounds.size(),
+                                    visible_region,
+                                );
+
+                                match *interaction {
+                                    Interaction::DrawingAnnotation {
+                                        tool: draft_tool,
+                                        start,
+                                    } if draft_tool == tool => {
+                                        *interaction = Interaction::None;
+                                        return Some(
+                                            canvas::Action::publish(Message::AnnotationFinished {
+                                                tool,
+                                                start,
+                                                end: point,
+                                            })
+                                            .and_capture(),
+                                        );
+                                    }
+                                    _ => {
+                                        *interaction =
+                                            Interaction::DrawingAnnotation { tool, start: point };
+                                    }
+                                }
                             }
-                            Interaction::Ruler { .. } => {
-                                *interaction = Interaction::None;
-                            }
+                            ChartTool::Hand => match interaction {
+                                Interaction::None
+                                | Interaction::Panning { .. }
+                                | Interaction::Zoomin { .. } => {
+                                    *interaction = Interaction::Panning {
+                                        translation: state.translation,
+                                        start: cursor_in_bounds,
+                                    };
+                                }
+                                Interaction::Ruler { start } if start.is_none() => {
+                                    *interaction = Interaction::Ruler {
+                                        start: Some(cursor_in_bounds),
+                                    };
+                                }
+                                Interaction::Ruler { .. } => {
+                                    *interaction = Interaction::None;
+                                }
+                                Interaction::DrawingAnnotation { .. } => {
+                                    *interaction = Interaction::None;
+                                }
+                            },
                         }
                     }
                     Some(canvas::Action::request_redraw().and_capture())
@@ -150,7 +233,9 @@ fn canvas_interaction<T: Chart>(
                         );
                         Some(canvas::Action::publish(msg).and_capture())
                     }
-                    Interaction::None | Interaction::Ruler { .. } => {
+                    Interaction::None
+                    | Interaction::Ruler { .. }
+                    | Interaction::DrawingAnnotation { .. } => {
                         Some(canvas::Action::publish(Message::CrosshairMoved))
                     }
                     _ => None,
@@ -487,6 +572,29 @@ pub fn update<T: Chart>(chart: &mut T, message: &Message) {
             }
         }
         Message::CrosshairMoved => return chart.invalidate_crosshair(),
+        Message::ToolSelected(tool) => {
+            let state = chart.mut_state();
+            state.selected_tool = *tool;
+        }
+        Message::LevelPlaced(price) => {
+            tools::add_level(chart.mut_state(), *price);
+        }
+        Message::AnnotationFinished { tool, start, end } => {
+            let state = chart.mut_state();
+
+            match tool {
+                ChartTool::Rectangle => tools::add_rectangle(state, *start, *end),
+                ChartTool::Line => tools::add_segment(state, *start, *end, SegmentKind::Line),
+                ChartTool::Ray => tools::add_segment(state, *start, *end, SegmentKind::Ray),
+                ChartTool::Hand | ChartTool::Level => {}
+            }
+        }
+        Message::AnnotationDeleted(id) => {
+            tools::delete_annotation(chart.mut_state(), *id);
+        }
+        Message::ClearAnnotations => {
+            tools::clear_annotations(chart.mut_state());
+        }
     }
     chart.invalidate_all();
 }
@@ -594,22 +702,37 @@ pub fn view<'a, T: Chart>(
         }
     };
 
-    column![
-        content,
-        rule::horizontal(1).style(style::split_ruler),
-        row![
-            container(
-                mouse_area(axis_labels_x)
-                    .on_double_click(Message::DoubleClick(AxisScaleClicked::X))
-            )
-            .padding(padding::right(1))
-            .width(Length::FillPortion(10))
-            .height(Length::Fixed(26.0)),
-            buttons.width(y_labels_width).height(Length::Fixed(26.0))
+    let x_axis_row = row![
+        container(
+            mouse_area(axis_labels_x).on_double_click(Message::DoubleClick(AxisScaleClicked::X))
+        )
+        .padding(padding::right(1))
+        .width(Length::FillPortion(10))
+        .height(Length::Fixed(26.0)),
+        buttons.width(y_labels_width).height(Length::Fixed(26.0))
+    ];
+
+    let chart_view: Element<_> = if chart.supports_chart_tools() {
+        column![
+            tools::toolbar(state.selected_tool, tools::has_annotations(state)),
+            rule::horizontal(1).style(style::split_ruler),
+            content,
+            rule::horizontal(1).style(style::split_ruler),
+            x_axis_row
         ]
-    ]
-    .padding(padding::left(1).right(1).bottom(1))
-    .into()
+        .into()
+    } else {
+        column![
+            content,
+            rule::horizontal(1).style(style::split_ruler),
+            x_axis_row
+        ]
+        .into()
+    };
+
+    container(chart_view)
+        .padding(padding::left(1).right(1).bottom(1))
+        .into()
 }
 
 pub trait PlotConstants {
@@ -660,6 +783,10 @@ pub struct ViewState {
     decimals: usize,
     ticker_info: TickerInfo,
     layout: ViewConfig,
+    selected_tool: ChartTool,
+    price_levels: Vec<tools::PriceLevel>,
+    rectangles: Vec<tools::ChartRectangle>,
+    segments: Vec<tools::ChartSegment>,
 }
 
 impl ViewState {
@@ -687,6 +814,10 @@ impl ViewState {
             decimals,
             ticker_info,
             layout,
+            selected_tool: ChartTool::default(),
+            price_levels: Vec::new(),
+            rectangles: Vec::new(),
+            segments: Vec::new(),
         }
     }
 
