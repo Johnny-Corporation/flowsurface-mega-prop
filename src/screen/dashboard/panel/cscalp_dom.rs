@@ -273,11 +273,10 @@ impl canvas::Program<Message> for CscalpDom {
         let cursor_position = cursor.position_in(bounds);
 
         match event {
-            Event::Keyboard(keyboard::Event::KeyPressed { key, .. })
-                if matches!(key, keyboard::Key::Named(keyboard::key::Named::Space)) =>
-            {
-                Some(canvas::Action::publish(Message::CancelAllOrders).and_capture())
-            }
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Space),
+                ..
+            }) => Some(canvas::Action::publish(Message::CancelAllOrders).and_capture()),
             Event::Mouse(mouse_event) => match mouse_event {
                 mouse::Event::ButtonPressed(mouse::Button::Left) => {
                     let cursor_position = cursor_position?;

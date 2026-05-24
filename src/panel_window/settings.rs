@@ -186,7 +186,7 @@ fn settings_general_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Pa
             state.timezone,
             SettingsAction::SelectTimezone
         ),
-        settings_stepper("Interface scale", &format!("{}%", state.scale_percent)),
+        settings_stepper("Interface scale", format!("{}%", state.scale_percent)),
         checkbox_line(
             "Size in quote currency",
             state.size_in_quote,

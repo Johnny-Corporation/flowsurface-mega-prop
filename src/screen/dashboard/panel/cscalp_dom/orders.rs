@@ -299,7 +299,7 @@ impl CscalpDom {
                 divider_color,
             );
             let content = format!("{label} {value}");
-            let text_color = footer_value_color(*label, value, text_color, bid_color, ask_color);
+            let text_color = footer_value_color(label, value, text_color, bid_color, ask_color);
             let center_y = y + cell_h * 0.5;
             frame.fill_text(Text {
                 content: content.clone(),

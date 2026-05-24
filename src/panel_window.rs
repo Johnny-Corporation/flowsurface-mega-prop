@@ -484,7 +484,7 @@ fn metric_row<'a>(items: &[(&'static str, &'static str)]) -> Element<'a, PanelMe
     let mut row = row![].spacing(10);
 
     for (label, value) in items {
-        row = row.push(metric_card(*label, *value));
+        row = row.push(metric_card(label, value));
     }
 
     row.into()

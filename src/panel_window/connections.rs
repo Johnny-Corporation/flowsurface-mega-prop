@@ -155,9 +155,9 @@ impl ConnectionPanelState {
     pub(super) fn tick(&mut self, now: Instant) {
         self.poll_mexc_ping();
 
-        let should_update = self.last_ping_update.map_or(true, |last| {
-            now.duration_since(last) >= Duration::from_millis(350)
-        });
+        let should_update = self
+            .last_ping_update
+            .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(350));
 
         if should_update {
             self.last_ping_update = Some(now);
