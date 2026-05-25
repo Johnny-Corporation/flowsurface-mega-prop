@@ -86,6 +86,7 @@ struct Flowsurface {
     theme: data::Theme,
     notifications: Notifications,
     panel_windows: HashMap<window::Id, panel_window::State>,
+    startup_animation_skipped: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +119,7 @@ enum Message {
     NetworkManager(modal::network_manager::Message),
     Layouts(modal::layout_manager::Message),
     AudioStream(modal::audio::Message),
+    SkipStartupAnimation,
 }
 
 impl Flowsurface {
@@ -159,6 +161,7 @@ impl Flowsurface {
             notifications: Notifications::new(),
             panel_windows: HashMap::new(),
             network: NetworkManager::new(saved_state.proxy_cfg),
+            startup_animation_skipped: false,
         };
 
         if let Some(err) = audio_init_err {
@@ -559,6 +562,9 @@ impl Flowsurface {
                     }
                 }
             }
+            Message::SkipStartupAnimation => {
+                self.startup_animation_skipped = true;
+            }
             Message::DataFolderRequested => {
                 if let Err(err) = data::open_data_folder() {
                     self.notifications
@@ -681,6 +687,14 @@ impl Flowsurface {
     }
 
     fn view(&self, id: window::Id) -> Element<'_, Message> {
+        if id == self.main_window.id && !self.startup_animation_skipped {
+            return widget::loading::view_with_button(
+                "Preparing trading workspace",
+                "Skip animation",
+                Message::SkipStartupAnimation,
+            );
+        }
+
         let dashboard = self.active_dashboard();
         let sidebar_pos = self.sidebar.position();
 
