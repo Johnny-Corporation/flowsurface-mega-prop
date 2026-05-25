@@ -156,9 +156,6 @@ impl ConnectionPanelState {
             ConnectionAction::RowVaultKeyChanged(index, value) => {
                 if let Some(row) = self.rows.get_mut(index) {
                     row.vault_key = value;
-                    row.test_state = ConnectionTestState::Idle;
-                    row.balance_summary = None;
-                    self.last_action = "PIN updated".to_string();
                 }
             }
             ConnectionAction::SaveDraft => self.save_draft(),
@@ -690,13 +687,23 @@ fn probe_mexc_private(spec: &ConnectionProbeSpec) -> Result<ProbeSuccess, String
 
     let balance_summary = match spec.market {
         ConnectionMarket::Spot => {
-            let account = client
-                .spot_account_information()
-                .map_err(|error| error.to_string())?;
+            let account = match client.spot_account_information() {
+                Ok(account) => account,
+                Err(error) => {
+                    let error = error.to_string();
+                    return Err(mexc_spot_error_with_market_hint(&client, error));
+                }
+            };
             format_balance_summary(available_balances_from_spot_account(&account))
         }
         ConnectionMarket::Futures => {
-            let assets = client.futures_assets().map_err(|error| error.to_string())?;
+            let assets = match client.futures_assets() {
+                Ok(assets) => assets,
+                Err(error) => {
+                    let error = error.to_string();
+                    return Err(mexc_futures_error_with_market_hint(&client, error));
+                }
+            };
             format_balance_summary(available_balances_from_futures_assets(&assets))
         }
     };
@@ -705,6 +712,43 @@ fn probe_mexc_private(spec: &ConnectionProbeSpec) -> Result<ProbeSuccess, String
         message: "Private API authenticated".to_string(),
         balance_summary: Some(balance_summary),
     })
+}
+
+fn mexc_spot_error_with_market_hint(client: &MexcBlockingPrivateClient, error: String) -> String {
+    if is_mexc_spot_key_invalid(&error)
+        && let Ok(assets) = client.futures_assets()
+    {
+        return format!(
+            "This API key authenticated on MEXC Futures, not Spot. Re-add it with Market=Futures. {}",
+            format_balance_summary(available_balances_from_futures_assets(&assets))
+        );
+    }
+
+    error
+}
+
+fn mexc_futures_error_with_market_hint(
+    client: &MexcBlockingPrivateClient,
+    error: String,
+) -> String {
+    if is_mexc_futures_key_invalid(&error)
+        && let Ok(account) = client.spot_account_information()
+    {
+        return format!(
+            "This API key authenticated on MEXC Spot, not Futures. Re-add it with Market=Spot. {}",
+            format_balance_summary(available_balances_from_spot_account(&account))
+        );
+    }
+
+    error
+}
+
+fn is_mexc_spot_key_invalid(error: &str) -> bool {
+    error.contains("\"code\":10072") || error.contains("Api key info invalid")
+}
+
+fn is_mexc_futures_key_invalid(error: &str) -> bool {
+    error.contains("\"code\":402") || error.contains("API Key expired")
 }
 
 fn format_balance_summary(balances: Vec<exchange::adapter::MexcAvailableBalance>) -> String {
@@ -744,7 +788,7 @@ impl Default for ConnectionDraft {
     fn default() -> Self {
         Self {
             exchange: ConnectionExchange::Mexc,
-            market: ConnectionMarket::Spot,
+            market: ConnectionMarket::Futures,
             mode: ConnectionMode::View,
             access_key: String::new(),
             secret_key: String::new(),
