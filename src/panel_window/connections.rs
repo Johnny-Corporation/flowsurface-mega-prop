@@ -540,6 +540,10 @@ fn load_saved_connections() -> Option<(Vec<ConnectionRow>, u64)> {
         .filter_map(|row| ConnectionRow::try_from(row).ok())
         .collect::<Vec<_>>();
 
+    if rows.is_empty() {
+        return None;
+    }
+
     Some((rows, persisted.next_connection_id.max(1)))
 }
 
