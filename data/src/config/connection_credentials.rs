@@ -81,34 +81,25 @@ pub fn save_connection_secret(
     let payload = serde_json::to_string(secret)
         .map_err(|error| format!("Failed to serialize connection secret: {error}"))?;
 
-    entry_for(reference)
-        .map_err(|error| {
-            format!("Keychain entry init failed for service={KEYCHAIN_SERVICE} account={account}: {error}")
-        })?
-        .set_password(&payload)
-        .map_err(|error| {
-            format!("Failed to store connection secret for service={KEYCHAIN_SERVICE} account={account}: {error}")
-        })
+    platform_keychain::save_password(&account, &payload).map_err(|error| {
+        format!(
+            "Failed to store connection secret for service={KEYCHAIN_SERVICE} account={account}: {error}"
+        )
+    })
 }
 
 pub fn load_connection_secret(
     reference: &ConnectionCredentialRef,
 ) -> Result<Option<ConnectionSecret>, String> {
     let account = reference.keyring_account();
-    let entry = entry_for(reference).map_err(|error| {
+    let payload = platform_keychain::load_password(&account).map_err(|error| {
         format!(
-            "Keychain entry init failed for service={KEYCHAIN_SERVICE} account={account}: {error}"
+            "Failed to read connection secret for service={KEYCHAIN_SERVICE} account={account}: {error}"
         )
     })?;
 
-    let payload = match entry.get_password() {
-        Ok(payload) => payload,
-        Err(keyring::Error::NoEntry) => return Ok(None),
-        Err(error) => {
-            return Err(format!(
-                "Failed to read connection secret for service={KEYCHAIN_SERVICE} account={account}: {error}"
-            ));
-        }
+    let Some(payload) = payload else {
+        return Ok(None);
     };
 
     serde_json::from_str(&payload)
@@ -120,22 +111,11 @@ pub fn load_connection_secret(
 
 pub fn delete_connection_secret(reference: &ConnectionCredentialRef) -> Result<(), String> {
     let account = reference.keyring_account();
-    let entry = entry_for(reference).map_err(|error| {
+    platform_keychain::delete_password(&account).map_err(|error| {
         format!(
-            "Keychain entry init failed for service={KEYCHAIN_SERVICE} account={account}: {error}"
-        )
-    })?;
-
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(format!(
             "Failed to delete connection secret for service={KEYCHAIN_SERVICE} account={account}: {error}"
-        )),
-    }
-}
-
-fn entry_for(reference: &ConnectionCredentialRef) -> Result<keyring::Entry, keyring::Error> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, &reference.keyring_account())
+        )
+    })
 }
 
 fn normalize_connection_id(raw: &str) -> String {
@@ -182,6 +162,93 @@ fn masked_value(value: &str) -> String {
         .skip(len.saturating_sub(4))
         .collect::<String>();
     format!("****{suffix}")
+}
+
+#[cfg(target_os = "macos")]
+mod platform_keychain {
+    use security_framework::{
+        base::Error,
+        passwords::{
+            AccessControlOptions, PasswordOptions, delete_generic_password, generic_password,
+            set_generic_password_options,
+        },
+    };
+
+    use super::KEYCHAIN_SERVICE;
+
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+
+    pub fn save_password(account: &str, payload: &str) -> Result<(), String> {
+        // Recreate the item so replacement credentials pick up the local-auth access control.
+        // Yes Johnny, keychain metadata also needs a fresh coat of paint sometimes.
+        delete_password(account)?;
+
+        let mut options = PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, account);
+        options.set_access_control_options(AccessControlOptions::USER_PRESENCE);
+
+        set_generic_password_options(payload.as_bytes(), options).map_err(describe_error)
+    }
+
+    pub fn load_password(account: &str) -> Result<Option<String>, String> {
+        let options = PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, account);
+        match generic_password(options) {
+            Ok(bytes) => String::from_utf8(bytes)
+                .map(Some)
+                .map_err(|error| format!("Stored keychain payload is not UTF-8: {error}")),
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+            Err(error) => Err(describe_error(error)),
+        }
+    }
+
+    pub fn delete_password(account: &str) -> Result<(), String> {
+        match delete_generic_password(KEYCHAIN_SERVICE, account) {
+            Ok(()) => Ok(()),
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
+            Err(error) => Err(describe_error(error)),
+        }
+    }
+
+    fn describe_error(error: Error) -> String {
+        format!("macOS keychain error {}: {error}", error.code())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod platform_keychain {
+    use super::KEYCHAIN_SERVICE;
+
+    pub fn save_password(account: &str, payload: &str) -> Result<(), String> {
+        entry_for(account)?.set_password(payload).map_err(|error| {
+            format!("Failed to store keyring password for account={account}: {error}")
+        })
+    }
+
+    pub fn load_password(account: &str) -> Result<Option<String>, String> {
+        match entry_for(account)?.get_password() {
+            Ok(payload) => Ok(Some(payload)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(format!(
+                "Failed to read keyring password for account={account}: {error}"
+            )),
+        }
+    }
+
+    pub fn delete_password(account: &str) -> Result<(), String> {
+        match entry_for(account)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(format!(
+                "Failed to delete keyring password for account={account}: {error}"
+            )),
+        }
+    }
+
+    fn entry_for(account: &str) -> Result<keyring::Entry, String> {
+        keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|error| {
+            format!(
+                "Keyring entry init failed for service={KEYCHAIN_SERVICE} account={account}: {error}"
+            )
+        })
+    }
 }
 
 #[cfg(test)]

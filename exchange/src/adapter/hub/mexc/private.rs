@@ -16,7 +16,7 @@ use super::FETCH_DOMAIN;
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_RECV_WINDOW_MS: u64 = 5_000;
-const DEFAULT_FUTURES_RECV_WINDOW_SECONDS: u64 = 10;
+const DEFAULT_FUTURES_RECV_WINDOW_MS: u64 = 5_000;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -62,7 +62,7 @@ pub struct MexcPrivateClient {
     client: reqwest::Client,
     credentials: MexcCredentials,
     spot_recv_window_ms: u64,
-    futures_recv_window_seconds: u64,
+    futures_recv_window_ms: u64,
 }
 
 #[derive(Clone)]
@@ -70,7 +70,7 @@ pub struct MexcBlockingPrivateClient {
     client: reqwest::blocking::Client,
     credentials: MexcCredentials,
     spot_recv_window_ms: u64,
-    futures_recv_window_seconds: u64,
+    futures_recv_window_ms: u64,
 }
 
 impl MexcPrivateClient {
@@ -89,7 +89,7 @@ impl MexcPrivateClient {
             client,
             credentials,
             spot_recv_window_ms: DEFAULT_RECV_WINDOW_MS,
-            futures_recv_window_seconds: DEFAULT_FUTURES_RECV_WINDOW_SECONDS,
+            futures_recv_window_ms: DEFAULT_FUTURES_RECV_WINDOW_MS,
         })
     }
 
@@ -231,7 +231,7 @@ impl MexcPrivateClient {
             .header("ApiKey", self.credentials.access_key())
             .header("Request-Time", timestamp.to_string())
             .header("Signature", signature)
-            .header("Recv-Window", self.futures_recv_window_seconds.to_string());
+            .header("Recv-Window", self.futures_recv_window_ms.to_string());
 
         if method == Method::POST {
             builder = builder
@@ -265,7 +265,7 @@ impl MexcBlockingPrivateClient {
             client,
             credentials,
             spot_recv_window_ms: DEFAULT_RECV_WINDOW_MS,
-            futures_recv_window_seconds: DEFAULT_FUTURES_RECV_WINDOW_SECONDS,
+            futures_recv_window_ms: DEFAULT_FUTURES_RECV_WINDOW_MS,
         })
     }
 
@@ -342,7 +342,7 @@ impl MexcBlockingPrivateClient {
             .header("ApiKey", self.credentials.access_key())
             .header("Request-Time", timestamp.to_string())
             .header("Signature", signature)
-            .header("Recv-Window", self.futures_recv_window_seconds.to_string());
+            .header("Recv-Window", self.futures_recv_window_ms.to_string());
 
         if method == Method::POST {
             builder = builder
@@ -847,6 +847,11 @@ mod tests {
             signature,
             "4001b32232a745d72225106b7ff1a2c82ae8334089faf3e4291a0248748769e8"
         );
+    }
+
+    #[test]
+    fn futures_recv_window_uses_milliseconds() {
+        assert_eq!(super::DEFAULT_FUTURES_RECV_WINDOW_MS, 5_000);
     }
 
     #[test]

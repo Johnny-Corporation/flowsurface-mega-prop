@@ -1085,6 +1085,7 @@ dependencies = [
  "palette",
  "regex",
  "rustc-hash 2.1.2",
+ "security-framework 3.7.0",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
