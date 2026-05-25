@@ -5,9 +5,9 @@ use iced::{
 use std::sync::OnceLock;
 use std::time::Instant;
 
-const FRAME_MS: u128 = 125;
-const ANIMATION_WIDTH: f32 = 256.0;
-const ANIMATION_HEIGHT: f32 = 144.0;
+const FRAME_MS: u128 = 40;
+const ANIMATION_WIDTH: f32 = 160.0;
+const ANIMATION_HEIGHT: f32 = 90.0;
 
 const FRAME_BYTES: &[&[u8]] = &[
     include_bytes!("../../assets/loading/loading_candles_01.png"),
