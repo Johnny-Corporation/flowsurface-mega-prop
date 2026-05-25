@@ -18,7 +18,7 @@ rustc-hash.workspace = true
 url.workspace = true
 
 tokio = { version = "1.52", default-features = false, features = ["rt", "macros"] }
-reqwest = { version = "0.12.28", default-features = false, features = ["json", "brotli", "rustls-tls", "socks"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "brotli", "rustls-tls", "socks", "blocking"] }
 bytes = "1.11.1"
 sonic-rs = { version = "0.5.8", default-features = false }
 fastwebsockets = { version = "0.10.0", default-features = false, features = ["upgrade"] }

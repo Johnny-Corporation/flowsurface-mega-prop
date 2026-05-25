@@ -65,6 +65,14 @@ pub struct MexcPrivateClient {
     futures_recv_window_seconds: u64,
 }
 
+#[derive(Clone)]
+pub struct MexcBlockingPrivateClient {
+    client: reqwest::blocking::Client,
+    credentials: MexcCredentials,
+    spot_recv_window_ms: u64,
+    futures_recv_window_seconds: u64,
+}
+
 impl MexcPrivateClient {
     pub fn new(credentials: MexcCredentials, proxy: Option<&Proxy>) -> Result<Self, AdapterError> {
         let builder = reqwest::Client::builder()
@@ -238,6 +246,117 @@ impl MexcPrivateClient {
         })?;
 
         parse_json_response(method, path, response).await
+    }
+}
+
+impl MexcBlockingPrivateClient {
+    pub fn new(credentials: MexcCredentials, proxy: Option<&Proxy>) -> Result<Self, AdapterError> {
+        let builder = reqwest::blocking::Client::builder()
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
+            .timeout(HTTP_REQUEST_TIMEOUT);
+        let builder = crate::adapter::proxy::try_apply_blocking_proxy(builder, proxy);
+        let client = builder.build().map_err(|error| {
+            AdapterError::InvalidRequest(format!(
+                "Failed to build blocking MEXC private HTTP client: {error}"
+            ))
+        })?;
+
+        Ok(Self {
+            client,
+            credentials,
+            spot_recv_window_ms: DEFAULT_RECV_WINDOW_MS,
+            futures_recv_window_seconds: DEFAULT_FUTURES_RECV_WINDOW_SECONDS,
+        })
+    }
+
+    pub fn spot_account_information(&self) -> Result<Value, AdapterError> {
+        self.send_spot_signed(Method::GET, "/v3/account", Vec::new())
+    }
+
+    pub fn futures_assets(&self) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        self.send_futures_signed(Method::GET, "/v1/private/account/assets", Vec::new(), None)
+    }
+
+    fn send_spot_signed(
+        &self,
+        method: Method,
+        path: &str,
+        mut params: Vec<(&'static str, String)>,
+    ) -> Result<Value, AdapterError> {
+        params.push(("recvWindow", self.spot_recv_window_ms.to_string()));
+        params.push(("timestamp", now_ms().to_string()));
+
+        let query = encode_pairs(params);
+        let signature = sign_spot_payload(&query, &self.credentials.secret_key);
+        let url = format!("{FETCH_DOMAIN}{path}?{query}&signature={signature}");
+
+        let response = self
+            .client
+            .request(method.clone(), &url)
+            .header("X-MEXC-APIKEY", self.credentials.access_key())
+            .send()
+            .map_err(|error| {
+                AdapterError::InvalidRequest(format!(
+                    "MEXC spot private request failed for {path}: {error}"
+                ))
+            })?;
+
+        parse_blocking_json_response(method, path, response)
+    }
+
+    fn send_futures_signed(
+        &self,
+        method: Method,
+        path: &str,
+        params: Vec<(String, String)>,
+        body: Option<Value>,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        let timestamp = now_ms();
+        let query = encode_sorted_params(params);
+        let body_string = match body {
+            Some(value) => serde_json::to_string(&value).map_err(|error| {
+                AdapterError::ParseError(format!("Failed to serialize MEXC futures body: {error}"))
+            })?,
+            None => String::new(),
+        };
+        let signing_params = if method == Method::POST {
+            body_string.as_str()
+        } else {
+            query.as_str()
+        };
+        let signature = sign_futures_payload(
+            self.credentials.access_key(),
+            timestamp,
+            signing_params,
+            &self.credentials.secret_key,
+        );
+        let url = if query.is_empty() {
+            format!("{FETCH_DOMAIN}{path}")
+        } else {
+            format!("{FETCH_DOMAIN}{path}?{query}")
+        };
+
+        let mut builder = self
+            .client
+            .request(method.clone(), &url)
+            .header("ApiKey", self.credentials.access_key())
+            .header("Request-Time", timestamp.to_string())
+            .header("Signature", signature)
+            .header("Recv-Window", self.futures_recv_window_seconds.to_string());
+
+        if method == Method::POST {
+            builder = builder
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body_string);
+        }
+
+        let response = builder.send().map_err(|error| {
+            AdapterError::InvalidRequest(format!(
+                "MEXC futures private request failed for {path}: {error}"
+            ))
+        })?;
+
+        parse_blocking_json_response(method, path, response)
     }
 }
 
@@ -455,6 +574,41 @@ pub struct MexcFuturesResponse<T = Value> {
     pub data: Option<T>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MexcAvailableBalance {
+    pub asset: String,
+    pub available: String,
+}
+
+pub fn available_balances_from_spot_account(account: &Value) -> Vec<MexcAvailableBalance> {
+    account
+        .get("balances")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|balance| {
+            let asset = balance.get("asset").and_then(Value::as_str)?;
+            let available = value_as_display_string(balance.get("free")?)?;
+            Some(MexcAvailableBalance {
+                asset: asset.to_string(),
+                available,
+            })
+        })
+        .collect()
+}
+
+pub fn available_balances_from_futures_assets(
+    response: &MexcFuturesResponse<Value>,
+) -> Vec<MexcAvailableBalance> {
+    let Some(data) = &response.data else {
+        return Vec::new();
+    };
+
+    let mut balances = Vec::new();
+    collect_futures_balances(data, &mut balances);
+    balances
+}
+
 pub(super) fn sign_spot_payload(payload: &str, secret_key: &str) -> String {
     hmac_sha256_hex(payload, secret_key)
 }
@@ -509,6 +663,50 @@ fn encode_sorted_params(params: Vec<(String, String)>) -> String {
     serializer.finish()
 }
 
+fn collect_futures_balances(value: &Value, balances: &mut Vec<MexcAvailableBalance>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_futures_balances(item, balances);
+            }
+        }
+        Value::Object(object) => {
+            let asset = object
+                .get("currency")
+                .or_else(|| object.get("asset"))
+                .or_else(|| object.get("coin"))
+                .and_then(Value::as_str);
+            let available = object
+                .get("availableBalance")
+                .or_else(|| object.get("available"))
+                .or_else(|| object.get("availableMargin"))
+                .and_then(value_as_display_string);
+
+            if let (Some(asset), Some(available)) = (asset, available) {
+                balances.push(MexcAvailableBalance {
+                    asset: asset.to_string(),
+                    available,
+                });
+            }
+
+            for nested in object.values() {
+                if matches!(nested, Value::Array(_) | Value::Object(_)) {
+                    collect_futures_balances(nested, balances);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn value_as_display_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
 async fn parse_json_response<T>(
     method: Method,
     path: &str,
@@ -519,6 +717,39 @@ where
 {
     let status = response.status();
     let body = response.text().await.map_err(|error| {
+        AdapterError::InvalidRequest(format!(
+            "Failed to read MEXC private response for {method} {path}: {error}"
+        ))
+    })?;
+
+    if !status.is_success() {
+        return Err(AdapterError::http_status_failed(
+            status,
+            format!(
+                "MEXC private request {method} {path} returned HTTP {status}: {}",
+                body_preview(&body, 200)
+            ),
+        ));
+    }
+
+    serde_json::from_str(&body).map_err(|error| {
+        AdapterError::ParseError(format!(
+            "Failed to parse MEXC private response for {method} {path}: {error}; preview={}",
+            body_preview(&body, 200)
+        ))
+    })
+}
+
+fn parse_blocking_json_response<T>(
+    method: Method,
+    path: &str,
+    response: reqwest::blocking::Response,
+) -> Result<T, AdapterError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let status = response.status();
+    let body = response.text().map_err(|error| {
         AdapterError::InvalidRequest(format!(
             "Failed to read MEXC private response for {method} {path}: {error}"
         ))
@@ -587,7 +818,10 @@ fn masked_value(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{sign_futures_payload, sign_spot_payload};
+    use super::{
+        MexcFuturesResponse, available_balances_from_futures_assets,
+        available_balances_from_spot_account, sign_futures_payload, sign_spot_payload,
+    };
 
     #[test]
     fn spot_signature_matches_mexc_example() {
@@ -613,5 +847,42 @@ mod tests {
             signature,
             "4001b32232a745d72225106b7ff1a2c82ae8334089faf3e4291a0248748769e8"
         );
+    }
+
+    #[test]
+    fn spot_available_balances_extracts_free_balances() {
+        let response = serde_json::json!({
+            "balances": [
+                {"asset": "USDT", "free": "123.45000000", "locked": "0"},
+                {"asset": "BTC", "free": "0.01000000", "locked": "0.002"}
+            ]
+        });
+
+        let balances = available_balances_from_spot_account(&response);
+
+        assert_eq!(balances[0].asset, "USDT");
+        assert_eq!(balances[0].available, "123.45000000");
+        assert_eq!(balances[1].asset, "BTC");
+        assert_eq!(balances[1].available, "0.01000000");
+    }
+
+    #[test]
+    fn futures_available_balances_extracts_asset_available_balance() {
+        let response = MexcFuturesResponse {
+            success: true,
+            code: 0,
+            message: None,
+            data: Some(serde_json::json!([
+                {"currency": "USDT", "availableBalance": "99.5"},
+                {"currency": "BTC", "availableBalance": 0.25}
+            ])),
+        };
+
+        let balances = available_balances_from_futures_assets(&response);
+
+        assert_eq!(balances[0].asset, "USDT");
+        assert_eq!(balances[0].available, "99.5");
+        assert_eq!(balances[1].asset, "BTC");
+        assert_eq!(balances[1].available, "0.25");
     }
 }
