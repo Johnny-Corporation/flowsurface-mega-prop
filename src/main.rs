@@ -87,6 +87,7 @@ struct Flowsurface {
     notifications: Notifications,
     panel_windows: HashMap<window::Id, panel_window::State>,
     startup_animation_skipped: bool,
+    startup_loading_progress: widget::loading::FakeProgress,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +163,7 @@ impl Flowsurface {
             panel_windows: HashMap::new(),
             network: NetworkManager::new(saved_state.proxy_cfg),
             startup_animation_skipped: false,
+            startup_loading_progress: widget::loading::FakeProgress::new(),
         };
 
         if let Some(err) = audio_init_err {
@@ -249,6 +251,8 @@ impl Flowsurface {
                 }
             }
             Message::Tick(now) => {
+                self.startup_loading_progress.tick(now);
+
                 for panel in self.panel_windows.values_mut() {
                     panel.tick(now);
                 }
@@ -688,8 +692,9 @@ impl Flowsurface {
 
     fn view(&self, id: window::Id) -> Element<'_, Message> {
         if id == self.main_window.id && !self.startup_animation_skipped {
-            return widget::loading::view_with_button(
+            return widget::loading::view_fake_progress_with_button(
                 "Preparing trading workspace",
+                &self.startup_loading_progress,
                 "Skip animation",
                 Message::SkipStartupAnimation,
             );

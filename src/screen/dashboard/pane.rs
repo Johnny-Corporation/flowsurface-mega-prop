@@ -118,6 +118,7 @@ pub struct State {
     pub status: Status,
     pub link_group: Option<LinkGroup>,
     loading_animation_skipped: bool,
+    loading_progress: loading::FakeProgress,
 }
 
 impl State {
@@ -172,6 +173,7 @@ impl State {
         kind: ContentKind,
     ) -> Vec<StreamKind> {
         self.loading_animation_skipped = false;
+        self.loading_progress.reset();
 
         if !(self.content.kind() == kind) {
             self.settings.selected_basis = None;
@@ -1145,8 +1147,9 @@ impl State {
         };
 
         if show_loading_gate {
-            body = loading::view_with_button(
+            body = loading::view_fake_progress_with_button(
                 format!("Loading {}...", self.content.kind()),
+                &self.loading_progress,
                 "Skip animation",
                 Message::PaneEvent(id, Event::SkipLoadingAnimation),
             );
@@ -1228,6 +1231,7 @@ impl State {
             }
             Event::ContentSelected(kind) => {
                 self.loading_animation_skipped = false;
+                self.loading_progress.reset();
                 self.content = Content::placeholder(kind);
 
                 if !matches!(kind, ContentKind::Starter) {
@@ -1903,6 +1907,8 @@ impl State {
     }
 
     pub fn tick(&mut self, now: Instant) -> Option<Action> {
+        self.loading_progress.tick(now);
+
         let invalidate_interval: Option<u64> = self.update_interval();
         let last_tick: Option<Instant> = self.last_tick();
 
@@ -1953,6 +1959,7 @@ impl Default for State {
             status: Status::Ready,
             link_group: None,
             loading_animation_skipped: false,
+            loading_progress: loading::FakeProgress::new(),
         }
     }
 }
