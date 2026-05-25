@@ -7,6 +7,7 @@ mod tools;
 
 use crate::connector::fetcher::{FetchRange, FetchSpec, RequestHandler};
 use crate::style;
+use crate::widget::loading;
 use crate::widget::multi_split::{DRAG_SIZE, MultiSplit};
 use crate::widget::tooltip;
 use data::chart::{Autoscale, Basis, PlotData, ViewConfig, indicator::Indicator};
@@ -21,7 +22,7 @@ use iced::theme::palette::Extended;
 use iced::widget::canvas::{self, Cache, Canvas, Event, Frame, LineDash, Path, Stroke};
 use iced::{
     Alignment, Element, Length, Point, Rectangle, Size, Theme, Vector, keyboard, mouse, padding,
-    widget::{button, center, column, container, mouse_area, row, rule, text},
+    widget::{button, column, container, mouse_area, row, rule, text},
 };
 
 const ZOOM_SENSITIVITY: f32 = 30.0;
@@ -605,7 +606,7 @@ pub fn view<'a, T: Chart>(
     timezone: data::UserTimezone,
 ) -> Element<'a, Message> {
     if chart.is_empty() {
-        return center(text("Waiting for data...").size(crate::style::text_size::TITLE)).into();
+        return loading::view("Waiting for data...");
     }
 
     let state = chart.state();

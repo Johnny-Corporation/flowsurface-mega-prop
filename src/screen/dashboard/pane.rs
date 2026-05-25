@@ -23,7 +23,7 @@ use crate::{
     style::{self, Icon, icon_text},
     widget::{
         self, button_with_tooltip, chart::heatmap::HeatmapShader, column_drag, link_group_button,
-        toast::Toast,
+        loading, toast::Toast,
     },
     window::{self, Window},
 };
@@ -624,7 +624,7 @@ impl State {
 
         let uninitialized_base = |kind: ContentKind| -> Element<'a, Message> {
             if self.has_stream() {
-                center(text("Loading…").size(crate::style::text_size::TITLE)).into()
+                loading::view(format!("Loading {}...", kind))
             } else {
                 let content = column![
                     text(kind.to_string()).size(crate::style::text_size::TITLE),
