@@ -1,13 +1,23 @@
 use crate::style;
 
 use data::config::connection_credentials::{
-    ConnectionCredentialRef, ConnectionSecret, delete_connection_secret, save_connection_secret,
+    ConnectionCredentialRef, ConnectionSecret, delete_connection_secret, load_connection_secret,
+    save_connection_secret,
+};
+use exchange::adapter::{
+    MexcBlockingPrivateClient, MexcCredentials, available_balances_from_futures_assets,
+    available_balances_from_spot_account,
 };
 use iced::{
     Alignment, Element, Length, Theme, padding,
     widget::{button, column, container, pick_list, row, text, text_input},
 };
 use serde::{Deserialize, Serialize};
+use std::{
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
+    time::Duration,
+};
 
 use super::{
     ConnectionAction, ConnectionExchange, ConnectionMarket, ConnectionMode, PanelMessage,
@@ -37,6 +47,9 @@ const DEFAULT_ROWS: [(ConnectionExchange, ConnectionMarket, ConnectionMode); 4] 
     ),
 ];
 const CONNECTIONS_FILE: &str = "connections.json";
+const MEXC_SPOT_PUBLIC_PING_URL: &str = "https://api.mexc.com/api/v3/time";
+const MEXC_FUTURES_PUBLIC_PING_URL: &str = "https://api.mexc.com/api/v1/contract/detail";
+const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[derive(Debug)]
 pub(super) struct ConnectionPanelState {
@@ -45,36 +58,61 @@ pub(super) struct ConnectionPanelState {
     logs: Vec<String>,
     last_action: String,
     next_connection_id: u64,
+    probe_tx: Sender<ConnectionProbeResult>,
+    probe_rx: Receiver<ConnectionProbeResult>,
 }
 
 impl Default for ConnectionPanelState {
     fn default() -> Self {
-        if let Some(mut state) = load_saved_connections() {
-            state
-                .logs
-                .push("[connections] Saved metadata loaded".to_string());
-            return state;
-        }
+        let (probe_tx, probe_rx) = mpsc::channel();
 
-        let rows = DEFAULT_ROWS
-            .into_iter()
-            .map(|(exchange, market, mode)| ConnectionRow::new(exchange, market, mode, false))
-            .collect();
+        let (rows, next_connection_id, logs) =
+            if let Some((rows, next_connection_id)) = load_saved_connections() {
+                (
+                    rows,
+                    next_connection_id,
+                    vec!["[connections] Saved metadata loaded".to_string()],
+                )
+            } else {
+                (
+                    DEFAULT_ROWS
+                        .into_iter()
+                        .map(|(exchange, market, mode)| {
+                            let id = format!(
+                                "default-{}-{}-{}",
+                                exchange.storage_key(),
+                                market.storage_key(),
+                                mode.storage_key()
+                            );
+                            ConnectionRow::new(id, exchange, market, mode, false)
+                        })
+                        .collect(),
+                    1,
+                    vec![
+                        "[connections] Defaults loaded: OKX/MEXC spot and futures in view mode"
+                            .to_string(),
+                    ],
+                )
+            };
 
         Self {
             rows,
             draft: None,
-            logs: vec![
-                "[connections] Defaults loaded: OKX/MEXC spot and futures in view mode".to_string(),
-            ],
+            logs,
             last_action: "Ready".to_string(),
-            next_connection_id: 1,
+            next_connection_id,
+            probe_tx,
+            probe_rx,
         }
     }
 }
 
 impl ConnectionPanelState {
-    pub(super) fn tick(&mut self, _now: std::time::Instant) {}
+    pub(super) fn tick(&mut self, _now: std::time::Instant) {
+        while let Ok(result) = self.probe_rx.try_recv() {
+            self.apply_probe_result(result);
+        }
+    }
 
     pub(super) fn update(&mut self, action: ConnectionAction) {
         match action {
@@ -117,7 +155,18 @@ impl ConnectionPanelState {
             }
             ConnectionAction::Refresh => {
                 self.last_action = "Refresh".to_string();
-                self.push_log("[connections] Connection states refreshed".to_string());
+                let indices = self
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, row)| row.enabled.then_some(index))
+                    .collect::<Vec<_>>();
+
+                for index in indices {
+                    self.start_connection_test(index);
+                }
+
+                self.push_log("[connections] Enabled connections retested".to_string());
             }
             ConnectionAction::Confirm => {
                 self.last_action = "OK".to_string();
@@ -132,12 +181,25 @@ impl ConnectionPanelState {
             return;
         };
 
-        row.enabled = !row.enabled;
         let label = row.label();
-        let state = if row.enabled { "enabled" } else { "disabled" };
+
+        if row.enabled {
+            row.enabled = false;
+            row.test_state = ConnectionTestState::Idle;
+            row.balance_summary = None;
+            self.last_action = "Toggle".to_string();
+            self.push_log(format!("[connections] {label} disabled"));
+            self.persist_rows();
+            return;
+        }
+
+        row.enabled = true;
+        row.test_state = ConnectionTestState::Loading;
+        row.balance_summary = None;
         self.last_action = "Toggle".to_string();
-        self.push_log(format!("[connections] {label} {state}"));
+        self.push_log(format!("[connections] Testing {label}"));
         self.persist_rows();
+        self.start_connection_test(index);
     }
 
     fn start_draft(&mut self) {
@@ -162,7 +224,8 @@ impl ConnectionPanelState {
         );
         self.next_connection_id += 1;
 
-        let mut row = ConnectionRow::new(draft.exchange, draft.market, draft.mode, true);
+        let mut row =
+            ConnectionRow::new(id.clone(), draft.exchange, draft.market, draft.mode, false);
 
         if draft.mode == ConnectionMode::Trade {
             let reference = match ConnectionCredentialRef::new(&id) {
@@ -237,30 +300,86 @@ impl ConnectionPanelState {
             self.push_log(format!("[connections] Failed to save metadata: {error}"));
         }
     }
+
+    fn start_connection_test(&mut self, index: usize) {
+        let Some(row) = self.rows.get(index) else {
+            return;
+        };
+
+        let Some(spec) = ConnectionProbeSpec::from_row(row) else {
+            let status = row.exchange.draft_status(row.mode).to_string();
+            let row_id = row.id.clone();
+            self.apply_probe_result(ConnectionProbeResult {
+                row_id,
+                outcome: Err(status),
+                balance_summary: None,
+            });
+            return;
+        };
+
+        let tx = self.probe_tx.clone();
+        thread::spawn(move || {
+            let _ = tx.send(run_connection_probe(spec));
+        });
+    }
+
+    fn apply_probe_result(&mut self, result: ConnectionProbeResult) {
+        let Some(row) = self.rows.iter_mut().find(|row| row.id == result.row_id) else {
+            return;
+        };
+
+        let log_message = match result.outcome {
+            Ok(message) => {
+                let label = row.label();
+                row.enabled = true;
+                row.test_state = ConnectionTestState::Success(message.clone());
+                row.balance_summary = result.balance_summary;
+                format!("[connections] {label} connected")
+            }
+            Err(error) => {
+                let label = row.label();
+                row.enabled = false;
+                row.test_state = ConnectionTestState::Error(error.clone());
+                row.balance_summary = None;
+                format!("[connections] {label} failed: {error}")
+            }
+        };
+
+        self.push_log(log_message);
+
+        self.persist_rows();
+    }
 }
 
 #[derive(Debug, Clone)]
 struct ConnectionRow {
+    id: String,
     enabled: bool,
     exchange: ConnectionExchange,
     market: ConnectionMarket,
     mode: ConnectionMode,
     credentials: CredentialState,
+    test_state: ConnectionTestState,
+    balance_summary: Option<String>,
 }
 
 impl ConnectionRow {
     fn new(
+        id: String,
         exchange: ConnectionExchange,
         market: ConnectionMarket,
         mode: ConnectionMode,
         enabled: bool,
     ) -> Self {
         Self {
+            id,
             enabled,
             exchange,
             market,
             mode,
             credentials: CredentialState::NotRequired,
+            test_state: ConnectionTestState::Idle,
+            balance_summary: None,
         }
     }
 
@@ -268,17 +387,29 @@ impl ConnectionRow {
         format!("{} {} {}", self.exchange, self.market, self.mode)
     }
 
-    fn status(&self) -> &'static str {
+    fn status(&self) -> String {
+        match &self.test_state {
+            ConnectionTestState::Loading => return "Testing connection...".to_string(),
+            ConnectionTestState::Success(message) => {
+                if let Some(balance) = &self.balance_summary {
+                    return format!("{message}; {balance}");
+                }
+                return message.clone();
+            }
+            ConnectionTestState::Error(error) => return format!("Failed: {error}"),
+            ConnectionTestState::Idle => {}
+        }
+
         match self.exchange {
             ConnectionExchange::Mexc => match self.mode {
-                ConnectionMode::View => "MEXC market data ready",
+                ConnectionMode::View => "Off".to_string(),
                 ConnectionMode::Trade => match self.credentials {
-                    CredentialState::Saved { .. } => "MEXC private API ready",
-                    _ => "MEXC API keys required",
+                    CredentialState::Saved { .. } => "Off".to_string(),
+                    _ => "MEXC API keys required".to_string(),
                 },
             },
-            ConnectionExchange::Bybit => "Will be implemented soon",
-            _ => "Not implemented yet",
+            ConnectionExchange::Bybit => "Will be implemented soon".to_string(),
+            _ => "Not implemented yet".to_string(),
         }
     }
 
@@ -290,6 +421,14 @@ impl ConnectionRow {
             } => format!("Saved ({access_key_hint})"),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+enum ConnectionTestState {
+    Idle,
+    Loading,
+    Success(String),
+    Error(String),
 }
 
 #[derive(Debug, Clone)]
@@ -309,6 +448,8 @@ struct PersistedConnections {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedConnectionRow {
+    #[serde(default)]
+    id: Option<String>,
     enabled: bool,
     exchange: ConnectionExchange,
     market: ConnectionMarket,
@@ -344,6 +485,7 @@ impl From<&ConnectionRow> for PersistedConnectionRow {
         };
 
         Self {
+            id: Some(row.id.clone()),
             enabled: row.enabled,
             exchange: row.exchange,
             market: row.market,
@@ -366,17 +508,29 @@ impl TryFrom<PersistedConnectionRow> for ConnectionRow {
             _ => CredentialState::NotRequired,
         };
 
+        let id = value.id.unwrap_or_else(|| {
+            format!(
+                "{}-{}-{}",
+                value.exchange.storage_key(),
+                value.market.storage_key(),
+                value.mode.storage_key()
+            )
+        });
+
         Ok(Self {
-            enabled: value.enabled,
+            id,
+            enabled: false,
             exchange: value.exchange,
             market: value.market,
             mode: value.mode,
             credentials,
+            test_state: ConnectionTestState::Idle,
+            balance_summary: None,
         })
     }
 }
 
-fn load_saved_connections() -> Option<ConnectionPanelState> {
+fn load_saved_connections() -> Option<(Vec<ConnectionRow>, u64)> {
     let path = data::data_path(Some(CONNECTIONS_FILE));
     let contents = std::fs::read_to_string(path).ok()?;
     let persisted: PersistedConnections = serde_json::from_str(&contents).ok()?;
@@ -386,19 +540,146 @@ fn load_saved_connections() -> Option<ConnectionPanelState> {
         .filter_map(|row| ConnectionRow::try_from(row).ok())
         .collect::<Vec<_>>();
 
-    Some(ConnectionPanelState {
-        rows,
-        draft: None,
-        logs: Vec::new(),
-        last_action: "Ready".to_string(),
-        next_connection_id: persisted.next_connection_id.max(1),
-    })
+    Some((rows, persisted.next_connection_id.max(1)))
 }
 
 fn save_connections(state: &ConnectionPanelState) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&PersistedConnections::from(state))
         .map_err(|error| error.to_string())?;
     data::write_json_to_file(&json, CONNECTIONS_FILE).map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone)]
+struct ConnectionProbeSpec {
+    row_id: String,
+    market: ConnectionMarket,
+    mode: ConnectionMode,
+    credential_ref: Option<ConnectionCredentialRef>,
+}
+
+impl ConnectionProbeSpec {
+    fn from_row(row: &ConnectionRow) -> Option<Self> {
+        if row.exchange != ConnectionExchange::Mexc {
+            return None;
+        }
+
+        let credential_ref = match &row.credentials {
+            CredentialState::NotRequired => None,
+            CredentialState::Saved { reference, .. } => Some(reference.clone()),
+        };
+
+        Some(Self {
+            row_id: row.id.clone(),
+            market: row.market,
+            mode: row.mode,
+            credential_ref,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ConnectionProbeResult {
+    row_id: String,
+    outcome: Result<String, String>,
+    balance_summary: Option<String>,
+}
+
+fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
+    let result = match spec.mode {
+        ConnectionMode::View => probe_mexc_public(spec.market),
+        ConnectionMode::Trade => probe_mexc_private(&spec),
+    };
+
+    ConnectionProbeResult {
+        row_id: spec.row_id,
+        balance_summary: result
+            .as_ref()
+            .ok()
+            .and_then(|result| result.balance_summary.clone()),
+        outcome: result.map(|result| result.message),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ProbeSuccess {
+    message: String,
+    balance_summary: Option<String>,
+}
+
+fn probe_mexc_public(market: ConnectionMarket) -> Result<ProbeSuccess, String> {
+    let url = match market {
+        ConnectionMarket::Spot => MEXC_SPOT_PUBLIC_PING_URL,
+        ConnectionMarket::Futures => MEXC_FUTURES_PUBLIC_PING_URL,
+    };
+    let client = reqwest::blocking::Client::builder()
+        .timeout(CONNECTION_TEST_TIMEOUT)
+        .user_agent("flowsurface-connection-test")
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    client
+        .get(url)
+        .send()
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?;
+
+    Ok(ProbeSuccess {
+        message: "Public API reachable".to_string(),
+        balance_summary: None,
+    })
+}
+
+fn probe_mexc_private(spec: &ConnectionProbeSpec) -> Result<ProbeSuccess, String> {
+    let reference = spec
+        .credential_ref
+        .as_ref()
+        .ok_or_else(|| "API keys are missing".to_string())?;
+    let secret = load_connection_secret(reference)?
+        .ok_or_else(|| "Saved API keys were not found in keyring".to_string())?;
+    let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
+    let client =
+        MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
+
+    let balance_summary = match spec.market {
+        ConnectionMarket::Spot => {
+            let account = client
+                .spot_account_information()
+                .map_err(|error| error.to_string())?;
+            format_balance_summary(available_balances_from_spot_account(&account))
+        }
+        ConnectionMarket::Futures => {
+            let assets = client.futures_assets().map_err(|error| error.to_string())?;
+            format_balance_summary(available_balances_from_futures_assets(&assets))
+        }
+    };
+
+    Ok(ProbeSuccess {
+        message: "Private API authenticated".to_string(),
+        balance_summary: Some(balance_summary),
+    })
+}
+
+fn format_balance_summary(balances: Vec<exchange::adapter::MexcAvailableBalance>) -> String {
+    let non_zero = balances
+        .into_iter()
+        .filter(|balance| !is_zero_amount(&balance.available))
+        .take(3)
+        .map(|balance| format!("{} {}", balance.asset, balance.available))
+        .collect::<Vec<_>>();
+
+    if non_zero.is_empty() {
+        "Available balance: none returned".to_string()
+    } else {
+        format!("Available balance: {}", non_zero.join(", "))
+    }
+}
+
+fn is_zero_amount(value: &str) -> bool {
+    value
+        .parse::<f64>()
+        .map(|amount| amount.abs() <= f64::EPSILON)
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone)]
@@ -591,7 +872,11 @@ fn connection_row<'a>(index: usize, connection: &'a ConnectionRow) -> Element<'a
             selected,
         ),
         connection_cell(
-            text(connection.status()).size(style::text_size::SMALL),
+            text(connection.status())
+                .size(style::text_size::SMALL)
+                .style(move |theme: &Theme| text::Style {
+                    color: Some(status_text_color(theme, &connection.test_state)),
+                }),
             Length::FillPortion(4),
             false,
             selected,
@@ -732,11 +1017,51 @@ fn connection_toggle<'a>(index: usize, enabled: bool) -> Element<'a, PanelMessag
         .width(Length::Fixed(48.0))
         .height(Length::Fixed(26.0))
         .padding(padding::left(5).right(5).top(3).bottom(3))
-        .style(move |theme, status| style::button::bordered_toggle(theme, status, enabled))
+        .style(move |theme, status| connection_toggle_style(theme, status, enabled))
         .on_press(PanelMessage::ConnectionAction(ConnectionAction::Toggle(
             index,
         )))
         .into()
+}
+
+fn connection_toggle_style(
+    theme: &Theme,
+    status: iced::widget::button::Status,
+    enabled: bool,
+) -> iced::widget::button::Style {
+    let palette = theme.extended_palette();
+    let base = if enabled {
+        palette.success.strong.color
+    } else {
+        palette.danger.strong.color
+    };
+    let background = match status {
+        iced::widget::button::Status::Hovered => base.scale_alpha(0.26),
+        iced::widget::button::Status::Pressed => base.scale_alpha(0.34),
+        iced::widget::button::Status::Disabled => base.scale_alpha(0.10),
+        iced::widget::button::Status::Active => base.scale_alpha(0.18),
+    };
+
+    iced::widget::button::Style {
+        text_color: base,
+        border: iced::Border {
+            radius: 3.0.into(),
+            width: 1.0,
+            color: base.scale_alpha(0.80),
+        },
+        background: Some(background.into()),
+        ..Default::default()
+    }
+}
+
+fn status_text_color(theme: &Theme, state: &ConnectionTestState) -> iced::Color {
+    let palette = theme.extended_palette();
+    match state {
+        ConnectionTestState::Loading => palette.warning.strong.color,
+        ConnectionTestState::Success(_) => palette.success.strong.color,
+        ConnectionTestState::Error(_) => palette.danger.strong.color,
+        ConnectionTestState::Idle => palette.background.base.text,
+    }
 }
 
 fn connection_log<'a>(state: &ConnectionPanelState) -> Element<'a, PanelMessage> {
