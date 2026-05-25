@@ -148,6 +148,19 @@ impl ConnectionPanelState {
                     draft.secret_key = value;
                 }
             }
+            ConnectionAction::DraftVaultKeyChanged(value) => {
+                if let Some(draft) = self.draft.as_mut() {
+                    draft.vault_key = value;
+                }
+            }
+            ConnectionAction::RowVaultKeyChanged(index, value) => {
+                if let Some(row) = self.rows.get_mut(index) {
+                    row.vault_key = value;
+                    row.test_state = ConnectionTestState::Idle;
+                    row.balance_summary = None;
+                    self.last_action = "PIN updated".to_string();
+                }
+            }
             ConnectionAction::SaveDraft => self.save_draft(),
             ConnectionAction::CancelDraft => {
                 self.draft = None;
@@ -211,7 +224,7 @@ impl ConnectionPanelState {
     }
 
     fn save_draft(&mut self) {
-        let Some(draft) = self.draft.take() else {
+        let Some(mut draft) = self.draft.take() else {
             return;
         };
 
@@ -231,6 +244,7 @@ impl ConnectionPanelState {
             let reference = match ConnectionCredentialRef::new(&id) {
                 Ok(reference) => reference,
                 Err(error) => {
+                    draft.error = Some(error.clone());
                     self.draft = Some(draft);
                     self.last_action = "Credential id error".to_string();
                     self.push_log(format!("[credentials] {error}"));
@@ -238,23 +252,26 @@ impl ConnectionPanelState {
                 }
             };
 
-            let secret = match ConnectionSecret::new(draft.access_key, draft.secret_key) {
+            let secret = match ConnectionSecret::new(&draft.access_key, &draft.secret_key) {
                 Ok(secret) => secret,
                 Err(error) => {
-                    self.draft = Some(ConnectionDraft::from_row(row, error.clone()));
+                    draft.error = Some(error.clone());
+                    self.draft = Some(draft);
                     self.last_action = "Credential validation failed".to_string();
                     self.push_log(format!("[credentials] {error}"));
                     return;
                 }
             };
 
-            if let Err(error) = save_connection_secret(&reference, &secret) {
-                self.draft = Some(ConnectionDraft::from_row(row, error.clone()));
+            if let Err(error) = save_connection_secret(&reference, &secret, &draft.vault_key) {
+                draft.error = Some(error.clone());
+                self.draft = Some(draft);
                 self.last_action = "Credential save failed".to_string();
                 self.push_log(format!("[credentials] {error}"));
                 return;
             }
 
+            row.vault_key = draft.vault_key.clone();
             row.credentials = CredentialState::Saved {
                 reference,
                 access_key_hint: secret.access_key_hint(),
@@ -361,6 +378,7 @@ struct ConnectionRow {
     credentials: CredentialState,
     test_state: ConnectionTestState,
     balance_summary: Option<String>,
+    vault_key: String,
 }
 
 impl ConnectionRow {
@@ -380,6 +398,7 @@ impl ConnectionRow {
             credentials: CredentialState::NotRequired,
             test_state: ConnectionTestState::Idle,
             balance_summary: None,
+            vault_key: String::new(),
         }
     }
 
@@ -526,6 +545,7 @@ impl TryFrom<PersistedConnectionRow> for ConnectionRow {
             credentials,
             test_state: ConnectionTestState::Idle,
             balance_summary: None,
+            vault_key: String::new(),
         })
     }
 }
@@ -560,6 +580,7 @@ struct ConnectionProbeSpec {
     mode: ConnectionMode,
     credential_ref: Option<ConnectionCredentialRef>,
     access_key_hint: Option<String>,
+    vault_key: String,
 }
 
 impl ConnectionProbeSpec {
@@ -582,6 +603,7 @@ impl ConnectionProbeSpec {
             mode: row.mode,
             credential_ref,
             access_key_hint,
+            vault_key: row.vault_key.clone(),
         })
     }
 }
@@ -644,14 +666,20 @@ fn probe_mexc_private(spec: &ConnectionProbeSpec) -> Result<ProbeSuccess, String
         .credential_ref
         .as_ref()
         .ok_or_else(|| "API keys are missing".to_string())?;
-    let secret = load_connection_secret(reference)?
-        .ok_or_else(|| "Saved API keys were not found in keyring".to_string())?;
+    if spec.vault_key.trim().is_empty() {
+        return Err("Enter local PIN/passphrase before connecting".to_string());
+    }
+
+    let secret = load_connection_secret(reference, &spec.vault_key)?
+        .ok_or_else(|| {
+            "Saved API keys were not found in the local credential vault. Delete and re-add this connection with a local PIN/passphrase.".to_string()
+        })?;
 
     if let Some(expected_hint) = &spec.access_key_hint {
         let actual_hint = secret.access_key_hint();
         if actual_hint != *expected_hint {
             return Err(format!(
-                "Saved API key mismatch: metadata shows {expected_hint}, keychain has {actual_hint}. Delete and re-add this connection."
+                "Saved API key mismatch: metadata shows {expected_hint}, local vault has {actual_hint}. Delete and re-add this connection."
             ));
         }
     }
@@ -708,6 +736,7 @@ struct ConnectionDraft {
     mode: ConnectionMode,
     access_key: String,
     secret_key: String,
+    vault_key: String,
     error: Option<String>,
 }
 
@@ -719,27 +748,18 @@ impl Default for ConnectionDraft {
             mode: ConnectionMode::View,
             access_key: String::new(),
             secret_key: String::new(),
+            vault_key: String::new(),
             error: None,
         }
     }
 }
 
 impl ConnectionDraft {
-    fn from_row(row: ConnectionRow, error: String) -> Self {
-        Self {
-            exchange: row.exchange,
-            market: row.market,
-            mode: row.mode,
-            access_key: String::new(),
-            secret_key: String::new(),
-            error: Some(error),
-        }
-    }
-
     fn clear_credentials_if_view_mode(&mut self) {
         if self.mode == ConnectionMode::View {
             self.access_key.clear();
             self.secret_key.clear();
+            self.vault_key.clear();
         }
         self.error = None;
     }
@@ -885,7 +905,7 @@ fn connection_row<'a>(index: usize, connection: &'a ConnectionRow) -> Element<'a
             selected,
         ),
         connection_cell(
-            value_box(connection.credential_label(), Length::Fill),
+            credential_control(index, connection),
             Length::FillPortion(3),
             false,
             selected,
@@ -927,6 +947,12 @@ fn draft_row<'a>(draft: &'a ConnectionDraft) -> Element<'a, PanelMessage> {
                 .secure(true)
                 .on_input(|value| {
                     PanelMessage::ConnectionAction(ConnectionAction::DraftSecretKeyChanged(value))
+                })
+                .style(|theme, status| style::validated_text_input(theme, status, true)),
+            text_input("Local PIN/passphrase", &draft.vault_key)
+                .secure(true)
+                .on_input(|value| {
+                    PanelMessage::ConnectionAction(ConnectionAction::DraftVaultKeyChanged(value))
                 })
                 .style(|theme, status| style::validated_text_input(theme, status, true)),
         ]
@@ -998,6 +1024,32 @@ fn draft_row<'a>(draft: &'a ConnectionDraft) -> Element<'a, PanelMessage> {
     .into()
 }
 
+fn credential_control<'a>(
+    index: usize,
+    connection: &'a ConnectionRow,
+) -> Element<'a, PanelMessage> {
+    if connection.mode != ConnectionMode::Trade {
+        return value_box(connection.credential_label(), Length::Fill);
+    }
+
+    match &connection.credentials {
+        CredentialState::Saved { .. } => column![
+            value_box(connection.credential_label(), Length::Fill),
+            text_input("Local PIN/passphrase", &connection.vault_key)
+                .secure(true)
+                .on_input(move |value| {
+                    PanelMessage::ConnectionAction(ConnectionAction::RowVaultKeyChanged(
+                        index, value,
+                    ))
+                })
+                .style(|theme, status| style::validated_text_input(theme, status, true)),
+        ]
+        .spacing(4)
+        .into(),
+        CredentialState::NotRequired => value_box(connection.credential_label(), Length::Fill),
+    }
+}
+
 fn connection_cell<'a>(
     content: impl Into<Element<'a, PanelMessage>>,
     width: Length,
@@ -1006,7 +1058,7 @@ fn connection_cell<'a>(
 ) -> Element<'a, PanelMessage> {
     container(content.into())
         .width(width)
-        .height(Length::Fixed(if is_header { 36.0 } else { 64.0 }))
+        .height(Length::Fixed(if is_header { 36.0 } else { 92.0 }))
         .padding(padding::left(8).right(8).top(6).bottom(6))
         .align_y(Alignment::Center)
         .style(move |theme| {

@@ -1084,6 +1084,7 @@ dependencies = [
  "open",
  "palette",
  "regex",
+ "ring 0.17.14",
  "rustc-hash 2.1.2",
  "serde",
  "serde_json",

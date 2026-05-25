@@ -269,6 +269,8 @@ pub(crate) enum ConnectionAction {
     DraftModeSelected(ConnectionMode),
     DraftAccessKeyChanged(String),
     DraftSecretKeyChanged(String),
+    DraftVaultKeyChanged(String),
+    RowVaultKeyChanged(usize, String),
     SaveDraft,
     CancelDraft,
     Refresh,
