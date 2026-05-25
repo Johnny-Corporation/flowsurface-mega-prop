@@ -9,8 +9,8 @@ use std::time::Instant;
 
 const FRAME_MS: u128 = 40;
 const FRAME_COUNT: usize = 64;
-const FRAME_WIDTH: u32 = 160;
-const FRAME_HEIGHT: u32 = 90;
+const FRAME_WIDTH: u32 = 240;
+const FRAME_HEIGHT: u32 = 135;
 
 static ATLAS: OnceLock<image::Handle> = OnceLock::new();
 static STARTED_AT: OnceLock<Instant> = OnceLock::new();

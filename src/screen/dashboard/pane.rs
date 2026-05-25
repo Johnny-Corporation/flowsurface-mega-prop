@@ -105,6 +105,7 @@ pub enum Event {
     ComparisonChartInteraction(super::chart::comparison::Message),
     HeatmapShaderInteraction(crate::widget::chart::heatmap::Message),
     MiniTickersListInteraction(modal::pane::mini_tickers_list::Message),
+    SkipLoadingAnimation,
 }
 
 pub struct State {
@@ -116,6 +117,7 @@ pub struct State {
     pub streams: ResolvedStream,
     pub status: Status,
     pub link_group: Option<LinkGroup>,
+    loading_animation_skipped: bool,
 }
 
 impl State {
@@ -169,6 +171,8 @@ impl State {
         tickers: Vec<TickerInfo>,
         kind: ContentKind,
     ) -> Vec<StreamKind> {
+        self.loading_animation_skipped = false;
+
         if !(self.content.kind() == kind) {
             self.settings.selected_basis = None;
             self.settings.tick_multiply = None;
@@ -637,7 +641,10 @@ impl State {
             }
         };
 
-        let body = match &self.content {
+        let show_loading_gate =
+            !matches!(self.content, Content::Starter) && !self.loading_animation_skipped;
+
+        let mut body = match &self.content {
             Content::Starter => {
                 let content_picklist =
                     pick_list(ContentKind::ALL, Some(ContentKind::Starter), move |kind| {
@@ -1137,6 +1144,14 @@ impl State {
             }
         };
 
+        if show_loading_gate {
+            body = loading::view_with_button(
+                format!("Loading {}...", self.content.kind()),
+                "Skip animation",
+                Message::PaneEvent(id, Event::SkipLoadingAnimation),
+            );
+        }
+
         match &self.status {
             Status::Loading(InfoKind::FetchingKlines) => {
                 top_left_buttons = top_left_buttons.push(text("Fetching Klines..."));
@@ -1212,6 +1227,7 @@ impl State {
                 self.modal = None;
             }
             Event::ContentSelected(kind) => {
+                self.loading_animation_skipped = false;
                 self.content = Content::placeholder(kind);
 
                 if !matches!(kind, ContentKind::Starter) {
@@ -1605,6 +1621,9 @@ impl State {
                     }
                 }
             }
+            Event::SkipLoadingAnimation => {
+                self.loading_animation_skipped = true;
+            }
         }
         None
     }
@@ -1933,6 +1952,7 @@ impl Default for State {
             notifications: vec![],
             status: Status::Ready,
             link_group: None,
+            loading_animation_skipped: false,
         }
     }
 }
