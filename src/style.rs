@@ -18,7 +18,7 @@ pub const AZERET_MONO: Font = Font {
     style: iced::font::Style::Normal,
 };
 
-pub const TITLE_PADDING_TOP: f32 = if cfg!(target_os = "macos") { 20.0 } else { 0.0 };
+pub const TITLE_PADDING_TOP: f32 = 0.0;
 
 pub mod text_size {
     pub const SMALL: f32 = 11.0;

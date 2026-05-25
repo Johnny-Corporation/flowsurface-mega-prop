@@ -712,11 +712,7 @@ impl Flowsurface {
             ]
             .height(24)
             .align_y(Alignment::Center)
-            .padding(if cfg!(target_os = "macos") {
-                padding::top(4).left(76).right(8)
-            } else {
-                padding::top(4).left(8).right(8)
-            });
+            .padding(padding::top(4).left(8).right(8));
 
             let base = column![
                 header_title,
