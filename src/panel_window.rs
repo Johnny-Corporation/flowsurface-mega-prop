@@ -253,26 +253,139 @@ impl State {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) enum PanelMessage {
     ConnectionAction(ConnectionAction),
     SettingsAction(SettingsAction),
     TogglePnlTrades,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ConnectionAction {
     Toggle(usize),
-    SetColor(usize, u32),
     AddConnection,
-    MyProxy,
+    DraftExchangeSelected(ConnectionExchange),
+    DraftMarketSelected(ConnectionMarket),
+    DraftModeSelected(ConnectionMode),
+    DraftAccessKeyChanged(String),
+    DraftSecretKeyChanged(String),
+    SaveDraft,
+    CancelDraft,
     Refresh,
     Confirm,
-    BecomeTrader,
-    OpenAccount,
-    RowSettings(usize),
-    RowHelp(usize),
     RowDelete(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub(crate) enum ConnectionExchange {
+    Mexc,
+    Bybit,
+    Okx,
+    Tiger,
+    Binance,
+    Ibkr,
+    TBank,
+}
+
+impl ConnectionExchange {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Mexc,
+        Self::Bybit,
+        Self::Okx,
+        Self::Tiger,
+        Self::Binance,
+        Self::Ibkr,
+        Self::TBank,
+    ];
+
+    fn storage_key(self) -> &'static str {
+        match self {
+            Self::Mexc => "mexc",
+            Self::Bybit => "bybit",
+            Self::Okx => "okx",
+            Self::Tiger => "tiger",
+            Self::Binance => "binance",
+            Self::Ibkr => "ibkr",
+            Self::TBank => "t-bank",
+        }
+    }
+
+    fn draft_status(self, mode: ConnectionMode) -> &'static str {
+        match self {
+            Self::Mexc => match mode {
+                ConnectionMode::View => "MEXC view connection",
+                ConnectionMode::Trade => "MEXC trade connection requires API keys",
+            },
+            Self::Bybit => "Will be implemented soon",
+            _ => "Not implemented yet",
+        }
+    }
+}
+
+impl std::fmt::Display for ConnectionExchange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Mexc => "MEXC",
+            Self::Bybit => "Bybit",
+            Self::Okx => "OKX",
+            Self::Tiger => "Tiger",
+            Self::Binance => "Binance",
+            Self::Ibkr => "IBKR",
+            Self::TBank => "T-bank",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub(crate) enum ConnectionMarket {
+    Spot,
+    Futures,
+}
+
+impl ConnectionMarket {
+    pub(crate) const ALL: [Self; 2] = [Self::Spot, Self::Futures];
+
+    fn storage_key(self) -> &'static str {
+        match self {
+            Self::Spot => "spot",
+            Self::Futures => "futures",
+        }
+    }
+}
+
+impl std::fmt::Display for ConnectionMarket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Spot => "Spot",
+            Self::Futures => "Futures",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub(crate) enum ConnectionMode {
+    View,
+    Trade,
+}
+
+impl ConnectionMode {
+    pub(crate) const ALL: [Self; 2] = [Self::View, Self::Trade];
+
+    fn storage_key(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::Trade => "trade",
+        }
+    }
+}
+
+impl std::fmt::Display for ConnectionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::View => "View",
+            Self::Trade => "Trade",
+        })
+    }
 }
 
 pub(crate) fn menu_bar<'a>() -> Element<'a, Message> {
