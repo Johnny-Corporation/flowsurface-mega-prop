@@ -169,8 +169,8 @@ mod platform_keychain {
     use security_framework::{
         base::Error,
         passwords::{
-            AccessControlOptions, PasswordOptions, delete_generic_password, generic_password,
-            set_generic_password_options,
+            AccessControlOptions, PasswordOptions, delete_generic_password_options,
+            generic_password, set_generic_password_options,
         },
     };
 
@@ -179,18 +179,39 @@ mod platform_keychain {
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
     pub fn save_password(account: &str, payload: &str) -> Result<(), String> {
-        // Recreate the item so replacement credentials pick up the local-auth access control.
+        // Recreate both possible locations so replacement credentials cannot shadow stale entries.
         // Yes Johnny, keychain metadata also needs a fresh coat of paint sometimes.
         delete_password(account)?;
 
-        let mut options = PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, account);
+        let mut options = protected_options(account);
         options.set_access_control_options(AccessControlOptions::USER_PRESENCE);
 
         set_generic_password_options(payload.as_bytes(), options).map_err(describe_error)
     }
 
     pub fn load_password(account: &str) -> Result<Option<String>, String> {
-        let options = PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, account);
+        match load_from_options(protected_options(account))? {
+            Some(payload) => Ok(Some(payload)),
+            None => load_from_options(legacy_options(account)),
+        }
+    }
+
+    pub fn delete_password(account: &str) -> Result<(), String> {
+        delete_from_options(protected_options(account))?;
+        delete_from_options(legacy_options(account))
+    }
+
+    fn protected_options(account: &str) -> PasswordOptions {
+        let mut options = PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, account);
+        options.use_protected_keychain();
+        options
+    }
+
+    fn legacy_options(account: &str) -> PasswordOptions {
+        PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, account)
+    }
+
+    fn load_from_options(options: PasswordOptions) -> Result<Option<String>, String> {
         match generic_password(options) {
             Ok(bytes) => String::from_utf8(bytes)
                 .map(Some)
@@ -200,8 +221,8 @@ mod platform_keychain {
         }
     }
 
-    pub fn delete_password(account: &str) -> Result<(), String> {
-        match delete_generic_password(KEYCHAIN_SERVICE, account) {
+    fn delete_from_options(options: PasswordOptions) -> Result<(), String> {
+        match delete_generic_password_options(options) {
             Ok(()) => Ok(()),
             Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
             Err(error) => Err(describe_error(error)),

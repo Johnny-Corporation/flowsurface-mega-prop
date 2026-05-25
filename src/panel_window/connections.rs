@@ -555,6 +555,7 @@ struct ConnectionProbeSpec {
     market: ConnectionMarket,
     mode: ConnectionMode,
     credential_ref: Option<ConnectionCredentialRef>,
+    access_key_hint: Option<String>,
 }
 
 impl ConnectionProbeSpec {
@@ -563,9 +564,12 @@ impl ConnectionProbeSpec {
             return None;
         }
 
-        let credential_ref = match &row.credentials {
-            CredentialState::NotRequired => None,
-            CredentialState::Saved { reference, .. } => Some(reference.clone()),
+        let (credential_ref, access_key_hint) = match &row.credentials {
+            CredentialState::NotRequired => (None, None),
+            CredentialState::Saved {
+                reference,
+                access_key_hint,
+            } => (Some(reference.clone()), Some(access_key_hint.clone())),
         };
 
         Some(Self {
@@ -573,6 +577,7 @@ impl ConnectionProbeSpec {
             market: row.market,
             mode: row.mode,
             credential_ref,
+            access_key_hint,
         })
     }
 }
@@ -637,6 +642,16 @@ fn probe_mexc_private(spec: &ConnectionProbeSpec) -> Result<ProbeSuccess, String
         .ok_or_else(|| "API keys are missing".to_string())?;
     let secret = load_connection_secret(reference)?
         .ok_or_else(|| "Saved API keys were not found in keyring".to_string())?;
+
+    if let Some(expected_hint) = &spec.access_key_hint {
+        let actual_hint = secret.access_key_hint();
+        if actual_hint != *expected_hint {
+            return Err(format!(
+                "Saved API key mismatch: metadata shows {expected_hint}, keychain has {actual_hint}. Delete and re-add this connection."
+            ));
+        }
+    }
+
     let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
     let client =
         MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
