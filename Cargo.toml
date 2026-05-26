@@ -69,9 +69,5 @@ iced_wgpu = "0.14.0"
 exchange.workspace = true
 data.workspace = true
 
-[target.'cfg(target_os = "macos")'.dependencies]
-block = "0.1.6"
-objc = "0.2.7"
-
 [features]
 debug = ["iced/hot"]

@@ -14,7 +14,7 @@ mod settings;
 mod trades;
 
 pub(crate) use connections::ConnectionPanelState;
-use connections::{connections_panel, unlock_panel};
+use connections::connections_panel;
 use settings::{SettingsAction, SettingsPanelState, settings_panel};
 use trades::trades_table;
 
@@ -24,7 +24,6 @@ const PNL_POINTS: [f32; 12] = [
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Kind {
-    Unlock,
     App,
     File,
     Edit,
@@ -57,7 +56,6 @@ impl Kind {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Unlock => "Unlock",
             Self::App => "Flowsurface",
             Self::File => "File",
             Self::Edit => "Edit",
@@ -75,7 +73,6 @@ impl Kind {
 
     pub(crate) fn title(self) -> &'static str {
         match self {
-            Self::Unlock => "Unlock",
             Self::App => "App",
             Self::File => "File",
             Self::Edit => "Edit",
@@ -93,7 +90,6 @@ impl Kind {
 
     pub(crate) fn default_size(self) -> Size {
         match self {
-            Self::Unlock => Size::new(440.0, 220.0),
             Self::Connections => Size::new(1_140.0, 720.0),
             Self::Pnl => Size::new(820.0, 560.0),
             Self::Settings => Size::new(860.0, 620.0),
@@ -110,10 +106,7 @@ impl Kind {
     }
 
     pub(crate) fn min_size(self) -> Size {
-        match self {
-            Self::Unlock => Size::new(360.0, 180.0),
-            _ => Size::new(420.0, 320.0),
-        }
+        Size::new(420.0, 320.0)
     }
 }
 
@@ -156,7 +149,6 @@ impl State {
         connection_state: &'a ConnectionPanelState,
     ) -> Element<'a, PanelMessage> {
         let body = match self.kind {
-            Kind::Unlock => unlock_panel(connection_state),
             Kind::App => app_panel(),
             Kind::File => default_panel(
                 "File actions",
@@ -275,8 +267,7 @@ pub(crate) enum ConnectionAction {
     DraftModeSelected(ConnectionMode),
     DraftAccessKeyChanged(String),
     DraftSecretKeyChanged(String),
-    SessionVaultKeyChanged(String),
-    TouchIdUnlock,
+    AutoconnectChanged(bool),
     SaveDraft,
     CancelDraft,
     Refresh,
@@ -568,8 +559,8 @@ fn account_panel<'a>(connection_state: &'a ConnectionPanelState) -> Element<'a, 
                 ),
             ),
             (
-                "Vault".to_string(),
-                connection_state.session_status().to_string()
+                "Credentials".to_string(),
+                connection_state.credential_storage_status().to_string()
             ),
         ]),
         panel_card("Balances", balances,),

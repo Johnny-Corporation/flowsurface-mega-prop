@@ -59,10 +59,8 @@ pub(crate) struct ConnectionPanelState {
     draft: Option<ConnectionDraft>,
     logs: Vec<String>,
     last_action: String,
-    session_vault_key: String,
-    session_unlocked_by_touch_id: bool,
-    touch_id_available: bool,
-    touch_id_status: String,
+    autoconnect_enabled: bool,
+    last_connection_id: Option<String>,
     next_connection_id: u64,
     probe_tx: Sender<ConnectionProbeResult>,
     probe_rx: Receiver<ConnectionProbeResult>,
@@ -107,11 +105,13 @@ impl Default for ConnectionPanelState {
     fn default() -> Self {
         let (probe_tx, probe_rx) = mpsc::channel();
 
-        let (rows, next_connection_id, logs) =
-            if let Some((rows, next_connection_id)) = load_saved_connections() {
+        let (rows, next_connection_id, autoconnect_enabled, last_connection_id, logs) =
+            if let Some(saved) = load_saved_connections() {
                 (
-                    rows,
-                    next_connection_id,
+                    saved.rows,
+                    saved.next_connection_id,
+                    saved.autoconnect_enabled,
+                    saved.last_connection_id,
                     vec!["[connections] Saved metadata loaded".to_string()],
                 )
             } else {
@@ -129,6 +129,8 @@ impl Default for ConnectionPanelState {
                         })
                         .collect(),
                     1,
+                    true,
+                    None,
                     vec![
                         "[connections] Defaults loaded: OKX/MEXC spot and futures in view mode"
                             .to_string(),
@@ -141,10 +143,8 @@ impl Default for ConnectionPanelState {
             draft: None,
             logs,
             last_action: "Ready".to_string(),
-            session_vault_key: String::new(),
-            session_unlocked_by_touch_id: false,
-            touch_id_available: crate::touch_id::is_available(),
-            touch_id_status: "Touch ID not checked".to_string(),
+            autoconnect_enabled,
+            last_connection_id,
             next_connection_id,
             probe_tx,
             probe_rx,
@@ -193,11 +193,15 @@ impl ConnectionPanelState {
                     draft.secret_key = value;
                 }
             }
-            ConnectionAction::SessionVaultKeyChanged(value) => {
-                self.session_vault_key = value;
-                self.session_unlocked_by_touch_id = false;
+            ConnectionAction::AutoconnectChanged(enabled) => {
+                self.autoconnect_enabled = enabled;
+                self.last_action = "Auto-connect".to_string();
+                self.push_log(format!(
+                    "[connections] Auto-connect {}",
+                    if enabled { "enabled" } else { "disabled" }
+                ));
+                self.persist_rows();
             }
-            ConnectionAction::TouchIdUnlock => self.unlock_with_touch_id(),
             ConnectionAction::SaveDraft => self.save_draft(),
             ConnectionAction::CancelDraft => {
                 self.draft = None;
@@ -257,44 +261,12 @@ impl ConnectionPanelState {
         exchanges
     }
 
-    pub(crate) fn has_saved_trade_credentials(&self) -> bool {
-        self.saved_trade_credentials_count() > 0
+    pub(crate) fn credential_storage_status(&self) -> &'static str {
+        "Device-local encrypted storage"
     }
 
-    pub(crate) fn saved_trade_credentials_count(&self) -> usize {
-        self.rows
-            .iter()
-            .filter(|row| {
-                row.mode == ConnectionMode::Trade
-                    && matches!(row.credentials, CredentialState::Saved { .. })
-            })
-            .count()
-    }
-
-    pub(crate) fn is_session_unlocked(&self) -> bool {
-        !self.session_vault_key.trim().is_empty()
-    }
-
-    pub(crate) fn session_status(&self) -> &'static str {
-        if self.is_session_unlocked() {
-            if self.session_unlocked_by_touch_id {
-                "Session unlocked with Touch ID"
-            } else {
-                "Session PIN entered"
-            }
-        } else if self.has_saved_trade_credentials() {
-            "Unlock required for trading connections"
-        } else {
-            "No saved trading credentials"
-        }
-    }
-
-    pub(crate) fn touch_id_available(&self) -> bool {
-        self.touch_id_available
-    }
-
-    pub(crate) fn touch_id_status(&self) -> &str {
-        &self.touch_id_status
+    pub(crate) fn autoconnect_enabled(&self) -> bool {
+        self.autoconnect_enabled
     }
 
     pub(crate) fn account_summary(&self) -> ConnectionAccountSummary {
@@ -358,67 +330,51 @@ impl ConnectionPanelState {
     }
 
     pub(crate) fn autoconnect(&mut self) {
-        let indices = self
-            .rows
-            .iter()
-            .enumerate()
-            .filter_map(|(index, row)| {
-                row.is_autoconnect_eligible(self.is_session_unlocked())
-                    .then_some(index)
-            })
-            .collect::<Vec<_>>();
-
-        if indices.is_empty() {
-            self.last_action = "Autoconnect skipped".to_string();
+        if !self.autoconnect_enabled {
+            self.last_action = "Autoconnect disabled".to_string();
             return;
         }
 
+        let Some(index) = self.last_autoconnect_index() else {
+            self.last_action = "Autoconnect skipped".to_string();
+            return;
+        };
+
         self.last_action = "Autoconnect".to_string();
-        for index in indices.iter().copied() {
-            if let Some(row) = self.rows.get_mut(index) {
-                row.enabled = true;
-                row.test_state = ConnectionTestState::Loading;
-                row.balances.clear();
-                row.trades.clear();
-                let label = row.label();
-                self.push_log(format!("[connections] Autoconnect testing {label}"));
-            }
+        if let Some(row) = self.rows.get_mut(index) {
+            row.enabled = true;
+            row.test_state = ConnectionTestState::Loading;
+            row.balances.clear();
+            row.trades.clear();
+            let label = row.label();
+            self.push_log(format!("[connections] Autoconnect testing {label}"));
         }
 
         self.persist_rows();
-
-        for index in indices {
-            self.start_connection_test(index);
-        }
+        self.start_connection_test(index);
     }
 
-    fn unlock_with_touch_id(&mut self) {
-        self.last_action = "Touch ID".to_string();
+    fn last_autoconnect_index(&self) -> Option<usize> {
+        self.last_connection_id
+            .as_ref()
+            .and_then(|id| {
+                self.rows
+                    .iter()
+                    .position(|row| &row.id == id && row.is_autoconnect_eligible())
+            })
+            .or_else(|| {
+                self.rows
+                    .iter()
+                    .rposition(ConnectionRow::is_autoconnect_eligible)
+            })
+    }
 
-        if !self.touch_id_available {
-            self.touch_id_status = "Touch ID is not available on this Mac".to_string();
-            self.push_log("[credentials] Touch ID is not available".to_string());
-            return;
-        }
-
-        match crate::touch_id::authenticate("Unlock Flowsurface API credentials") {
-            Ok(()) => match load_or_create_device_vault_key() {
-                Ok(vault_key) => {
-                    self.session_vault_key = vault_key;
-                    self.session_unlocked_by_touch_id = true;
-                    self.touch_id_status = "Touch ID accepted".to_string();
-                    self.push_log("[credentials] Touch ID accepted".to_string());
-                }
-                Err(error) => {
-                    self.touch_id_status = error.clone();
-                    self.push_log(format!("[credentials] {error}"));
-                }
-            },
-            Err(error) => {
-                self.touch_id_status = error.clone();
-                self.push_log(format!("[credentials] {error}"));
-            }
-        }
+    pub(crate) fn last_connection_label(&self) -> String {
+        self.last_connection_id
+            .as_ref()
+            .and_then(|id| self.rows.iter().find(|row| &row.id == id))
+            .map(ConnectionRow::label)
+            .unwrap_or_else(|| "None".to_string())
     }
 
     fn toggle(&mut self, index: usize) {
@@ -497,33 +453,18 @@ impl ConnectionPanelState {
                 }
             };
 
-            let auth_check = if draft.exchange == ConnectionExchange::Mexc {
-                match probe_mexc_private_secret(draft.market, &secret) {
-                    Ok(success) => Some(success),
-                    Err(error) => {
-                        draft.error = Some(format!("MEXC auth failed: {error}"));
-                        self.draft = Some(draft);
-                        self.last_action = "Credential validation failed".to_string();
-                        self.push_log(format!("[credentials] MEXC auth failed: {error}"));
-                        return;
-                    }
+            let vault_key = match load_or_create_device_vault_key() {
+                Ok(vault_key) => vault_key,
+                Err(error) => {
+                    draft.error = Some(error.clone());
+                    self.draft = Some(draft);
+                    self.last_action = "Credential save failed".to_string();
+                    self.push_log(format!("[credentials] {error}"));
+                    return;
                 }
-            } else {
-                None
             };
 
-            let vault_key = self.session_vault_key.trim();
-            if vault_key.is_empty() {
-                let error =
-                    "Unlock with Touch ID or enter a local PIN before saving API keys".to_string();
-                draft.error = Some(error.clone());
-                self.draft = Some(draft);
-                self.last_action = "Credential save failed".to_string();
-                self.push_log(format!("[credentials] {error}"));
-                return;
-            }
-
-            if let Err(error) = save_connection_secret(&reference, &secret, vault_key) {
+            if let Err(error) = save_connection_secret(&reference, &secret, &vault_key) {
                 draft.error = Some(error.clone());
                 self.draft = Some(draft);
                 self.last_action = "Credential save failed".to_string();
@@ -535,11 +476,6 @@ impl ConnectionPanelState {
                 reference,
                 access_key_hint: secret.access_key_hint(),
             };
-
-            if let Some(success) = auth_check {
-                row.test_state = ConnectionTestState::Success(success.message);
-                row.balances = success.balances;
-            }
         }
 
         let label = row.label();
@@ -597,7 +533,7 @@ impl ConnectionPanelState {
             return;
         };
 
-        let Some(spec) = ConnectionProbeSpec::from_row(row, self.session_vault_key.trim()) else {
+        let Some(spec) = ConnectionProbeSpec::from_row(row) else {
             let status = row.exchange.draft_status(row.mode).to_string();
             let row_id = row.id.clone();
             self.apply_probe_result(ConnectionProbeResult {
@@ -627,6 +563,7 @@ impl ConnectionPanelState {
                 row.test_state = ConnectionTestState::Success(message.clone());
                 row.balances = result.balances;
                 row.trades = result.trades;
+                self.last_connection_id = Some(row.id.clone());
                 format!("[connections] {label} connected")
             }
             Err(error) => {
@@ -723,16 +660,14 @@ impl ConnectionRow {
         self.enabled && matches!(self.test_state, ConnectionTestState::Success(_))
     }
 
-    fn is_autoconnect_eligible(&self, session_unlocked: bool) -> bool {
+    fn is_autoconnect_eligible(&self) -> bool {
         if self.exchange != ConnectionExchange::Mexc {
             return false;
         }
 
         match self.mode {
             ConnectionMode::View => true,
-            ConnectionMode::Trade => {
-                session_unlocked && matches!(self.credentials, CredentialState::Saved { .. })
-            }
+            ConnectionMode::Trade => matches!(self.credentials, CredentialState::Saved { .. }),
         }
     }
 
@@ -779,7 +714,19 @@ enum CredentialState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedConnections {
     rows: Vec<PersistedConnectionRow>,
+    #[serde(default = "default_autoconnect_enabled")]
+    autoconnect_enabled: bool,
+    #[serde(default)]
+    last_connection_id: Option<String>,
     next_connection_id: u64,
+}
+
+#[derive(Debug)]
+struct LoadedConnections {
+    rows: Vec<ConnectionRow>,
+    next_connection_id: u64,
+    autoconnect_enabled: bool,
+    last_connection_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -802,6 +749,8 @@ impl From<&ConnectionPanelState> for PersistedConnections {
                 .iter()
                 .map(PersistedConnectionRow::from)
                 .collect(),
+            autoconnect_enabled: state.autoconnect_enabled,
+            last_connection_id: state.last_connection_id.clone(),
             next_connection_id: state.next_connection_id,
         }
     }
@@ -867,10 +816,14 @@ impl TryFrom<PersistedConnectionRow> for ConnectionRow {
     }
 }
 
-fn load_saved_connections() -> Option<(Vec<ConnectionRow>, u64)> {
+fn load_saved_connections() -> Option<LoadedConnections> {
     let path = data::data_path(Some(CONNECTIONS_FILE));
     let contents = std::fs::read_to_string(path).ok()?;
     let persisted: PersistedConnections = serde_json::from_str(&contents).ok()?;
+    let last_connection_id = persisted
+        .last_connection_id
+        .clone()
+        .or_else(|| last_enabled_connection_id(&persisted.rows));
     let rows = persisted
         .rows
         .into_iter()
@@ -881,7 +834,29 @@ fn load_saved_connections() -> Option<(Vec<ConnectionRow>, u64)> {
         return None;
     }
 
-    Some((rows, persisted.next_connection_id.max(1)))
+    Some(LoadedConnections {
+        rows,
+        next_connection_id: persisted.next_connection_id.max(1),
+        autoconnect_enabled: persisted.autoconnect_enabled,
+        last_connection_id,
+    })
+}
+
+fn last_enabled_connection_id(rows: &[PersistedConnectionRow]) -> Option<String> {
+    rows.iter().rev().find(|row| row.enabled).and_then(|row| {
+        row.id.clone().or_else(|| {
+            Some(format!(
+                "{}-{}-{}",
+                row.exchange.storage_key(),
+                row.market.storage_key(),
+                row.mode.storage_key()
+            ))
+        })
+    })
+}
+
+fn default_autoconnect_enabled() -> bool {
+    true
 }
 
 fn save_connections(state: &ConnectionPanelState) -> Result<(), String> {
@@ -897,11 +872,10 @@ struct ConnectionProbeSpec {
     mode: ConnectionMode,
     credential_ref: Option<ConnectionCredentialRef>,
     access_key_hint: Option<String>,
-    vault_key: String,
 }
 
 impl ConnectionProbeSpec {
-    fn from_row(row: &ConnectionRow, session_vault_key: &str) -> Option<Self> {
+    fn from_row(row: &ConnectionRow) -> Option<Self> {
         if row.exchange != ConnectionExchange::Mexc {
             return None;
         }
@@ -920,7 +894,6 @@ impl ConnectionProbeSpec {
             mode: row.mode,
             credential_ref,
             access_key_hint,
-            vault_key: session_vault_key.to_string(),
         })
     }
 }
@@ -992,14 +965,11 @@ fn probe_mexc_private(spec: &ConnectionProbeSpec) -> Result<ProbeSuccess, String
         .credential_ref
         .as_ref()
         .ok_or_else(|| "API keys are missing".to_string())?;
-    if spec.vault_key.trim().is_empty() {
-        return Err("Unlock with Touch ID or enter a local PIN before connecting".to_string());
-    }
+    let vault_key = load_or_create_device_vault_key()?;
 
-    let secret = load_connection_secret(reference, &spec.vault_key)?
-        .ok_or_else(|| {
-            "Saved API keys were not found in the local credential vault. Delete and re-add this connection after unlocking.".to_string()
-        })?;
+    let secret = load_connection_secret(reference, &vault_key)?.ok_or_else(|| {
+        "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
+    })?;
 
     if let Some(expected_hint) = &spec.access_key_hint {
         let actual_hint = secret.access_key_hint();
@@ -1378,52 +1348,6 @@ pub(super) fn connections_panel<'a>(state: &'a ConnectionPanelState) -> Element<
     .into()
 }
 
-pub(super) fn unlock_panel<'a>(state: &'a ConnectionPanelState) -> Element<'a, PanelMessage> {
-    let touch_id_button: Element<'_, PanelMessage> = if state.touch_id_available() {
-        connection_button("Use Touch ID", ConnectionAction::TouchIdUnlock, true)
-    } else {
-        button(text("Touch ID unavailable").size(style::text_size::SMALL))
-            .padding(padding::left(10).right(10).top(6).bottom(6))
-            .style(|theme, status| style::button::bordered_toggle(theme, status, false))
-            .into()
-    };
-
-    column![
-        panel_card(
-            "Local credential vault",
-            column![
-                text(state.session_status()).size(style::text_size::BODY),
-                text_input("Session PIN/passphrase", &state.session_vault_key)
-                    .secure(true)
-                    .on_input(|value| {
-                        PanelMessage::ConnectionAction(ConnectionAction::SessionVaultKeyChanged(
-                            value,
-                        ))
-                    })
-                    .style(|theme, status| style::validated_text_input(theme, status, true)),
-                row![
-                    touch_id_button,
-                    iced::widget::Space::new().width(Length::Fill),
-                    connection_button("Continue", ConnectionAction::Confirm, true),
-                ]
-                .align_y(Alignment::Center),
-            ]
-            .spacing(12),
-        ),
-        panel_card(
-            "Connection status",
-            column![
-                detail_line("Current", state.top_bar_status()),
-                detail_line("Vault", state.session_status()),
-                detail_line("Touch ID", state.touch_id_status()),
-            ]
-            .spacing(8),
-        ),
-    ]
-    .spacing(12)
-    .into()
-}
-
 fn connection_status_strip<'a>(state: &ConnectionPanelState) -> Element<'a, PanelMessage> {
     container(
         row![
@@ -1434,7 +1358,12 @@ fn connection_status_strip<'a>(state: &ConnectionPanelState) -> Element<'a, Pane
             ))
             .size(style::text_size::BODY),
             text(state.top_bar_status()).size(style::text_size::BODY),
-            text(state.session_status()).size(style::text_size::SMALL),
+            iced::widget::checkbox(state.autoconnect_enabled())
+                .label("Auto-connect last used")
+                .on_toggle(|enabled| {
+                    PanelMessage::ConnectionAction(ConnectionAction::AutoconnectChanged(enabled))
+                }),
+            text(format!("Last: {}", state.last_connection_label())).size(style::text_size::SMALL),
             iced::widget::Space::new().width(Length::Fill),
             text(format!("Last action: {}", state.last_action)).size(style::text_size::SMALL),
         ]
@@ -1444,20 +1373,6 @@ fn connection_status_strip<'a>(state: &ConnectionPanelState) -> Element<'a, Pane
     .width(Length::Fill)
     .padding(10)
     .style(style::panel_card)
-    .into()
-}
-
-fn detail_line<'a>(
-    label: impl Into<String>,
-    value: impl Into<String>,
-) -> Element<'a, PanelMessage> {
-    row![
-        text(label.into()).size(style::text_size::SMALL),
-        iced::widget::Space::new().width(Length::Fill),
-        text(value.into()).size(style::text_size::SMALL),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center)
     .into()
 }
 
@@ -1785,7 +1700,11 @@ fn icon_button<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{MexcFuturesResponse, futures_history_records};
+    use super::{
+        ConnectionExchange, ConnectionMarket, ConnectionMode, MexcFuturesResponse,
+        PersistedConnectionRow, PersistedConnections, futures_history_records,
+        last_enabled_connection_id,
+    };
 
     #[test]
     fn futures_history_records_extracts_core_order_fields() {
@@ -1822,5 +1741,40 @@ mod tests {
         assert_eq!(records[0].pnl, "3.5");
         assert_eq!(records[0].fee, "0.12 USDT");
         assert_eq!(records[0].state, "Filled");
+    }
+
+    #[test]
+    fn persisted_connections_default_autoconnects_legacy_files() {
+        let persisted: PersistedConnections = serde_json::from_value(serde_json::json!({
+            "rows": [],
+            "next_connection_id": 3
+        }))
+        .unwrap();
+
+        assert!(persisted.autoconnect_enabled);
+        assert!(persisted.last_connection_id.is_none());
+    }
+
+    #[test]
+    fn last_enabled_connection_id_uses_last_enabled_row() {
+        let rows = vec![
+            persisted_row("first", true),
+            persisted_row("middle-disabled", false),
+            persisted_row("last", true),
+        ];
+
+        assert_eq!(last_enabled_connection_id(&rows).as_deref(), Some("last"));
+    }
+
+    fn persisted_row(id: &str, enabled: bool) -> PersistedConnectionRow {
+        PersistedConnectionRow {
+            id: Some(id.to_string()),
+            enabled,
+            exchange: ConnectionExchange::Mexc,
+            market: ConnectionMarket::Futures,
+            mode: ConnectionMode::View,
+            credential_id: None,
+            access_key_hint: None,
+        }
     }
 }

@@ -35,8 +35,6 @@ pub mod text_size {
 /// Enum variant names may differ from Fontello CSS names.
 #[repr(u32)]
 pub enum Icon {
-    Locked = 59392,
-    Unlocked = 59393,
     ResizeFull = 59395,
     ResizeSmall = 59396,
     Close = 59397,

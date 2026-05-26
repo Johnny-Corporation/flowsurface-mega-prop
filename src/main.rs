@@ -10,7 +10,6 @@ mod notify;
 mod panel_window;
 mod screen;
 mod style;
-mod touch_id;
 mod version;
 mod widget;
 mod window;
@@ -166,19 +165,10 @@ impl Flowsurface {
             state.layout_manager = LayoutManager::new();
         }
 
-        let saved_trade_credentials = state.connection_state.saved_trade_credentials_count();
-        log::info!(
-            "Startup credential gate found {saved_trade_credentials} saved trading connection(s)"
-        );
-
-        let startup_task = if saved_trade_credentials > 0 {
-            state.open_panel_window(panel_window::Kind::Unlock)
-        } else {
-            state.connection_state.autoconnect();
-            state
-                .open_main_window()
-                .chain(launch_sidebar.map(Message::Sidebar))
-        };
+        state.connection_state.autoconnect();
+        let startup_task = state
+            .open_main_window()
+            .chain(launch_sidebar.map(Message::Sidebar));
 
         (state, startup_task)
     }
@@ -256,10 +246,7 @@ impl Flowsurface {
             }
             Message::WindowEvent(event) => match event {
                 window::Event::CloseRequested(window) => {
-                    if let Some(panel) = self.panel_windows.remove(&window) {
-                        if self.main_window.is_none() && panel.kind == panel_window::Kind::Unlock {
-                            return iced::exit();
-                        }
+                    if self.panel_windows.remove(&window).is_some() {
                         return window::close(window);
                     }
 
@@ -456,27 +443,11 @@ impl Flowsurface {
 
                     let handles_connection_action = matches!(
                         kind,
-                        panel_window::Kind::Connections
-                            | panel_window::Kind::Account
-                            | panel_window::Kind::Unlock
+                        panel_window::Kind::Connections | panel_window::Kind::Account
                     );
 
                     if handles_connection_action {
-                        let should_close_unlock = kind == panel_window::Kind::Unlock
-                            && matches!(
-                                action,
-                                panel_window::ConnectionAction::Confirm
-                                    | panel_window::ConnectionAction::TouchIdUnlock
-                            );
                         self.connection_state.update(action);
-
-                        if should_close_unlock && self.connection_state.is_session_unlocked() {
-                            self.connection_state.autoconnect();
-                            self.panel_windows.remove(&window);
-                            return window::close(window)
-                                .chain(self.open_main_window())
-                                .chain(self.sidebar.initial_fetch().map(Message::Sidebar));
-                        }
                     } else if let Some(panel) = self.panel_windows.get_mut(&window) {
                         panel.update(panel_window::PanelMessage::ConnectionAction(action));
                     }
@@ -815,7 +786,7 @@ impl Flowsurface {
                 )
                 .padding(padding::top(style::TITLE_PADDING_TOP))
                 .into(),
-                None => container(text("Unlock required").size(style::text_size::BODY))
+                None => container(text("Dashboard unavailable").size(style::text_size::BODY))
                     .padding(18)
                     .into(),
             }

@@ -209,7 +209,7 @@ fn validate_secret_field(label: &str, value: &str) -> Result<(), String> {
 
 fn normalize_vault_key(raw: &str) -> Result<String, String> {
     let vault_key = raw.trim().to_string();
-    validate_secret_field("local credential passphrase", &vault_key)?;
+    validate_secret_field("local device vault key", &vault_key)?;
     Ok(vault_key)
 }
 
@@ -346,7 +346,7 @@ fn decrypt_payload(
             &mut in_out,
         )
         .map_err(|_| {
-            "Unable to decrypt saved API keys. Check the local PIN/passphrase.".to_string()
+            "Unable to decrypt saved API keys with the local device vault key. Delete and re-add this connection.".to_string()
         })?;
 
     Ok(payload.to_vec())
@@ -444,13 +444,14 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_payload_roundtrips_with_passphrase() {
+    fn encrypted_payload_roundtrips_with_device_vault_key() {
         let account = "connection:mexc-futures-trade";
         let payload = br#"{"access_key":"access-key-123","secret_key":"secret-key-456"}"#;
-        let entry = encrypt_payload(account, payload, "local-pin", "****-123".to_string()).unwrap();
-        let decrypted = decrypt_payload(account, &entry, "local-pin").unwrap();
+        let entry =
+            encrypt_payload(account, payload, "device-key", "****-123".to_string()).unwrap();
+        let decrypted = decrypt_payload(account, &entry, "device-key").unwrap();
 
         assert_eq!(decrypted, payload);
-        assert!(decrypt_payload(account, &entry, "wrong-pin").is_err());
+        assert!(decrypt_payload(account, &entry, "wrong-device-key").is_err());
     }
 }
