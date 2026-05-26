@@ -14,7 +14,7 @@ mod settings;
 mod trades;
 
 pub(crate) use connections::ConnectionPanelState;
-use connections::connections_panel;
+use connections::{connections_panel, unlock_panel};
 use settings::{SettingsAction, SettingsPanelState, settings_panel};
 use trades::trades_table;
 
@@ -24,6 +24,7 @@ const PNL_POINTS: [f32; 12] = [
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Kind {
+    Unlock,
     App,
     File,
     Edit,
@@ -56,6 +57,7 @@ impl Kind {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
+            Self::Unlock => "Unlock",
             Self::App => "Flowsurface",
             Self::File => "File",
             Self::Edit => "Edit",
@@ -73,6 +75,7 @@ impl Kind {
 
     pub(crate) fn title(self) -> &'static str {
         match self {
+            Self::Unlock => "Unlock",
             Self::App => "App",
             Self::File => "File",
             Self::Edit => "Edit",
@@ -90,6 +93,7 @@ impl Kind {
 
     pub(crate) fn default_size(self) -> Size {
         match self {
+            Self::Unlock => Size::new(440.0, 220.0),
             Self::Connections => Size::new(1_140.0, 720.0),
             Self::Pnl => Size::new(820.0, 560.0),
             Self::Settings => Size::new(860.0, 620.0),
@@ -102,6 +106,13 @@ impl Kind {
             | Self::Window
             | Self::Help
             | Self::About => Size::new(560.0, 420.0),
+        }
+    }
+
+    pub(crate) fn min_size(self) -> Size {
+        match self {
+            Self::Unlock => Size::new(360.0, 180.0),
+            _ => Size::new(420.0, 320.0),
         }
     }
 }
@@ -145,6 +156,7 @@ impl State {
         connection_state: &'a ConnectionPanelState,
     ) -> Element<'a, PanelMessage> {
         let body = match self.kind {
+            Kind::Unlock => unlock_panel(connection_state),
             Kind::App => app_panel(),
             Kind::File => default_panel(
                 "File actions",
@@ -218,7 +230,7 @@ impl State {
             Kind::Settings => settings_panel(&self.settings_state),
             Kind::Pnl => pnl_panel(self.show_trades),
             Kind::Connections => connections_panel(connection_state),
-            Kind::Account => account_panel(),
+            Kind::Account => account_panel(connection_state),
             Kind::Analytics => analytics_panel(),
             Kind::About => about_panel(),
         };
@@ -516,28 +528,58 @@ fn pnl_panel<'a>(show_trades: bool) -> Element<'a, PanelMessage> {
     .into()
 }
 
-fn account_panel<'a>() -> Element<'a, PanelMessage> {
-    column![
-        metric_row(&[
-            ("Equity", "$128,430"),
-            ("Margin used", "18%"),
-            ("Risk", "Normal"),
-        ]),
-        panel_card(
+fn account_panel<'a>(connection_state: &'a ConnectionPanelState) -> Element<'a, PanelMessage> {
+    let summary = connection_state.account_summary();
+    let balances = if summary.balances.is_empty() {
+        column![detail_row(
             "Balances",
-            column![
-                detail_row("USDT", "$84,200 available"),
-                detail_row("BTC", "1.42 collateral"),
-                detail_row("ETH", "12.8 collateral"),
-            ]
-            .spacing(10),
-        ),
+            "No non-zero balances returned by active trading connections"
+        )]
+        .spacing(10)
+    } else {
+        summary
+            .balances
+            .iter()
+            .fold(column![].spacing(10), |column, balance| {
+                column.push(detail_row(
+                    format!("{} ({})", balance.asset, balance.source),
+                    format!("{} available", balance.available),
+                ))
+            })
+    };
+
+    column![
+        metric_row_owned(&[
+            ("Connection".to_string(), summary.status.clone()),
+            (
+                "Assets".to_string(),
+                format!(
+                    "{} non-zero / {} returned",
+                    summary.non_zero_asset_count, summary.asset_count
+                ),
+            ),
+            (
+                "Vault".to_string(),
+                connection_state.session_status().to_string()
+            ),
+        ]),
+        panel_card("Balances", balances,),
         panel_card(
             "Permissions",
             column![
-                detail_row("Market data", "Enabled"),
-                detail_row("Trading", "Read-only template"),
+                detail_row("Market data", summary.market_data),
+                detail_row("Trading", summary.trading),
                 detail_row("Withdrawals", "Disabled"),
+                row![
+                    iced::widget::Space::new().width(Length::Fill),
+                    button(text("Refresh balances").size(style::text_size::SMALL))
+                        .padding(padding::left(10).right(10).top(6).bottom(6))
+                        .style(|theme, status| {
+                            style::button::bordered_toggle(theme, status, false)
+                        })
+                        .on_press(PanelMessage::ConnectionAction(ConnectionAction::Refresh)),
+                ]
+                .align_y(Alignment::Center),
             ]
             .spacing(10),
         ),
@@ -612,7 +654,21 @@ fn metric_row<'a>(items: &[(&'static str, &'static str)]) -> Element<'a, PanelMe
     row.into()
 }
 
+fn metric_row_owned<'a>(items: &[(String, String)]) -> Element<'a, PanelMessage> {
+    let mut row = row![].spacing(10);
+
+    for (label, value) in items {
+        row = row.push(metric_card_owned(label.clone(), value.clone()));
+    }
+
+    row.into()
+}
+
 fn metric_card<'a>(label: &'static str, value: &'static str) -> Element<'a, PanelMessage> {
+    metric_card_owned(label.to_string(), value.to_string())
+}
+
+fn metric_card_owned<'a>(label: String, value: String) -> Element<'a, PanelMessage> {
     container(
         column![
             text(label)

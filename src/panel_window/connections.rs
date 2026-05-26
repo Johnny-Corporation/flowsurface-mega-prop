@@ -63,6 +63,23 @@ pub(crate) struct ConnectionPanelState {
     probe_rx: Receiver<ConnectionProbeResult>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionAccountSummary {
+    pub status: String,
+    pub asset_count: usize,
+    pub non_zero_asset_count: usize,
+    pub market_data: String,
+    pub trading: String,
+    pub balances: Vec<ConnectionAccountBalance>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionAccountBalance {
+    pub source: String,
+    pub asset: String,
+    pub available: String,
+}
+
 impl Default for ConnectionPanelState {
     fn default() -> Self {
         let (probe_tx, probe_rx) = mpsc::channel();
@@ -212,6 +229,76 @@ impl ConnectionPanelState {
         exchanges
     }
 
+    pub(crate) fn has_saved_trade_credentials(&self) -> bool {
+        self.rows.iter().any(|row| {
+            row.mode == ConnectionMode::Trade
+                && matches!(row.credentials, CredentialState::Saved { .. })
+        })
+    }
+
+    pub(crate) fn is_session_unlocked(&self) -> bool {
+        !self.session_vault_key.trim().is_empty()
+    }
+
+    pub(crate) fn session_status(&self) -> &'static str {
+        if self.is_session_unlocked() {
+            "Session PIN entered"
+        } else if self.has_saved_trade_credentials() {
+            "Session PIN required for trading connections"
+        } else {
+            "No saved trading credentials"
+        }
+    }
+
+    pub(crate) fn account_summary(&self) -> ConnectionAccountSummary {
+        let connected_rows = self
+            .rows
+            .iter()
+            .filter(|row| row.is_connected())
+            .collect::<Vec<_>>();
+
+        let mut asset_count = 0;
+        let mut non_zero_asset_count = 0;
+        let mut balances = Vec::new();
+
+        for row in &connected_rows {
+            asset_count += row.balances.len();
+            for balance in &row.balances {
+                if is_zero_amount(&balance.available) {
+                    continue;
+                }
+
+                non_zero_asset_count += 1;
+                balances.push(ConnectionAccountBalance {
+                    source: row.label(),
+                    asset: balance.asset.clone(),
+                    available: balance.available.clone(),
+                });
+            }
+        }
+
+        ConnectionAccountSummary {
+            status: self.top_bar_status(),
+            asset_count,
+            non_zero_asset_count,
+            market_data: if connected_rows.is_empty() {
+                "Disabled until a connection is ON".to_string()
+            } else {
+                connected_rows
+                    .iter()
+                    .map(|row| row.label())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+            trading: connected_rows
+                .iter()
+                .find(|row| row.mode == ConnectionMode::Trade)
+                .map(|row| format!("Enabled via {}", row.label()))
+                .unwrap_or_else(|| "No active trading connection".to_string()),
+            balances,
+        }
+    }
+
     fn toggle(&mut self, index: usize) {
         let Some(row) = self.rows.get_mut(index) else {
             return;
@@ -222,7 +309,7 @@ impl ConnectionPanelState {
         if row.enabled {
             row.enabled = false;
             row.test_state = ConnectionTestState::Idle;
-            row.balance_summary = None;
+            row.balances.clear();
             self.last_action = "Toggle".to_string();
             self.push_log(format!("[connections] {label} disabled"));
             self.persist_rows();
@@ -231,7 +318,7 @@ impl ConnectionPanelState {
 
         row.enabled = true;
         row.test_state = ConnectionTestState::Loading;
-        row.balance_summary = None;
+        row.balances.clear();
         self.last_action = "Toggle".to_string();
         self.push_log(format!("[connections] Testing {label}"));
         self.persist_rows();
@@ -326,7 +413,7 @@ impl ConnectionPanelState {
 
             if let Some(success) = auth_check {
                 row.test_state = ConnectionTestState::Success(success.message);
-                row.balance_summary = success.balance_summary;
+                row.balances = success.balances;
             }
         }
 
@@ -391,7 +478,7 @@ impl ConnectionPanelState {
             self.apply_probe_result(ConnectionProbeResult {
                 row_id,
                 outcome: Err(status),
-                balance_summary: None,
+                balances: Vec::new(),
             });
             return;
         };
@@ -412,14 +499,14 @@ impl ConnectionPanelState {
                 let label = row.label();
                 row.enabled = true;
                 row.test_state = ConnectionTestState::Success(message.clone());
-                row.balance_summary = result.balance_summary;
+                row.balances = result.balances;
                 format!("[connections] {label} connected")
             }
             Err(error) => {
                 let label = row.label();
                 row.enabled = false;
                 row.test_state = ConnectionTestState::Error(error.clone());
-                row.balance_summary = None;
+                row.balances.clear();
                 format!("[connections] {label} failed: {error}")
             }
         };
@@ -439,7 +526,7 @@ struct ConnectionRow {
     mode: ConnectionMode,
     credentials: CredentialState,
     test_state: ConnectionTestState,
-    balance_summary: Option<String>,
+    balances: Vec<exchange::adapter::MexcAvailableBalance>,
 }
 
 impl ConnectionRow {
@@ -458,7 +545,7 @@ impl ConnectionRow {
             mode,
             credentials: CredentialState::NotRequired,
             test_state: ConnectionTestState::Idle,
-            balance_summary: None,
+            balances: Vec::new(),
         }
     }
 
@@ -470,7 +557,8 @@ impl ConnectionRow {
         match &self.test_state {
             ConnectionTestState::Loading => return "Testing connection...".to_string(),
             ConnectionTestState::Success(message) => {
-                if let Some(balance) = &self.balance_summary {
+                if !self.balances.is_empty() {
+                    let balance = format_balance_summary(&self.balances);
                     return format!("{message}; {balance}");
                 }
                 return message.clone();
@@ -630,7 +718,7 @@ impl TryFrom<PersistedConnectionRow> for ConnectionRow {
             mode: value.mode,
             credentials,
             test_state: ConnectionTestState::Idle,
-            balance_summary: None,
+            balances: Vec::new(),
         })
     }
 }
@@ -697,7 +785,7 @@ impl ConnectionProbeSpec {
 struct ConnectionProbeResult {
     row_id: String,
     outcome: Result<String, String>,
-    balance_summary: Option<String>,
+    balances: Vec<exchange::adapter::MexcAvailableBalance>,
 }
 
 fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
@@ -706,20 +794,24 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
         ConnectionMode::Trade => probe_mexc_private(&spec),
     };
 
-    ConnectionProbeResult {
-        row_id: spec.row_id,
-        balance_summary: result
-            .as_ref()
-            .ok()
-            .and_then(|result| result.balance_summary.clone()),
-        outcome: result.map(|result| result.message),
+    match result {
+        Ok(success) => ConnectionProbeResult {
+            row_id: spec.row_id,
+            outcome: Ok(success.message),
+            balances: success.balances,
+        },
+        Err(error) => ConnectionProbeResult {
+            row_id: spec.row_id,
+            outcome: Err(error),
+            balances: Vec::new(),
+        },
     }
 }
 
 #[derive(Debug, Clone)]
 struct ProbeSuccess {
     message: String,
-    balance_summary: Option<String>,
+    balances: Vec<exchange::adapter::MexcAvailableBalance>,
 }
 
 fn probe_mexc_public(market: ConnectionMarket) -> Result<ProbeSuccess, String> {
@@ -742,7 +834,7 @@ fn probe_mexc_public(market: ConnectionMarket) -> Result<ProbeSuccess, String> {
 
     Ok(ProbeSuccess {
         message: "Public API reachable".to_string(),
-        balance_summary: None,
+        balances: Vec::new(),
     })
 }
 
@@ -780,7 +872,7 @@ fn probe_mexc_private_secret(
     let client =
         MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
 
-    let balance_summary = match market {
+    let balances = match market {
         ConnectionMarket::Spot => {
             let account = match client.spot_account_information() {
                 Ok(account) => account,
@@ -789,7 +881,7 @@ fn probe_mexc_private_secret(
                     return Err(mexc_spot_error_with_market_hint(&client, error));
                 }
             };
-            format_balance_summary(available_balances_from_spot_account(&account))
+            available_balances_from_spot_account(&account)
         }
         ConnectionMarket::Futures => {
             let assets = match client.futures_assets() {
@@ -799,13 +891,13 @@ fn probe_mexc_private_secret(
                     return Err(mexc_futures_error_with_market_hint(&client, error));
                 }
             };
-            format_balance_summary(available_balances_from_futures_assets(&assets))
+            available_balances_from_futures_assets(&assets)
         }
     };
 
     Ok(ProbeSuccess {
         message: "Private API authenticated".to_string(),
-        balance_summary: Some(balance_summary),
+        balances,
     })
 }
 
@@ -815,7 +907,7 @@ fn mexc_spot_error_with_market_hint(client: &MexcBlockingPrivateClient, error: S
     {
         return format!(
             "This API key authenticated on MEXC Futures, not Spot. Re-add it with Market=Futures. {}",
-            format_balance_summary(available_balances_from_futures_assets(&assets))
+            format_balance_summary(&available_balances_from_futures_assets(&assets))
         );
     }
 
@@ -831,7 +923,7 @@ fn mexc_futures_error_with_market_hint(
     {
         return format!(
             "This API key authenticated on MEXC Spot, not Futures. Re-add it with Market=Spot. {}",
-            format_balance_summary(available_balances_from_spot_account(&account))
+            format_balance_summary(&available_balances_from_spot_account(&account))
         );
     }
 
@@ -850,9 +942,9 @@ fn is_mexc_futures_key_invalid(error: &str) -> bool {
     error.contains("\"code\":402") || error.contains("API Key expired")
 }
 
-fn format_balance_summary(balances: Vec<exchange::adapter::MexcAvailableBalance>) -> String {
+fn format_balance_summary(balances: &[exchange::adapter::MexcAvailableBalance]) -> String {
     let non_zero = balances
-        .into_iter()
+        .iter()
         .filter(|balance| !is_zero_amount(&balance.available))
         .take(3)
         .map(|balance| format!("{} {}", balance.asset, balance.available))
@@ -951,6 +1043,41 @@ pub(super) fn connections_panel<'a>(state: &'a ConnectionPanelState) -> Element<
     .into()
 }
 
+pub(super) fn unlock_panel<'a>(state: &'a ConnectionPanelState) -> Element<'a, PanelMessage> {
+    column![
+        panel_card(
+            "Local credential vault",
+            column![
+                text(state.session_status()).size(style::text_size::BODY),
+                text_input("Session PIN/passphrase", &state.session_vault_key)
+                    .secure(true)
+                    .on_input(|value| {
+                        PanelMessage::ConnectionAction(ConnectionAction::SessionVaultKeyChanged(
+                            value,
+                        ))
+                    })
+                    .style(|theme, status| style::validated_text_input(theme, status, true)),
+                row![
+                    iced::widget::Space::new().width(Length::Fill),
+                    connection_button("Continue", ConnectionAction::Confirm, true),
+                ]
+                .align_y(Alignment::Center),
+            ]
+            .spacing(12),
+        ),
+        panel_card(
+            "Connection status",
+            column![
+                detail_line("Current", state.top_bar_status()),
+                detail_line("Vault", state.session_status()),
+            ]
+            .spacing(8),
+        ),
+    ]
+    .spacing(12)
+    .into()
+}
+
 fn connection_status_strip<'a>(state: &ConnectionPanelState) -> Element<'a, PanelMessage> {
     container(
         row![
@@ -960,13 +1087,8 @@ fn connection_status_strip<'a>(state: &ConnectionPanelState) -> Element<'a, Pane
                 state.rows.len()
             ))
             .size(style::text_size::BODY),
-            text_input("Session PIN/passphrase", &state.session_vault_key)
-                .secure(true)
-                .on_input(|value| {
-                    PanelMessage::ConnectionAction(ConnectionAction::SessionVaultKeyChanged(value))
-                })
-                .width(Length::Fixed(220.0))
-                .style(|theme, status| style::validated_text_input(theme, status, true)),
+            text(state.top_bar_status()).size(style::text_size::BODY),
+            text(state.session_status()).size(style::text_size::SMALL),
             iced::widget::Space::new().width(Length::Fill),
             text(format!("Last action: {}", state.last_action)).size(style::text_size::SMALL),
         ]
@@ -976,6 +1098,20 @@ fn connection_status_strip<'a>(state: &ConnectionPanelState) -> Element<'a, Pane
     .width(Length::Fill)
     .padding(10)
     .style(style::panel_card)
+    .into()
+}
+
+fn detail_line<'a>(
+    label: impl Into<String>,
+    value: impl Into<String>,
+) -> Element<'a, PanelMessage> {
+    row![
+        text(label.into()).size(style::text_size::SMALL),
+        iced::widget::Space::new().width(Length::Fill),
+        text(value.into()).size(style::text_size::SMALL),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
     .into()
 }
 

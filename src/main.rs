@@ -174,6 +174,12 @@ impl Flowsurface {
             state.layout_manager = LayoutManager::new();
         }
 
+        let unlock_prompt = if state.connection_state.has_saved_trade_credentials() {
+            state.open_panel_window(panel_window::Kind::Unlock)
+        } else {
+            Task::none()
+        };
+
         let active_layout_id = state
             .layout_manager
             .active_layout_id()
@@ -198,6 +204,7 @@ impl Flowsurface {
             open_main_window
                 .discard()
                 .chain(load_layout)
+                .chain(unlock_prompt)
                 .chain(launch_sidebar.map(Message::Sidebar)),
         )
     }
@@ -448,12 +455,28 @@ impl Flowsurface {
             }
             Message::PanelWindow(window, message) => match message {
                 panel_window::PanelMessage::ConnectionAction(action) => {
-                    if self
-                        .panel_windows
-                        .get(&window)
-                        .is_some_and(|panel| panel.kind == panel_window::Kind::Connections)
-                    {
+                    let Some(kind) = self.panel_windows.get(&window).map(|panel| panel.kind) else {
+                        return Task::none();
+                    };
+
+                    let handles_connection_action = matches!(
+                        kind,
+                        panel_window::Kind::Connections
+                            | panel_window::Kind::Account
+                            | panel_window::Kind::Unlock
+                    );
+
+                    if handles_connection_action {
+                        let should_close_unlock = kind == panel_window::Kind::Unlock
+                            && action == panel_window::ConnectionAction::Confirm;
                         self.connection_state.update(action);
+
+                        if should_close_unlock {
+                            self.panel_windows.remove(&window);
+                            return window::close(window);
+                        }
+                    } else if let Some(panel) = self.panel_windows.get_mut(&window) {
+                        panel.update(panel_window::PanelMessage::ConnectionAction(action));
                     }
                 }
                 other => {
@@ -717,9 +740,12 @@ impl Flowsurface {
             let header_title = row![
                 panel_window::menu_bar(),
                 Space::new().width(iced::Length::Fill),
-                text(self.connection_state.top_bar_status())
-                    .size(crate::style::text_size::SMALL)
-                    .style(style::title_text),
+                container(
+                    text(self.connection_state.top_bar_status())
+                        .size(crate::style::text_size::SMALL)
+                )
+                .padding(padding::left(8).right(8).top(3).bottom(3))
+                .style(style::panel_value_box),
                 text("FLOWSURFACE")
                     .font(iced::Font {
                         weight: iced::font::Weight::Bold,
@@ -884,7 +910,7 @@ impl Flowsurface {
         let (window, task) = window::open(window::Settings {
             size: kind.default_size(),
             exit_on_close_request: false,
-            min_size: Some(iced::Size::new(420.0, 320.0)),
+            min_size: Some(kind.min_size()),
             ..window::settings()
         });
 
