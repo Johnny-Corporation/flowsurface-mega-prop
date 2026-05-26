@@ -16,10 +16,9 @@ const MIN_DISPLAY_WIDTH: f32 = 120.0;
 const PANEL_WIDTH_RATIO: f32 = 0.55;
 const PANEL_HEIGHT_RATIO: f32 = 0.46;
 const DISPLAY_SCALE_DIVISOR: f32 = 2.5;
-const STARTUP_ANIMATION_WARMUP: Duration = Duration::from_millis(120);
 const STARTUP_PHRASE_COUNT: usize = 2;
 const STARTUP_PHRASE_DURATION: Duration = Duration::from_secs(2);
-const STARTUP_TOTAL_DURATION: Duration = Duration::from_millis(4_120);
+const STARTUP_TOTAL_DURATION: Duration = Duration::from_secs(4);
 
 const STARTUP_PHRASE_POOL: &[&str] = &[
     "Warming up the candlesticks...",
@@ -127,9 +126,8 @@ impl StartupPhrases {
         STARTUP_TOTAL_DURATION
     }
 
-    fn current(&self, elapsed: Duration) -> Option<&'static str> {
-        let phrase_elapsed = elapsed.checked_sub(STARTUP_ANIMATION_WARMUP)?;
-        let index = if phrase_elapsed < STARTUP_PHRASE_DURATION {
+    fn current(&self, elapsed: Duration) -> &'static str {
+        let index = if elapsed < STARTUP_PHRASE_DURATION {
             0
         } else {
             1
@@ -139,7 +137,7 @@ impl StartupPhrases {
             .get(index)
             .or_else(|| self.phrases.last())
             .copied()
-            .or(Some("Loading dashboard..."))
+            .unwrap_or("Loading dashboard...")
     }
 }
 
@@ -157,9 +155,9 @@ pub fn view<'a, Message: 'a>(status: impl Into<String>) -> Element<'a, Message> 
 
 pub fn startup_view<'a, Message: 'a>(
     phrases: &'a StartupPhrases,
-    elapsed: Duration,
+    phrase_elapsed: Option<Duration>,
 ) -> Element<'a, Message> {
-    let status = phrases.current(elapsed);
+    let status = phrase_elapsed.map(|elapsed| phrases.current(elapsed));
 
     responsive(move |bounds| startup_loading_content(status, bounds)).into()
 }

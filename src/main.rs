@@ -71,6 +71,8 @@ fn main() {
     }
 }
 
+const STARTUP_ANIMATION_READY_FRAMES: u8 = 2;
+
 struct Flowsurface {
     main_window: window::Window,
     sidebar: dashboard::Sidebar,
@@ -86,7 +88,8 @@ struct Flowsurface {
     theme: data::Theme,
     notifications: Notifications,
     panel_windows: HashMap<window::Id, panel_window::State>,
-    startup_loading_started_at: std::time::Instant,
+    startup_animation_frames: u8,
+    startup_text_started_at: Option<std::time::Instant>,
     startup_phrases: widget::loading::StartupPhrases,
     startup_loading_finished: bool,
 }
@@ -163,7 +166,8 @@ impl Flowsurface {
             notifications: Notifications::new(),
             panel_windows: HashMap::new(),
             network: NetworkManager::new(saved_state.proxy_cfg),
-            startup_loading_started_at: std::time::Instant::now(),
+            startup_animation_frames: 0,
+            startup_text_started_at: None,
             startup_phrases: widget::loading::StartupPhrases::new(),
             startup_loading_finished: false,
         };
@@ -694,10 +698,17 @@ impl Flowsurface {
             return;
         }
 
-        if now.duration_since(self.startup_loading_started_at)
-            >= self.startup_phrases.total_duration()
-        {
-            self.startup_loading_finished = true;
+        if let Some(started_at) = self.startup_text_started_at {
+            if now.duration_since(started_at) >= self.startup_phrases.total_duration() {
+                self.startup_loading_finished = true;
+            }
+
+            return;
+        }
+
+        self.startup_animation_frames = self.startup_animation_frames.saturating_add(1);
+        if self.startup_animation_frames >= STARTUP_ANIMATION_READY_FRAMES {
+            self.startup_text_started_at = Some(now);
         }
     }
 
@@ -705,7 +716,8 @@ impl Flowsurface {
         if id == self.main_window.id && !self.startup_loading_finished {
             return widget::loading::startup_view(
                 &self.startup_phrases,
-                self.startup_loading_started_at.elapsed(),
+                self.startup_text_started_at
+                    .map(|started_at| started_at.elapsed()),
             );
         }
 
