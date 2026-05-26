@@ -1,11 +1,8 @@
 use crate::style;
 use iced::{
-    Alignment, Element, Font, Length, Point, Rectangle, Renderer, Size, Theme,
+    Alignment, Element, Font, Length, Rectangle, Size,
     font::Weight,
-    widget::{
-        canvas::{self, Canvas},
-        center, column, image, responsive, text,
-    },
+    widget::{center, column, image, responsive, text},
 };
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -19,11 +16,9 @@ const MIN_DISPLAY_WIDTH: f32 = 120.0;
 const PANEL_WIDTH_RATIO: f32 = 0.55;
 const PANEL_HEIGHT_RATIO: f32 = 0.46;
 const DISPLAY_SCALE_DIVISOR: f32 = 2.5;
-const STARTUP_PHRASE_MIN_MS: u64 = 1_000;
-const STARTUP_PHRASE_RANDOM_SPAN_MS: u64 = 1_000;
-const STARTUP_TRANSITION_MS: u64 = 360;
-const STARTUP_PHRASE_HEIGHT: f32 = 56.0;
-const STARTUP_PHRASE_MAX_WIDTH: f32 = 780.0;
+const STARTUP_PHRASE_COUNT: usize = 2;
+const STARTUP_PHRASE_DURATION: Duration = Duration::from_secs(2);
+const STARTUP_TOTAL_DURATION: Duration = Duration::from_secs(4);
 
 const STARTUP_PHRASE_POOL: &[&str] = &[
     "Warming up the candlesticks...",
@@ -112,77 +107,37 @@ static STARTED_AT: OnceLock<Instant> = OnceLock::new();
 #[derive(Debug, Clone)]
 pub struct StartupPhrases {
     phrases: Vec<&'static str>,
-    durations: Vec<Duration>,
-    total_duration: Duration,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct StartupPhraseFrame {
-    current: &'static str,
-    next: Option<&'static str>,
-    transition: f32,
 }
 
 impl StartupPhrases {
     pub fn new() -> Self {
         let mut seed = seed_from_clock();
-        let count = 2 + (next_randomish(&mut seed) % 2) as usize;
-        let mut phrases = Vec::with_capacity(count);
-        let mut durations = Vec::with_capacity(count);
-        let mut total_duration = Duration::ZERO;
+        let mut phrases = Vec::with_capacity(STARTUP_PHRASE_COUNT);
 
-        for _ in 0..count {
+        for _ in 0..STARTUP_PHRASE_COUNT {
             let phrase = pick_phrase(&mut seed, &phrases);
-            let duration = Duration::from_millis(
-                STARTUP_PHRASE_MIN_MS
-                    + (next_randomish(&mut seed) % (STARTUP_PHRASE_RANDOM_SPAN_MS + 1)),
-            );
-
             phrases.push(phrase);
-            durations.push(duration);
-            total_duration += duration;
         }
 
-        Self {
-            phrases,
-            durations,
-            total_duration,
-        }
+        Self { phrases }
     }
 
     pub fn total_duration(&self) -> Duration {
-        self.total_duration
+        STARTUP_TOTAL_DURATION
     }
 
-    fn frame(&self, elapsed: Duration) -> StartupPhraseFrame {
-        let mut remaining =
-            elapsed.min(self.total_duration.saturating_sub(Duration::from_millis(1)));
+    fn current(&self, elapsed: Duration) -> &'static str {
+        let index = if elapsed < STARTUP_PHRASE_DURATION {
+            0
+        } else {
+            1
+        };
 
-        for (index, duration) in self.durations.iter().enumerate() {
-            if remaining >= *duration {
-                remaining -= *duration;
-                continue;
-            }
-
-            let transition =
-                transition_progress(remaining, *duration, index + 1 < self.phrases.len());
-
-            return StartupPhraseFrame {
-                current: self.phrases[index],
-                next: self.phrases.get(index + 1).copied(),
-                transition,
-            };
-        }
-
-        StartupPhraseFrame {
-            current: self
-                .phrases
-                .last()
-                .copied()
-                .unwrap_or("Loading dashboard..."),
-            next: None,
-            transition: 0.0,
-        }
+        self.phrases
+            .get(index)
+            .or_else(|| self.phrases.last())
+            .copied()
+            .unwrap_or("Loading dashboard...")
     }
 }
 
@@ -202,9 +157,9 @@ pub fn startup_view<'a, Message: 'a>(
     phrases: &'a StartupPhrases,
     elapsed: Duration,
 ) -> Element<'a, Message> {
-    let frame = phrases.frame(elapsed);
+    let status = phrases.current(elapsed);
 
-    responsive(move |bounds| startup_loading_content(frame, bounds)).into()
+    responsive(move |bounds| startup_loading_content(status, bounds)).into()
 }
 
 fn loading_content<'a, Message: 'a>(status: String, bounds: Size) -> Element<'a, Message> {
@@ -220,15 +175,17 @@ fn loading_content<'a, Message: 'a>(status: String, bounds: Size) -> Element<'a,
 }
 
 fn startup_loading_content<'a, Message: 'a>(
-    frame: StartupPhraseFrame,
+    status: &'static str,
     bounds: Size,
 ) -> Element<'a, Message> {
-    let phrase_width = bounds.width.clamp(1.0, STARTUP_PHRASE_MAX_WIDTH);
     let content = column![
         animation(bounds),
-        Canvas::new(StartupPhraseCanvas { frame })
-            .width(Length::Fixed(phrase_width))
-            .height(Length::Fixed(STARTUP_PHRASE_HEIGHT))
+        text(status)
+            .font(startup_status_font())
+            .size(style::text_size::TITLE + 4.0)
+            .style(|_theme| iced::widget::text::Style {
+                color: Some(iced::Color::WHITE),
+            })
     ];
 
     center(content.align_x(Alignment::Center).spacing(12)).into()
@@ -295,104 +252,19 @@ fn status_font() -> Font {
     }
 }
 
+fn startup_status_font() -> Font {
+    Font {
+        weight: Weight::Normal,
+        ..style::AZERET_MONO
+    }
+}
+
 fn status_text_style(theme: &iced::Theme) -> iced::widget::text::Style {
     let palette = theme.extended_palette();
 
     iced::widget::text::Style {
         color: Some(palette.primary.weak.color),
     }
-}
-
-struct StartupPhraseCanvas {
-    frame: StartupPhraseFrame,
-}
-
-impl<Message> canvas::Program<Message> for StartupPhraseCanvas {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        theme: &Theme,
-        bounds: Rectangle,
-        _cursor: iced_core::mouse::Cursor,
-    ) -> Vec<canvas::Geometry<Renderer>> {
-        let palette = theme.extended_palette();
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let progress = smoothstep(self.frame.transition);
-        let text_color = palette.primary.weak.color;
-        let center_x = bounds.width / 2.0;
-        let center_y = bounds.height / 2.0;
-        let travel = 30.0;
-
-        draw_blurred_phrase(
-            &mut frame,
-            self.frame.current,
-            Point::new(center_x, center_y - travel * progress),
-            bounds.width,
-            text_color,
-            1.0 - progress,
-        );
-
-        if let Some(next) = self.frame.next {
-            draw_blurred_phrase(
-                &mut frame,
-                next,
-                Point::new(center_x, center_y + travel * (1.0 - progress)),
-                bounds.width,
-                text_color,
-                progress,
-            );
-        }
-
-        vec![frame.into_geometry()]
-    }
-}
-
-fn draw_blurred_phrase(
-    frame: &mut canvas::Frame,
-    phrase: &'static str,
-    position: Point,
-    max_width: f32,
-    color: iced::Color,
-    alpha: f32,
-) {
-    if alpha <= 0.01 {
-        return;
-    }
-
-    for (offset, blur_alpha) in [(-3.0, 0.08), (3.0, 0.08), (-1.5, 0.12), (1.5, 0.12)] {
-        draw_phrase(
-            frame,
-            phrase,
-            Point::new(position.x, position.y + offset),
-            max_width,
-            color.scale_alpha(alpha * blur_alpha),
-        );
-    }
-
-    draw_phrase(frame, phrase, position, max_width, color.scale_alpha(alpha));
-}
-
-fn draw_phrase(
-    frame: &mut canvas::Frame,
-    phrase: &'static str,
-    position: Point,
-    max_width: f32,
-    color: iced::Color,
-) {
-    frame.fill_text(canvas::Text {
-        content: phrase.to_string(),
-        position,
-        max_width,
-        color,
-        font: status_font(),
-        size: iced::Pixels(style::text_size::TITLE + 4.0),
-        align_x: Alignment::Center.into(),
-        align_y: Alignment::Center.into(),
-        ..canvas::Text::default()
-    });
 }
 
 fn pick_phrase(seed: &mut u64, selected: &[&'static str]) -> &'static str {
@@ -404,27 +276,6 @@ fn pick_phrase(seed: &mut u64, selected: &[&'static str]) -> &'static str {
     }
 
     STARTUP_PHRASE_POOL[next_index(seed, STARTUP_PHRASE_POOL.len())]
-}
-
-fn transition_progress(elapsed: Duration, duration: Duration, has_next: bool) -> f32 {
-    if !has_next {
-        return 0.0;
-    }
-
-    let transition = Duration::from_millis(STARTUP_TRANSITION_MS).min(duration / 2);
-    let transition_start = duration.saturating_sub(transition);
-
-    if elapsed < transition_start {
-        return 0.0;
-    }
-
-    (elapsed.saturating_sub(transition_start).as_secs_f32() / transition.as_secs_f32())
-        .clamp(0.0, 1.0)
-}
-
-fn smoothstep(value: f32) -> f32 {
-    let value = value.clamp(0.0, 1.0);
-    value * value * (3.0 - 2.0 * value)
 }
 
 fn next_index(seed: &mut u64, len: usize) -> usize {
