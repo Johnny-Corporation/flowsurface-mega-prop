@@ -87,6 +87,7 @@ struct Flowsurface {
     notifications: Notifications,
     panel_windows: HashMap<window::Id, panel_window::State>,
     startup_loading_started_at: std::time::Instant,
+    startup_phrases: widget::loading::StartupPhrases,
     startup_loading_finished: bool,
 }
 
@@ -162,6 +163,7 @@ impl Flowsurface {
             panel_windows: HashMap::new(),
             network: NetworkManager::new(saved_state.proxy_cfg),
             startup_loading_started_at: std::time::Instant::now(),
+            startup_phrases: widget::loading::StartupPhrases::new(),
             startup_loading_finished: false,
         };
 
@@ -691,7 +693,8 @@ impl Flowsurface {
             return;
         }
 
-        if now.duration_since(self.startup_loading_started_at) >= std::time::Duration::from_secs(3)
+        if now.duration_since(self.startup_loading_started_at)
+            >= self.startup_phrases.total_duration()
         {
             self.startup_loading_finished = true;
         }
@@ -699,7 +702,10 @@ impl Flowsurface {
 
     fn view(&self, id: window::Id) -> Element<'_, Message> {
         if id == self.main_window.id && !self.startup_loading_finished {
-            return widget::loading::view("Opening Trading Desk");
+            return widget::loading::startup_view(
+                &self.startup_phrases,
+                self.startup_loading_started_at.elapsed(),
+            );
         }
 
         let dashboard = self.active_dashboard();
