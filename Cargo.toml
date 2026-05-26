@@ -44,7 +44,6 @@ iced = { version = "0.14.0", default-features = false, features = [
     "advanced",
     "unconditional-rendering",
     "crisp",
-    "image",
     "x11",
     "wayland",
 ] }

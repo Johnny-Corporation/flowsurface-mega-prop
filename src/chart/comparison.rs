@@ -1,7 +1,6 @@
 use crate::connector::fetcher::{FetchRange, FetchSpec, RequestHandler};
 use crate::widget::chart::comparison::{DEFAULT_ZOOM_POINTS, LineComparison, LineComparisonEvent};
 use crate::widget::chart::{Series, Zoom, domain};
-use crate::widget::loading;
 
 use data::chart::Basis;
 use data::chart::comparison::Config;
@@ -118,7 +117,11 @@ impl ComparisonChart {
 
     pub fn view(&self, timezone: data::UserTimezone) -> iced::Element<'_, Message> {
         if self.series.iter().all(|s| s.points.is_empty()) {
-            return loading::view("Waiting for comparison data...");
+            return iced::widget::center(
+                iced::widget::text("Waiting for comparison data...")
+                    .size(crate::style::text_size::TITLE),
+            )
+            .into();
         }
 
         let chart: iced::Element<_> = LineComparison::<Series>::new(&self.series, self.timeframe)

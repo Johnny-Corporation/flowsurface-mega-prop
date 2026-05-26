@@ -23,7 +23,7 @@ use crate::{
     style::{self, Icon, icon_text},
     widget::{
         self, button_with_tooltip, chart::heatmap::HeatmapShader, column_drag, link_group_button,
-        loading, toast::Toast,
+        toast::Toast,
     },
     window::{self, Window},
 };
@@ -105,8 +105,6 @@ pub enum Event {
     ComparisonChartInteraction(super::chart::comparison::Message),
     HeatmapShaderInteraction(crate::widget::chart::heatmap::Message),
     MiniTickersListInteraction(modal::pane::mini_tickers_list::Message),
-    ReplayLoadingAnimation,
-    SkipLoadingAnimation,
 }
 
 pub struct State {
@@ -118,8 +116,6 @@ pub struct State {
     pub streams: ResolvedStream,
     pub status: Status,
     pub link_group: Option<LinkGroup>,
-    loading_animation_skipped: bool,
-    loading_progress: loading::FakeProgress,
 }
 
 impl State {
@@ -173,9 +169,6 @@ impl State {
         tickers: Vec<TickerInfo>,
         kind: ContentKind,
     ) -> Vec<StreamKind> {
-        self.loading_animation_skipped = false;
-        self.loading_progress.reset();
-
         if !(self.content.kind() == kind) {
             self.settings.selected_basis = None;
             self.settings.tick_multiply = None;
@@ -631,7 +624,8 @@ impl State {
 
         let uninitialized_base = |kind: ContentKind| -> Element<'a, Message> {
             if self.has_stream() {
-                loading::view(format!("Loading {}...", kind))
+                center(text(format!("Loading {}...", kind)).size(crate::style::text_size::TITLE))
+                    .into()
             } else {
                 let content = column![
                     text(kind.to_string()).size(crate::style::text_size::TITLE),
@@ -644,10 +638,7 @@ impl State {
             }
         };
 
-        let show_loading_gate =
-            !matches!(self.content, Content::Starter) && !self.loading_animation_skipped;
-
-        let mut body = match &self.content {
+        let body = match &self.content {
             Content::Starter => {
                 let content_picklist =
                     pick_list(ContentKind::ALL, Some(ContentKind::Starter), move |kind| {
@@ -1147,17 +1138,6 @@ impl State {
             }
         };
 
-        if show_loading_gate {
-            body = loading::view_fake_progress_with_controls(
-                format!("Loading {}...", self.content.kind()),
-                &self.loading_progress,
-                "Replay animation",
-                Message::PaneEvent(id, Event::ReplayLoadingAnimation),
-                "Skip animation",
-                Message::PaneEvent(id, Event::SkipLoadingAnimation),
-            );
-        }
-
         match &self.status {
             Status::Loading(InfoKind::FetchingKlines) => {
                 top_left_buttons = top_left_buttons.push(text("Fetching Klines..."));
@@ -1233,8 +1213,6 @@ impl State {
                 self.modal = None;
             }
             Event::ContentSelected(kind) => {
-                self.loading_animation_skipped = false;
-                self.loading_progress.reset();
                 self.content = Content::placeholder(kind);
 
                 if !matches!(kind, ContentKind::Starter) {
@@ -1628,13 +1606,6 @@ impl State {
                     }
                 }
             }
-            Event::SkipLoadingAnimation => {
-                self.loading_animation_skipped = true;
-            }
-            Event::ReplayLoadingAnimation => {
-                self.loading_animation_skipped = false;
-                self.loading_progress.reset();
-            }
         }
         None
     }
@@ -1914,8 +1885,6 @@ impl State {
     }
 
     pub fn tick(&mut self, now: Instant) -> Option<Action> {
-        self.loading_progress.tick(now);
-
         let invalidate_interval: Option<u64> = self.update_interval();
         let last_tick: Option<Instant> = self.last_tick();
 
@@ -1965,8 +1934,6 @@ impl Default for State {
             notifications: vec![],
             status: Status::Ready,
             link_group: None,
-            loading_animation_skipped: false,
-            loading_progress: loading::FakeProgress::new(),
         }
     }
 }
