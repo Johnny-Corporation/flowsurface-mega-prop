@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SESSION_NAME="flowsurface-megaprop-app"
+WORKTREE_ID="$(basename "$(dirname "$ROOT_DIR")")"
+SESSION_NAME="flowsurface-${WORKTREE_ID}-app"
 LOG_DIR="$ROOT_DIR/logs"
 LOG_FILE="$LOG_DIR/codex-cargo-run.log"
 
