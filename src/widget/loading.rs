@@ -1,114 +1,34 @@
 use crate::style;
 use iced::{
-    Alignment, ContentFit, Element, Font, Length, Rectangle, Size,
+    Alignment, Element, Font, Length, Rectangle, Size,
     font::Weight,
-    widget::{center, column, image, responsive, stack, text},
+    widget::{center, column, image, responsive, text},
 };
 use std::sync::OnceLock;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 const FRAME_MS: u128 = 40;
 const FRAME_COUNT: usize = 64;
 const FRAME_WIDTH: u32 = 480;
 const FRAME_HEIGHT: u32 = 270;
 const FRAME_ASPECT_RATIO: f32 = FRAME_WIDTH as f32 / FRAME_HEIGHT as f32;
-const PROGRESS_CANDLES: u8 = 10;
-const MIN_PROGRESS_DELAY_MS: u64 = 300;
-const PROGRESS_DELAY_SPAN_MS: u64 = 400;
 const MIN_DISPLAY_WIDTH: f32 = 120.0;
 const PANEL_WIDTH_RATIO: f32 = 0.55;
 const PANEL_HEIGHT_RATIO: f32 = 0.46;
+const DISPLAY_SCALE_DIVISOR: f32 = 2.5;
 
 static COLOR_ATLAS: OnceLock<image::Handle> = OnceLock::new();
-static GRAY_ATLAS: OnceLock<image::Handle> = OnceLock::new();
 static STARTED_AT: OnceLock<Instant> = OnceLock::new();
-
-#[derive(Debug, Clone)]
-pub struct FakeProgress {
-    colored_candles: u8,
-    next_step_at: Instant,
-    seed: u64,
-}
-
-impl FakeProgress {
-    pub fn new() -> Self {
-        let mut progress = Self {
-            colored_candles: 0,
-            next_step_at: Instant::now(),
-            seed: seed_from_clock(),
-        };
-
-        progress.schedule_next_step(Instant::now());
-        progress
-    }
-
-    pub fn tick(&mut self, now: Instant) {
-        if self.is_finalizing() {
-            return;
-        }
-
-        if now < self.next_step_at {
-            return;
-        }
-
-        self.colored_candles = self.colored_candles.saturating_add(1);
-
-        if !self.is_finalizing() {
-            self.schedule_next_step(now);
-        }
-    }
-
-    pub fn reveal_fraction(&self) -> f32 {
-        (self.colored_candles as f32 / PROGRESS_CANDLES as f32).clamp(0.0, 1.0)
-    }
-
-    pub fn status_text(&self, loading_status: String) -> String {
-        if self.is_finalizing() {
-            "Finalizing...".to_string()
-        } else {
-            loading_status
-        }
-    }
-
-    pub fn is_finalizing(&self) -> bool {
-        self.colored_candles >= PROGRESS_CANDLES
-    }
-
-    fn schedule_next_step(&mut self, now: Instant) {
-        let delay_ms = MIN_PROGRESS_DELAY_MS + next_randomish(&mut self.seed);
-        self.next_step_at = now + Duration::from_millis(delay_ms);
-    }
-}
-
-impl Default for FakeProgress {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 pub fn view<'a, Message: 'a>(status: impl Into<String>) -> Element<'a, Message> {
     let status = status.into();
 
-    responsive(move |bounds| loading_content(status.clone(), bounds, 1.0)).into()
+    responsive(move |bounds| loading_content(status.clone(), bounds)).into()
 }
 
-pub fn view_fake_progress<'a, Message: 'a>(
-    status: impl Into<String>,
-    progress: &'a FakeProgress,
-) -> Element<'a, Message> {
-    let status = progress.status_text(status.into());
-    let reveal_fraction = progress.reveal_fraction();
-
-    responsive(move |bounds| loading_content(status.clone(), bounds, reveal_fraction)).into()
-}
-
-fn loading_content<'a, Message: 'a>(
-    status: String,
-    bounds: Size,
-    reveal_fraction: f32,
-) -> Element<'a, Message> {
+fn loading_content<'a, Message: 'a>(status: String, bounds: Size) -> Element<'a, Message> {
     let content = column![
-        animation(bounds, reveal_fraction),
+        animation(bounds),
         text(status)
             .font(status_font())
             .size(style::text_size::TITLE + 4.0)
@@ -118,28 +38,11 @@ fn loading_content<'a, Message: 'a>(
     center(content.align_x(Alignment::Center).spacing(12)).into()
 }
 
-fn animation<'a, Message: 'a>(bounds: Size, reveal_fraction: f32) -> Element<'a, Message> {
+fn animation<'a, Message: 'a>(bounds: Size) -> Element<'a, Message> {
     let (width, height) = display_size(bounds);
-    let color_width = color_crop_width(reveal_fraction);
-    let color_display_width = width * reveal_fraction.clamp(0.0, 1.0);
 
-    let gray = image(gray_atlas_handle())
+    image(color_atlas_handle())
         .crop(current_frame_region())
-        .width(Length::Fixed(width))
-        .height(Length::Fixed(height))
-        .content_fit(ContentFit::Contain);
-
-    if color_width == 0 {
-        return gray.into();
-    }
-
-    let color = image(color_atlas_handle())
-        .crop(current_color_frame_region(color_width))
-        .width(Length::Fixed(color_display_width))
-        .height(Length::Fixed(height))
-        .content_fit(ContentFit::Contain);
-
-    stack![gray, color]
         .width(Length::Fixed(width))
         .height(Length::Fixed(height))
         .into()
@@ -155,7 +58,10 @@ fn display_size(bounds: Size) -> (f32, f32) {
     let width = width_limit.min(height_limit * FRAME_ASPECT_RATIO);
     let height = width / FRAME_ASPECT_RATIO;
 
-    (width, height)
+    (
+        width / DISPLAY_SCALE_DIVISOR,
+        height / DISPLAY_SCALE_DIVISOR,
+    )
 }
 
 fn color_atlas_handle() -> image::Handle {
@@ -163,16 +69,6 @@ fn color_atlas_handle() -> image::Handle {
         .get_or_init(|| {
             image::Handle::from_bytes(
                 &include_bytes!("../../assets/loading/loading_candles_atlas.png")[..],
-            )
-        })
-        .clone()
-}
-
-fn gray_atlas_handle() -> image::Handle {
-    GRAY_ATLAS
-        .get_or_init(|| {
-            image::Handle::from_bytes(
-                &include_bytes!("../../assets/loading/loading_candles_gray_atlas.png")[..],
             )
         })
         .clone()
@@ -187,17 +83,6 @@ fn current_frame_region() -> Rectangle<u32> {
         width: FRAME_WIDTH,
         height: FRAME_HEIGHT,
     }
-}
-
-fn current_color_frame_region(width: u32) -> Rectangle<u32> {
-    let mut region = current_frame_region();
-    region.width = width;
-    region
-}
-
-fn color_crop_width(reveal_fraction: f32) -> u32 {
-    let width = (FRAME_WIDTH as f32 * reveal_fraction.clamp(0.0, 1.0)).round() as u32;
-    width.min(FRAME_WIDTH)
 }
 
 fn current_frame_index() -> usize {
@@ -220,17 +105,4 @@ fn status_text_style(theme: &iced::Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
         color: Some(palette.primary.weak.color),
     }
-}
-
-fn seed_from_clock() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(0x5EED_1234)
-}
-
-fn next_randomish(seed: &mut u64) -> u64 {
-    *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-
-    (*seed >> 32) % (PROGRESS_DELAY_SPAN_MS + 1)
 }
