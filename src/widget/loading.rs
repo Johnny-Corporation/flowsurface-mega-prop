@@ -18,8 +18,7 @@ const PANEL_HEIGHT_RATIO: f32 = 0.46;
 const DISPLAY_SCALE_DIVISOR: f32 = 2.5;
 const STARTUP_PHRASE_COUNT: usize = 2;
 const STARTUP_PHRASE_DURATION: Duration = Duration::from_secs(2);
-const STARTUP_TEXT_SYNC_DELAY: Duration = Duration::from_millis(160);
-const STARTUP_TOTAL_DURATION: Duration = Duration::from_millis(4_160);
+const STARTUP_TOTAL_DURATION: Duration = Duration::from_secs(4);
 
 const STARTUP_PHRASE_POOL: &[&str] = &[
     "Warming up the candlesticks...",
@@ -128,8 +127,7 @@ impl StartupPhrases {
     }
 
     fn current(&self, elapsed: Duration) -> &'static str {
-        let phrase_elapsed = elapsed.saturating_sub(STARTUP_TEXT_SYNC_DELAY);
-        let index = if phrase_elapsed < STARTUP_PHRASE_DURATION {
+        let index = if elapsed < STARTUP_PHRASE_DURATION {
             0
         } else {
             1
@@ -160,9 +158,8 @@ pub fn startup_view<'a, Message: 'a>(
     elapsed: Duration,
 ) -> Element<'a, Message> {
     let status = phrases.current(elapsed);
-    let text_alpha = startup_text_alpha(elapsed);
 
-    responsive(move |bounds| startup_loading_content(status, text_alpha, bounds)).into()
+    responsive(move |bounds| startup_loading_content(status, bounds)).into()
 }
 
 fn loading_content<'a, Message: 'a>(status: String, bounds: Size) -> Element<'a, Message> {
@@ -179,7 +176,6 @@ fn loading_content<'a, Message: 'a>(status: String, bounds: Size) -> Element<'a,
 
 fn startup_loading_content<'a, Message: 'a>(
     status: &'static str,
-    text_alpha: f32,
     bounds: Size,
 ) -> Element<'a, Message> {
     let content = column![
@@ -188,7 +184,7 @@ fn startup_loading_content<'a, Message: 'a>(
             .font(startup_status_font())
             .size(style::text_size::TITLE + 4.0)
             .style(move |_theme| iced::widget::text::Style {
-                color: Some(iced::Color::WHITE.scale_alpha(text_alpha)),
+                color: Some(iced::Color::WHITE),
             })
     ];
 
@@ -268,14 +264,6 @@ fn status_text_style(theme: &iced::Theme) -> iced::widget::text::Style {
 
     iced::widget::text::Style {
         color: Some(palette.primary.weak.color),
-    }
-}
-
-fn startup_text_alpha(elapsed: Duration) -> f32 {
-    if elapsed >= STARTUP_TEXT_SYNC_DELAY {
-        1.0
-    } else {
-        0.0
     }
 }
 
