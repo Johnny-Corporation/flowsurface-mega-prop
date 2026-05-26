@@ -10,6 +10,7 @@ mod notify;
 mod panel_window;
 mod screen;
 mod style;
+mod touch_id;
 mod version;
 mod widget;
 mod window;
@@ -72,7 +73,8 @@ fn main() {
 }
 
 struct Flowsurface {
-    main_window: window::Window,
+    main_window: Option<window::Window>,
+    main_window_spec: Option<WindowSpec>,
     sidebar: dashboard::Sidebar,
     handles: exchange::adapter::AdapterHandles,
     layout_manager: LayoutManager,
@@ -125,17 +127,6 @@ impl Flowsurface {
     fn new() -> (Self, Task<Message>) {
         let saved_state = layout::load_saved_state();
 
-        let (main_window_id, open_main_window) = {
-            let (position, size) = saved_state.window();
-            let config = window::Settings {
-                size,
-                position,
-                exit_on_close_request: false,
-                ..window::settings()
-            };
-            window::open(config)
-        };
-
         let handles = exchange::adapter::AdapterHandles::spawn_venues(
             exchange::adapter::Venue::ALL,
             saved_state.proxy_cfg.as_ref(),
@@ -146,7 +137,8 @@ impl Flowsurface {
         let (audio_stream, audio_init_err) = AudioStream::new(saved_state.audio_cfg);
 
         let mut state = Self {
-            main_window: window::Window::new(main_window_id),
+            main_window: None,
+            main_window_spec: saved_state.main_window,
             layout_manager: saved_state.layout_manager,
             theme_editor: ThemeEditor::new(saved_state.custom_theme),
             audio_stream,
@@ -174,45 +166,31 @@ impl Flowsurface {
             state.layout_manager = LayoutManager::new();
         }
 
-        let unlock_prompt = if state.connection_state.has_saved_trade_credentials() {
+        let saved_trade_credentials = state.connection_state.saved_trade_credentials_count();
+        log::info!(
+            "Startup credential gate found {saved_trade_credentials} saved trading connection(s)"
+        );
+
+        let startup_task = if saved_trade_credentials > 0 {
             state.open_panel_window(panel_window::Kind::Unlock)
         } else {
-            Task::none()
+            state.connection_state.autoconnect();
+            state
+                .open_main_window()
+                .chain(launch_sidebar.map(Message::Sidebar))
         };
 
-        let active_layout_id = state
-            .layout_manager
-            .active_layout_id()
-            .or_else(|| {
-                state
-                    .layout_manager
-                    .layouts
-                    .first()
-                    .map(|layout| &layout.id)
-            })
-            .map(|layout| layout.unique);
-
-        let load_layout = active_layout_id
-            .map(|uid| state.load_layout(uid, main_window_id))
-            .unwrap_or_else(|| {
-                log::error!("No active layout could be selected at startup");
-                Task::none()
-            });
-
-        (
-            state,
-            open_main_window
-                .discard()
-                .chain(load_layout)
-                .chain(unlock_prompt)
-                .chain(launch_sidebar.map(Message::Sidebar)),
-        )
+        (state, startup_task)
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::MarketWsEvent(event) => {
-                let main_window_id = self.main_window.id;
+                let Some(main_window) = self.main_window else {
+                    return Task::none();
+                };
+
+                let main_window_id = main_window.id;
                 let dashboard = self.active_dashboard_mut();
 
                 match event {
@@ -261,7 +239,11 @@ impl Flowsurface {
                     panel.tick(now);
                 }
 
-                let main_window_id = self.main_window.id;
+                let Some(main_window) = self.main_window else {
+                    return Task::none();
+                };
+
+                let main_window_id = main_window.id;
                 let handles = self.handles.clone();
 
                 return self
@@ -274,11 +256,16 @@ impl Flowsurface {
             }
             Message::WindowEvent(event) => match event {
                 window::Event::CloseRequested(window) => {
-                    if self.panel_windows.remove(&window).is_some() {
+                    if let Some(panel) = self.panel_windows.remove(&window) {
+                        if self.main_window.is_none() && panel.kind == panel_window::Kind::Unlock {
+                            return iced::exit();
+                        }
                         return window::close(window);
                     }
 
-                    let main_window = self.main_window.id;
+                    let Some(main_window) = self.main_window.map(|window| window.id) else {
+                        return window::close(window);
+                    };
                     let dashboard = self.active_dashboard_mut();
 
                     if window != main_window {
@@ -310,26 +297,28 @@ impl Flowsurface {
             Message::RestartRequested(None) => {
                 self.confirm_dialog = None;
 
+                let Some(main_window) = self.main_window.map(|window| window.id) else {
+                    return self.restart();
+                };
+
                 let mut active_windows = self
                     .active_dashboard()
                     .popout
                     .keys()
                     .copied()
                     .collect::<Vec<window::Id>>();
-                active_windows.push(self.main_window.id);
+                active_windows.push(main_window);
 
                 return window::collect_window_specs(active_windows, |windows| {
                     Message::RestartRequested(Some(windows))
                 });
             }
             Message::GoBack => {
-                let main_window = self.main_window.id;
-
                 if self.confirm_dialog.is_some() {
                     self.confirm_dialog = None;
                 } else if self.sidebar.active_menu().is_some() {
                     self.sidebar.set_menu(None);
-                } else {
+                } else if let Some(main_window) = self.main_window.map(|window| window.id) {
                     let dashboard = self.active_dashboard_mut();
 
                     if dashboard.go_back(main_window) {
@@ -339,14 +328,17 @@ impl Flowsurface {
                     } else {
                         self.sidebar.hide_tickers_table();
                     }
+                } else {
+                    return Task::none();
                 }
             }
             Message::ThemeSelected(theme) => {
                 self.theme = data::Theme(theme.clone());
 
-                let main_window = self.main_window.id;
-                self.active_dashboard_mut()
-                    .theme_updated(main_window, &theme);
+                if let Some(main_window) = self.main_window.map(|window| window.id) {
+                    self.active_dashboard_mut()
+                        .theme_updated(main_window, &theme);
+                }
             }
             Message::Dashboard {
                 layout_id: id,
@@ -357,7 +349,9 @@ impl Flowsurface {
                     return Task::none();
                 };
 
-                let main_window = self.main_window;
+                let Some(main_window) = self.main_window else {
+                    return Task::none();
+                };
                 let layout_id = id.unwrap_or(active_layout.unique);
                 let handles = self.handles.clone();
 
@@ -433,9 +427,10 @@ impl Flowsurface {
                         Some(dashboard::Event::RequestPalette) => {
                             let theme = self.theme.0.clone();
 
-                            let main_window = self.main_window.id;
-                            self.active_dashboard_mut()
-                                .theme_updated(main_window, &theme);
+                            if let Some(main_window) = self.main_window.map(|window| window.id) {
+                                self.active_dashboard_mut()
+                                    .theme_updated(main_window, &theme);
+                            }
 
                             Task::none()
                         }
@@ -468,12 +463,19 @@ impl Flowsurface {
 
                     if handles_connection_action {
                         let should_close_unlock = kind == panel_window::Kind::Unlock
-                            && action == panel_window::ConnectionAction::Confirm;
+                            && matches!(
+                                action,
+                                panel_window::ConnectionAction::Confirm
+                                    | panel_window::ConnectionAction::TouchIdUnlock
+                            );
                         self.connection_state.update(action);
 
-                        if should_close_unlock {
+                        if should_close_unlock && self.connection_state.is_session_unlocked() {
+                            self.connection_state.autoconnect();
                             self.panel_windows.remove(&window);
-                            return window::close(window);
+                            return window::close(window)
+                                .chain(self.open_main_window())
+                                .chain(self.sidebar.initial_fetch().map(Message::Sidebar));
                         }
                     } else if let Some(panel) = self.panel_windows.get_mut(&window) {
                         panel.update(panel_window::PanelMessage::ConnectionAction(action));
@@ -495,10 +497,14 @@ impl Flowsurface {
                 self.ui_scale_factor = value;
             }
             Message::ToggleTradeFetch(checked) => {
+                let Some(main_window) = self.main_window else {
+                    return Task::none();
+                };
+
                 self.layout_manager
                     .iter_dashboards_mut()
                     .for_each(|dashboard| {
-                        dashboard.toggle_trade_fetch(checked, &self.main_window);
+                        dashboard.toggle_trade_fetch(checked, &main_window);
                     });
 
                 if checked {
@@ -513,6 +519,10 @@ impl Flowsurface {
 
                 match action {
                     Some(modal::layout_manager::Action::Select(layout)) => {
+                        let Some(main_window) = self.main_window.map(|window| window.id) else {
+                            return Task::none();
+                        };
+
                         let active_popout_keys = self
                             .active_dashboard()
                             .popout
@@ -543,7 +553,7 @@ impl Flowsurface {
                             event: msg,
                         })
                         .chain(window_tasks)
-                        .chain(self.load_layout(layout, self.main_window.id));
+                        .chain(self.load_layout(layout, main_window));
                     }
                     Some(modal::layout_manager::Action::Clone(id)) => {
                         let manager = &mut self.layout_manager;
@@ -619,9 +629,10 @@ impl Flowsurface {
                     Some(modal::theme_editor::Action::UpdateTheme(theme)) => {
                         self.theme = data::Theme(theme.clone());
 
-                        let main_window = self.main_window.id;
-                        self.active_dashboard_mut()
-                            .theme_updated(main_window, &theme);
+                        if let Some(main_window) = self.main_window.map(|window| window.id) {
+                            self.active_dashboard_mut()
+                                .theme_updated(main_window, &theme);
+                        }
                     }
                     None => {}
                 }
@@ -643,7 +654,9 @@ impl Flowsurface {
                             .with_confirm_btn_text("Restart now".to_string()),
                         );
 
-                        let main_window = self.main_window.id;
+                        let Some(main_window) = self.main_window.map(|window| window.id) else {
+                            return self.restart();
+                        };
                         let dashboard = self.active_dashboard_mut();
 
                         let mut active_windows = dashboard
@@ -669,7 +682,9 @@ impl Flowsurface {
 
                 match action {
                     Some(dashboard::sidebar::Action::TickerSelected(ticker_info, content)) => {
-                        let main_window_id = self.main_window.id;
+                        let Some(main_window_id) = self.main_window.map(|window| window.id) else {
+                            return task.map(Message::Sidebar);
+                        };
                         let handles = self.handles.clone();
 
                         let task = {
@@ -706,9 +721,13 @@ impl Flowsurface {
                 self.volume_size_unit = pref;
                 self.confirm_dialog = None;
 
+                let Some(main_window) = self.main_window.map(|window| window.id) else {
+                    return self.restart();
+                };
+
                 let mut active_windows: Vec<window::Id> =
                     self.active_dashboard().popout.keys().copied().collect();
-                active_windows.push(self.main_window.id);
+                active_windows.push(main_window);
 
                 return window::collect_window_specs(active_windows, |windows| {
                     Message::RestartRequested(Some(windows))
@@ -721,17 +740,19 @@ impl Flowsurface {
     fn view(&self, id: window::Id) -> Element<'_, Message> {
         let dashboard = self.active_dashboard();
         let sidebar_pos = self.sidebar.position();
+        let main_window = self.main_window.as_ref();
 
         let tickers_table = &self.sidebar.tickers_table;
 
-        let content = if id == self.main_window.id {
+        let content = if Some(id) == main_window.map(|window| window.id) {
+            let main_window = main_window.expect("main window exists for dashboard view");
             let sidebar_view = self
                 .sidebar
                 .view(self.audio_stream.volume())
                 .map(Message::Sidebar);
 
             let dashboard_view = dashboard
-                .view(&self.main_window, tickers_table, self.timezone)
+                .view(main_window, tickers_table, self.timezone)
                 .map(move |msg| Message::Dashboard {
                     layout_id: None,
                     event: msg,
@@ -783,16 +804,21 @@ impl Flowsurface {
             .padding(padding::top(style::TITLE_PADDING_TOP))
             .into()
         } else {
-            container(
-                dashboard
-                    .view_window(id, &self.main_window, tickers_table, self.timezone)
-                    .map(move |msg| Message::Dashboard {
-                        layout_id: None,
-                        event: msg,
-                    }),
-            )
-            .padding(padding::top(style::TITLE_PADDING_TOP))
-            .into()
+            match main_window {
+                Some(main_window) => container(
+                    dashboard
+                        .view_window(id, main_window, tickers_table, self.timezone)
+                        .map(move |msg| Message::Dashboard {
+                            layout_id: None,
+                            event: msg,
+                        }),
+                )
+                .padding(padding::top(style::TITLE_PADDING_TOP))
+                .into(),
+                None => container(text("Unlock required").size(style::text_size::BODY))
+                    .padding(18)
+                    .into(),
+            }
         };
 
         toast::Manager::new(
@@ -829,16 +855,7 @@ impl Flowsurface {
 
     fn subscription(&self) -> Subscription<Message> {
         let window_events = window::events().map(Message::WindowEvent);
-        let sidebar = self.sidebar.subscription().map(Message::Sidebar);
-
-        let active_market_exchanges = self.connection_state.active_market_exchanges();
-        let exchange_streams = self
-            .active_dashboard()
-            .market_subscriptions(&self.handles, &active_market_exchanges)
-            .map(Message::MarketWsEvent);
-
         let tick = iced::window::frames().map(Message::Tick);
-
         let hotkeys = keyboard::listen().filter_map(|event| {
             let keyboard::Event::KeyPressed { key, .. } = event else {
                 return None;
@@ -849,13 +866,20 @@ impl Flowsurface {
             }
         });
 
-        Subscription::batch(vec![
-            exchange_streams,
-            sidebar,
-            window_events,
-            tick,
-            hotkeys,
-        ])
+        let mut subscriptions = vec![window_events, tick, hotkeys];
+
+        if self.main_window.is_some() {
+            subscriptions.push(self.sidebar.subscription().map(Message::Sidebar));
+
+            let active_market_exchanges = self.connection_state.active_market_exchanges();
+            subscriptions.push(
+                self.active_dashboard()
+                    .market_subscriptions(&self.handles, &active_market_exchanges)
+                    .map(Message::MarketWsEvent),
+            );
+        }
+
+        Subscription::batch(subscriptions)
     }
 
     fn active_dashboard(&self) -> &Dashboard {
@@ -904,6 +928,40 @@ impl Flowsurface {
                 log::error!("Active layout missing after selection: {}", layout_uid);
                 Task::none()
             })
+    }
+
+    fn open_main_window(&mut self) -> Task<Message> {
+        if self.main_window.is_some() {
+            return Task::none();
+        }
+
+        let (position, size) = self.main_window_spec.map_or(
+            (window::Position::Centered, crate::window::default_size()),
+            |spec| (window::Position::Specific(spec.position()), spec.size()),
+        );
+        let config = window::Settings {
+            size,
+            position,
+            exit_on_close_request: false,
+            ..window::settings()
+        };
+        let (main_window_id, open_main_window) = window::open(config);
+        self.main_window = Some(window::Window::new(main_window_id));
+
+        let active_layout_id = self
+            .layout_manager
+            .active_layout_id()
+            .or_else(|| self.layout_manager.layouts.first().map(|layout| &layout.id))
+            .map(|layout| layout.unique);
+
+        let load_layout = active_layout_id
+            .map(|uid| self.load_layout(uid, main_window_id))
+            .unwrap_or_else(|| {
+                log::error!("No active layout could be selected when opening the dashboard");
+                Task::none()
+            });
+
+        open_main_window.discard().chain(load_layout)
     }
 
     fn open_panel_window(&mut self, kind: panel_window::Kind) -> Task<Message> {
@@ -1183,7 +1241,9 @@ impl Flowsurface {
                 }
             }
             sidebar::Menu::Layout => {
-                let main_window = self.main_window.id;
+                let Some(main_window) = self.main_window.map(|window| window.id) else {
+                    return base;
+                };
 
                 let manage_pane = if let Some((window_id, pane_id)) = dashboard.focus {
                     let selected_pane_str =
@@ -1392,10 +1452,11 @@ impl Flowsurface {
                 .clone(),
         };
 
-        let main_window_spec = windows
-            .iter()
-            .find(|(id, _)| **id == self.main_window.id)
-            .map(|(_, spec)| *spec);
+        let main_window_spec = self
+            .main_window
+            .and_then(|main_window| windows.get(&main_window.id).copied())
+            .or(self.main_window_spec);
+        self.main_window_spec = main_window_spec;
 
         let audio_cfg = data::AudioStream::from(&self.audio_stream);
 
@@ -1431,7 +1492,10 @@ impl Flowsurface {
     fn restart(&mut self) -> Task<Message> {
         let mut windows_to_close: Vec<window::Id> =
             self.active_dashboard().popout.keys().copied().collect();
-        windows_to_close.push(self.main_window.id);
+        windows_to_close.extend(self.panel_windows.keys().copied());
+        if let Some(main_window) = self.main_window {
+            windows_to_close.push(main_window.id);
+        }
 
         let close_windows = Task::batch(
             windows_to_close

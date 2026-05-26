@@ -125,6 +125,12 @@ impl Sidebar {
         self.tickers_table.subscription().map(Message::TickersTable)
     }
 
+    pub fn initial_fetch(&self) -> Task<Message> {
+        self.tickers_table
+            .initial_fetch()
+            .map(Message::TickersTable)
+    }
+
     fn nav_buttons(
         &self,
         is_table_open: bool,

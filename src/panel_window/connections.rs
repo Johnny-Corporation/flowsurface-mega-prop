@@ -2,18 +2,20 @@ use crate::style;
 
 use data::config::connection_credentials::{
     ConnectionCredentialRef, ConnectionSecret, delete_connection_secret, load_connection_secret,
-    save_connection_secret,
+    load_or_create_device_vault_key, save_connection_secret,
 };
 use exchange::adapter::{
-    Exchange, MexcBlockingPrivateClient, MexcCredentials, available_balances_from_futures_assets,
-    available_balances_from_spot_account,
+    Exchange, MexcBlockingPrivateClient, MexcCredentials, MexcFuturesResponse,
+    available_balances_from_futures_assets, available_balances_from_spot_account,
 };
 use iced::{
     Alignment, Element, Length, Theme, padding,
     widget::{button, column, container, pick_list, row, text, text_input},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
+    cmp::Reverse,
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::Duration,
@@ -58,6 +60,9 @@ pub(crate) struct ConnectionPanelState {
     logs: Vec<String>,
     last_action: String,
     session_vault_key: String,
+    session_unlocked_by_touch_id: bool,
+    touch_id_available: bool,
+    touch_id_status: String,
     next_connection_id: u64,
     probe_tx: Sender<ConnectionProbeResult>,
     probe_rx: Receiver<ConnectionProbeResult>,
@@ -78,6 +83,24 @@ pub(crate) struct ConnectionAccountBalance {
     pub source: String,
     pub asset: String,
     pub available: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionTradeRecord {
+    pub timestamp_ms: i64,
+    pub timestamp: String,
+    pub source: String,
+    pub symbol: String,
+    pub side: String,
+    pub order_type: String,
+    pub order_price: String,
+    pub average_price: String,
+    pub quantity: String,
+    pub filled_quantity: String,
+    pub pnl: String,
+    pub fee: String,
+    pub state: String,
+    pub order_id: String,
 }
 
 impl Default for ConnectionPanelState {
@@ -119,6 +142,9 @@ impl Default for ConnectionPanelState {
             logs,
             last_action: "Ready".to_string(),
             session_vault_key: String::new(),
+            session_unlocked_by_touch_id: false,
+            touch_id_available: crate::touch_id::is_available(),
+            touch_id_status: "Touch ID not checked".to_string(),
             next_connection_id,
             probe_tx,
             probe_rx,
@@ -169,7 +195,9 @@ impl ConnectionPanelState {
             }
             ConnectionAction::SessionVaultKeyChanged(value) => {
                 self.session_vault_key = value;
+                self.session_unlocked_by_touch_id = false;
             }
+            ConnectionAction::TouchIdUnlock => self.unlock_with_touch_id(),
             ConnectionAction::SaveDraft => self.save_draft(),
             ConnectionAction::CancelDraft => {
                 self.draft = None;
@@ -230,10 +258,17 @@ impl ConnectionPanelState {
     }
 
     pub(crate) fn has_saved_trade_credentials(&self) -> bool {
-        self.rows.iter().any(|row| {
-            row.mode == ConnectionMode::Trade
-                && matches!(row.credentials, CredentialState::Saved { .. })
-        })
+        self.saved_trade_credentials_count() > 0
+    }
+
+    pub(crate) fn saved_trade_credentials_count(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| {
+                row.mode == ConnectionMode::Trade
+                    && matches!(row.credentials, CredentialState::Saved { .. })
+            })
+            .count()
     }
 
     pub(crate) fn is_session_unlocked(&self) -> bool {
@@ -242,12 +277,24 @@ impl ConnectionPanelState {
 
     pub(crate) fn session_status(&self) -> &'static str {
         if self.is_session_unlocked() {
-            "Session PIN entered"
+            if self.session_unlocked_by_touch_id {
+                "Session unlocked with Touch ID"
+            } else {
+                "Session PIN entered"
+            }
         } else if self.has_saved_trade_credentials() {
-            "Session PIN required for trading connections"
+            "Unlock required for trading connections"
         } else {
             "No saved trading credentials"
         }
+    }
+
+    pub(crate) fn touch_id_available(&self) -> bool {
+        self.touch_id_available
+    }
+
+    pub(crate) fn touch_id_status(&self) -> &str {
+        &self.touch_id_status
     }
 
     pub(crate) fn account_summary(&self) -> ConnectionAccountSummary {
@@ -299,6 +346,81 @@ impl ConnectionPanelState {
         }
     }
 
+    pub(crate) fn trade_history(&self) -> Vec<ConnectionTradeRecord> {
+        let mut trades = self
+            .rows
+            .iter()
+            .flat_map(|row| row.trades.iter().cloned())
+            .collect::<Vec<_>>();
+        trades.sort_by_key(|trade| Reverse(trade.timestamp_ms));
+        trades.truncate(200);
+        trades
+    }
+
+    pub(crate) fn autoconnect(&mut self) {
+        let indices = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                row.is_autoconnect_eligible(self.is_session_unlocked())
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+
+        if indices.is_empty() {
+            self.last_action = "Autoconnect skipped".to_string();
+            return;
+        }
+
+        self.last_action = "Autoconnect".to_string();
+        for index in indices.iter().copied() {
+            if let Some(row) = self.rows.get_mut(index) {
+                row.enabled = true;
+                row.test_state = ConnectionTestState::Loading;
+                row.balances.clear();
+                row.trades.clear();
+                let label = row.label();
+                self.push_log(format!("[connections] Autoconnect testing {label}"));
+            }
+        }
+
+        self.persist_rows();
+
+        for index in indices {
+            self.start_connection_test(index);
+        }
+    }
+
+    fn unlock_with_touch_id(&mut self) {
+        self.last_action = "Touch ID".to_string();
+
+        if !self.touch_id_available {
+            self.touch_id_status = "Touch ID is not available on this Mac".to_string();
+            self.push_log("[credentials] Touch ID is not available".to_string());
+            return;
+        }
+
+        match crate::touch_id::authenticate("Unlock Flowsurface API credentials") {
+            Ok(()) => match load_or_create_device_vault_key() {
+                Ok(vault_key) => {
+                    self.session_vault_key = vault_key;
+                    self.session_unlocked_by_touch_id = true;
+                    self.touch_id_status = "Touch ID accepted".to_string();
+                    self.push_log("[credentials] Touch ID accepted".to_string());
+                }
+                Err(error) => {
+                    self.touch_id_status = error.clone();
+                    self.push_log(format!("[credentials] {error}"));
+                }
+            },
+            Err(error) => {
+                self.touch_id_status = error.clone();
+                self.push_log(format!("[credentials] {error}"));
+            }
+        }
+    }
+
     fn toggle(&mut self, index: usize) {
         let Some(row) = self.rows.get_mut(index) else {
             return;
@@ -310,6 +432,7 @@ impl ConnectionPanelState {
             row.enabled = false;
             row.test_state = ConnectionTestState::Idle;
             row.balances.clear();
+            row.trades.clear();
             self.last_action = "Toggle".to_string();
             self.push_log(format!("[connections] {label} disabled"));
             self.persist_rows();
@@ -319,6 +442,7 @@ impl ConnectionPanelState {
         row.enabled = true;
         row.test_state = ConnectionTestState::Loading;
         row.balances.clear();
+        row.trades.clear();
         self.last_action = "Toggle".to_string();
         self.push_log(format!("[connections] Testing {label}"));
         self.persist_rows();
@@ -390,7 +514,8 @@ impl ConnectionPanelState {
 
             let vault_key = self.session_vault_key.trim();
             if vault_key.is_empty() {
-                let error = "Enter session PIN/passphrase before saving API keys".to_string();
+                let error =
+                    "Unlock with Touch ID or enter a local PIN before saving API keys".to_string();
                 draft.error = Some(error.clone());
                 self.draft = Some(draft);
                 self.last_action = "Credential save failed".to_string();
@@ -479,6 +604,7 @@ impl ConnectionPanelState {
                 row_id,
                 outcome: Err(status),
                 balances: Vec::new(),
+                trades: Vec::new(),
             });
             return;
         };
@@ -500,6 +626,7 @@ impl ConnectionPanelState {
                 row.enabled = true;
                 row.test_state = ConnectionTestState::Success(message.clone());
                 row.balances = result.balances;
+                row.trades = result.trades;
                 format!("[connections] {label} connected")
             }
             Err(error) => {
@@ -507,6 +634,7 @@ impl ConnectionPanelState {
                 row.enabled = false;
                 row.test_state = ConnectionTestState::Error(error.clone());
                 row.balances.clear();
+                row.trades.clear();
                 format!("[connections] {label} failed: {error}")
             }
         };
@@ -527,6 +655,7 @@ struct ConnectionRow {
     credentials: CredentialState,
     test_state: ConnectionTestState,
     balances: Vec<exchange::adapter::MexcAvailableBalance>,
+    trades: Vec<ConnectionTradeRecord>,
 }
 
 impl ConnectionRow {
@@ -546,6 +675,7 @@ impl ConnectionRow {
             credentials: CredentialState::NotRequired,
             test_state: ConnectionTestState::Idle,
             balances: Vec::new(),
+            trades: Vec::new(),
         }
     }
 
@@ -591,6 +721,19 @@ impl ConnectionRow {
 
     fn is_connected(&self) -> bool {
         self.enabled && matches!(self.test_state, ConnectionTestState::Success(_))
+    }
+
+    fn is_autoconnect_eligible(&self, session_unlocked: bool) -> bool {
+        if self.exchange != ConnectionExchange::Mexc {
+            return false;
+        }
+
+        match self.mode {
+            ConnectionMode::View => true,
+            ConnectionMode::Trade => {
+                session_unlocked && matches!(self.credentials, CredentialState::Saved { .. })
+            }
+        }
     }
 
     fn market_exchanges(&self) -> Vec<Exchange> {
@@ -719,6 +862,7 @@ impl TryFrom<PersistedConnectionRow> for ConnectionRow {
             credentials,
             test_state: ConnectionTestState::Idle,
             balances: Vec::new(),
+            trades: Vec::new(),
         })
     }
 }
@@ -786,6 +930,7 @@ struct ConnectionProbeResult {
     row_id: String,
     outcome: Result<String, String>,
     balances: Vec<exchange::adapter::MexcAvailableBalance>,
+    trades: Vec<ConnectionTradeRecord>,
 }
 
 fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
@@ -799,11 +944,13 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
             row_id: spec.row_id,
             outcome: Ok(success.message),
             balances: success.balances,
+            trades: success.trades,
         },
         Err(error) => ConnectionProbeResult {
             row_id: spec.row_id,
             outcome: Err(error),
             balances: Vec::new(),
+            trades: Vec::new(),
         },
     }
 }
@@ -812,6 +959,7 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
 struct ProbeSuccess {
     message: String,
     balances: Vec<exchange::adapter::MexcAvailableBalance>,
+    trades: Vec<ConnectionTradeRecord>,
 }
 
 fn probe_mexc_public(market: ConnectionMarket) -> Result<ProbeSuccess, String> {
@@ -835,6 +983,7 @@ fn probe_mexc_public(market: ConnectionMarket) -> Result<ProbeSuccess, String> {
     Ok(ProbeSuccess {
         message: "Public API reachable".to_string(),
         balances: Vec::new(),
+        trades: Vec::new(),
     })
 }
 
@@ -844,12 +993,12 @@ fn probe_mexc_private(spec: &ConnectionProbeSpec) -> Result<ProbeSuccess, String
         .as_ref()
         .ok_or_else(|| "API keys are missing".to_string())?;
     if spec.vault_key.trim().is_empty() {
-        return Err("Enter local PIN/passphrase before connecting".to_string());
+        return Err("Unlock with Touch ID or enter a local PIN before connecting".to_string());
     }
 
     let secret = load_connection_secret(reference, &spec.vault_key)?
         .ok_or_else(|| {
-            "Saved API keys were not found in the local credential vault. Delete and re-add this connection with a local PIN/passphrase.".to_string()
+            "Saved API keys were not found in the local credential vault. Delete and re-add this connection after unlocking.".to_string()
         })?;
 
     if let Some(expected_hint) = &spec.access_key_hint {
@@ -872,7 +1021,8 @@ fn probe_mexc_private_secret(
     let client =
         MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
 
-    let balances = match market {
+    let mut message = "Private API authenticated".to_string();
+    let (balances, trades) = match market {
         ConnectionMarket::Spot => {
             let account = match client.spot_account_information() {
                 Ok(account) => account,
@@ -881,7 +1031,7 @@ fn probe_mexc_private_secret(
                     return Err(mexc_spot_error_with_market_hint(&client, error));
                 }
             };
-            available_balances_from_spot_account(&account)
+            (available_balances_from_spot_account(&account), Vec::new())
         }
         ConnectionMarket::Futures => {
             let assets = match client.futures_assets() {
@@ -891,14 +1041,199 @@ fn probe_mexc_private_secret(
                     return Err(mexc_futures_error_with_market_hint(&client, error));
                 }
             };
-            available_balances_from_futures_assets(&assets)
+            let balances = available_balances_from_futures_assets(&assets);
+            let trades = match client.futures_history_orders(1, 50) {
+                Ok(history) => futures_history_records(&history, "MEXC Futures"),
+                Err(error) => {
+                    message = format!("Private API authenticated; history unavailable: {error}");
+                    Vec::new()
+                }
+            };
+            (balances, trades)
         }
     };
 
     Ok(ProbeSuccess {
-        message: "Private API authenticated".to_string(),
+        message,
         balances,
+        trades,
     })
+}
+
+fn futures_history_records(
+    response: &MexcFuturesResponse<Value>,
+    source: &str,
+) -> Vec<ConnectionTradeRecord> {
+    let Some(data) = response.data.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut order_items = Vec::new();
+    collect_futures_order_items(data, &mut order_items);
+
+    order_items
+        .into_iter()
+        .map(|item| futures_order_record(item, source))
+        .collect()
+}
+
+fn collect_futures_order_items<'a>(value: &'a Value, items: &mut Vec<&'a Value>) {
+    match value {
+        Value::Array(values) => {
+            for item in values {
+                if looks_like_futures_order(item) {
+                    items.push(item);
+                }
+            }
+        }
+        Value::Object(object) => {
+            if looks_like_futures_order(value) {
+                items.push(value);
+                return;
+            }
+
+            for key in ["resultList", "list", "orders", "data"] {
+                if let Some(nested) = object.get(key) {
+                    collect_futures_order_items(nested, items);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn looks_like_futures_order(value: &Value) -> bool {
+    value.get("symbol").is_some()
+        && (value.get("orderId").is_some()
+            || value.get("id").is_some()
+            || value.get("externalOid").is_some())
+}
+
+fn futures_order_record(item: &Value, source: &str) -> ConnectionTradeRecord {
+    let timestamp_ms = normalize_timestamp_ms(
+        value_as_i64(item.get("updateTime"))
+            .or_else(|| value_as_i64(item.get("createTime")))
+            .or_else(|| value_as_i64(item.get("createdTime")))
+            .unwrap_or_default(),
+    );
+    let fee = display_field(item, &["fee"])
+        .map(|fee| {
+            display_field(item, &["feeCurrency", "feeCoin"])
+                .map(|currency| format!("{fee} {currency}"))
+                .unwrap_or(fee)
+        })
+        .unwrap_or_else(missing_value);
+
+    ConnectionTradeRecord {
+        timestamp_ms,
+        timestamp: format_timestamp(timestamp_ms),
+        source: source.to_string(),
+        symbol: display_field(item, &["symbol"]).unwrap_or_else(missing_value),
+        side: order_side_label(item.get("side")),
+        order_type: order_type_label(item.get("type").or_else(|| item.get("orderType"))),
+        order_price: display_field(item, &["price", "orderPrice"]).unwrap_or_else(missing_value),
+        average_price: display_field(item, &["dealAvgPrice", "avgPrice", "averagePrice"])
+            .unwrap_or_else(missing_value),
+        quantity: display_field(item, &["vol", "quantity", "origQty"])
+            .unwrap_or_else(missing_value),
+        filled_quantity: display_field(item, &["dealVol", "executedQty", "filledQty"])
+            .unwrap_or_else(missing_value),
+        pnl: display_field(item, &["profit", "realizedPnl", "realisedPnl", "pnl"])
+            .unwrap_or_else(missing_value),
+        fee,
+        state: order_state_label(item.get("state").or_else(|| item.get("status"))),
+        order_id: display_field(item, &["orderId", "id", "externalOid"])
+            .unwrap_or_else(missing_value),
+    }
+}
+
+fn display_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key))
+        .and_then(value_as_display_string)
+}
+
+fn value_as_display_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn value_as_i64(value: Option<&Value>) -> Option<i64> {
+    match value? {
+        Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok())),
+        Value::String(value) => value.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn normalize_timestamp_ms(timestamp: i64) -> i64 {
+    if timestamp > 0 && timestamp < 10_000_000_000 {
+        timestamp * 1_000
+    } else {
+        timestamp
+    }
+}
+
+fn format_timestamp(timestamp_ms: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp_ms)
+        .map(|timestamp| {
+            timestamp
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(missing_value)
+}
+
+fn order_side_label(value: Option<&Value>) -> String {
+    match value_as_i64(value) {
+        Some(1) => "Open long".to_string(),
+        Some(2) => "Close short".to_string(),
+        Some(3) => "Open short".to_string(),
+        Some(4) => "Close long".to_string(),
+        Some(value) => format!("Side {value}"),
+        None => value
+            .and_then(value_as_display_string)
+            .unwrap_or_else(missing_value),
+    }
+}
+
+fn order_type_label(value: Option<&Value>) -> String {
+    match value_as_i64(value) {
+        Some(1) => "Limit".to_string(),
+        Some(2) => "Post only".to_string(),
+        Some(3) => "IOC".to_string(),
+        Some(4) => "FOK".to_string(),
+        Some(5) => "Market".to_string(),
+        Some(value) => format!("Type {value}"),
+        None => value
+            .and_then(value_as_display_string)
+            .unwrap_or_else(missing_value),
+    }
+}
+
+fn order_state_label(value: Option<&Value>) -> String {
+    match value_as_i64(value) {
+        Some(1) => "New".to_string(),
+        Some(2) => "Partially filled".to_string(),
+        Some(3) => "Filled".to_string(),
+        Some(4) => "Canceled".to_string(),
+        Some(5) => "Invalid".to_string(),
+        Some(value) => format!("State {value}"),
+        None => value
+            .and_then(value_as_display_string)
+            .unwrap_or_else(missing_value),
+    }
+}
+
+fn missing_value() -> String {
+    "-".to_string()
 }
 
 fn mexc_spot_error_with_market_hint(client: &MexcBlockingPrivateClient, error: String) -> String {
@@ -1044,6 +1379,15 @@ pub(super) fn connections_panel<'a>(state: &'a ConnectionPanelState) -> Element<
 }
 
 pub(super) fn unlock_panel<'a>(state: &'a ConnectionPanelState) -> Element<'a, PanelMessage> {
+    let touch_id_button: Element<'_, PanelMessage> = if state.touch_id_available() {
+        connection_button("Use Touch ID", ConnectionAction::TouchIdUnlock, true)
+    } else {
+        button(text("Touch ID unavailable").size(style::text_size::SMALL))
+            .padding(padding::left(10).right(10).top(6).bottom(6))
+            .style(|theme, status| style::button::bordered_toggle(theme, status, false))
+            .into()
+    };
+
     column![
         panel_card(
             "Local credential vault",
@@ -1058,6 +1402,7 @@ pub(super) fn unlock_panel<'a>(state: &'a ConnectionPanelState) -> Element<'a, P
                     })
                     .style(|theme, status| style::validated_text_input(theme, status, true)),
                 row![
+                    touch_id_button,
                     iced::widget::Space::new().width(Length::Fill),
                     connection_button("Continue", ConnectionAction::Confirm, true),
                 ]
@@ -1070,6 +1415,7 @@ pub(super) fn unlock_panel<'a>(state: &'a ConnectionPanelState) -> Element<'a, P
             column![
                 detail_line("Current", state.top_bar_status()),
                 detail_line("Vault", state.session_status()),
+                detail_line("Touch ID", state.touch_id_status()),
             ]
             .spacing(8),
         ),
@@ -1435,4 +1781,46 @@ fn icon_button<'a>(
         .style(|theme, status| style::button::bordered_toggle(theme, status, false))
         .on_press(PanelMessage::ConnectionAction(action))
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MexcFuturesResponse, futures_history_records};
+
+    #[test]
+    fn futures_history_records_extracts_core_order_fields() {
+        let response = MexcFuturesResponse {
+            success: true,
+            code: 0,
+            message: None,
+            data: Some(serde_json::json!({
+                "resultList": [{
+                    "orderId": "123",
+                    "symbol": "BTC_USDT",
+                    "side": 1,
+                    "type": 5,
+                    "price": "64000",
+                    "dealAvgPrice": "64010",
+                    "vol": "2",
+                    "dealVol": "1",
+                    "profit": "3.5",
+                    "fee": "0.12",
+                    "feeCurrency": "USDT",
+                    "state": 3,
+                    "createTime": 1_700_000_000_000_i64
+                }]
+            })),
+        };
+
+        let records = futures_history_records(&response, "MEXC Futures");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].source, "MEXC Futures");
+        assert_eq!(records[0].symbol, "BTC_USDT");
+        assert_eq!(records[0].side, "Open long");
+        assert_eq!(records[0].order_type, "Market");
+        assert_eq!(records[0].pnl, "3.5");
+        assert_eq!(records[0].fee, "0.12 USDT");
+        assert_eq!(records[0].state, "Filled");
+    }
 }

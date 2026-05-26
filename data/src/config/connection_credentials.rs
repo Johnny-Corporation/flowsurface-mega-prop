@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt, num::NonZeroU32};
 
 const CREDENTIAL_VAULT_FILE: &str = "connection-secrets.json";
+const DEVICE_VAULT_KEY_FILE: &str = "connection-device-vault-key.json";
 const CREDENTIAL_VAULT_VERSION: u8 = 1;
 const KDF_ITERATIONS: u32 = 210_000;
 const KEY_LEN: usize = 32;
@@ -128,6 +129,51 @@ pub fn delete_connection_secret(reference: &ConnectionCredentialRef) -> Result<(
     write_vault(&vault)
 }
 
+pub fn load_or_create_device_vault_key() -> Result<String, String> {
+    if let Some(key) = load_device_vault_key()? {
+        return Ok(key.key);
+    }
+
+    let key = generate_device_vault_key()?;
+    let json = serde_json::to_string_pretty(&DeviceVaultKey {
+        version: CREDENTIAL_VAULT_VERSION,
+        key: key.clone(),
+    })
+    .map_err(|error| format!("Failed to serialize local device vault key: {error}"))?;
+    crate::write_json_to_file(&json, DEVICE_VAULT_KEY_FILE)
+        .map_err(|error| format!("Failed to write local device vault key: {error}"))?;
+    Ok(key)
+}
+
+fn load_device_vault_key() -> Result<Option<DeviceVaultKey>, String> {
+    let path = crate::data_path(Some(DEVICE_VAULT_KEY_FILE));
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Failed to read local device vault key: {error}")),
+    };
+
+    let key = serde_json::from_str::<DeviceVaultKey>(&contents)
+        .map_err(|error| format!("Local device vault key is invalid: {error}"))?;
+    if key.version != CREDENTIAL_VAULT_VERSION {
+        return Err(format!(
+            "Unsupported local device vault key version {}",
+            key.version
+        ));
+    }
+
+    validate_secret_field("local device vault key", &key.key)?;
+    Ok(Some(key))
+}
+
+fn generate_device_vault_key() -> Result<String, String> {
+    let rng = ring::rand::SystemRandom::new();
+    let mut key = [0_u8; KEY_LEN];
+    ring::rand::SecureRandom::fill(&rng, &mut key)
+        .map_err(|_| "Failed to generate local device vault key".to_string())?;
+    Ok(hex_encode(&key))
+}
+
 fn normalize_connection_id(raw: &str) -> String {
     let mut normalized = String::new();
     let mut previous_dash = false;
@@ -203,6 +249,12 @@ struct StoredConnectionSecret {
     nonce_hex: String,
     ciphertext_hex: String,
     access_key_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DeviceVaultKey {
+    version: u8,
+    key: String,
 }
 
 fn load_vault() -> Result<CredentialVault, String> {

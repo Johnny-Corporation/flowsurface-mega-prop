@@ -228,7 +228,7 @@ impl State {
                 ],
             ),
             Kind::Settings => settings_panel(&self.settings_state),
-            Kind::Pnl => pnl_panel(self.show_trades),
+            Kind::Pnl => pnl_panel(self.show_trades, connection_state),
             Kind::Connections => connections_panel(connection_state),
             Kind::Account => account_panel(connection_state),
             Kind::Analytics => analytics_panel(),
@@ -276,6 +276,7 @@ pub(crate) enum ConnectionAction {
     DraftAccessKeyChanged(String),
     DraftSecretKeyChanged(String),
     SessionVaultKeyChanged(String),
+    TouchIdUnlock,
     SaveDraft,
     CancelDraft,
     Refresh,
@@ -468,7 +469,15 @@ fn default_panel<'a>(
     .into()
 }
 
-fn pnl_panel<'a>(show_trades: bool) -> Element<'a, PanelMessage> {
+fn pnl_panel<'a>(
+    show_trades: bool,
+    connection_state: &'a ConnectionPanelState,
+) -> Element<'a, PanelMessage> {
+    let trade_history = connection_state.trade_history();
+    let realized_pnl = trade_history
+        .iter()
+        .filter_map(|trade| trade.pnl.parse::<f32>().ok())
+        .sum::<f32>();
     let latest = PNL_POINTS.last().copied().unwrap_or_default();
     let best = PNL_POINTS.iter().copied().fold(f32::MIN, f32::max);
     let worst = PNL_POINTS.iter().copied().fold(f32::MAX, f32::min);
@@ -480,7 +489,7 @@ fn pnl_panel<'a>(show_trades: bool) -> Element<'a, PanelMessage> {
     };
 
     let pnl_body: Element<'_, PanelMessage> = if show_trades {
-        trades_table()
+        trades_table(connection_state)
     } else {
         column![
             Canvas::new(PnlPlot)
@@ -500,13 +509,13 @@ fn pnl_panel<'a>(show_trades: bool) -> Element<'a, PanelMessage> {
     };
 
     column![
-        metric_row(&[
-            ("Realized PnL", "$2,050"),
-            ("Win rate", "66%"),
-            ("Trades", "6"),
+        metric_row_owned(&[
+            ("Realized PnL".to_string(), format_money(realized_pnl)),
+            ("History rows".to_string(), trade_history.len().to_string()),
+            ("Connection".to_string(), connection_state.top_bar_status()),
         ]),
         panel_card(
-            "PnL change",
+            "PnL and trade history",
             column![
                 row![
                     text("Template equity curve").size(style::text_size::SECTION),

@@ -152,6 +152,25 @@ impl MexcPrivateClient {
         .await
     }
 
+    pub async fn futures_history_orders(
+        &self,
+        page_num: u32,
+        page_size: u32,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        let params = vec![
+            ("page_num".to_string(), page_num.max(1).to_string()),
+            ("page_size".to_string(), page_size.clamp(1, 100).to_string()),
+        ];
+
+        self.send_futures_signed(
+            Method::GET,
+            "/v1/private/order/list/history_orders",
+            params,
+            None,
+        )
+        .await
+    }
+
     pub async fn futures_place_order(
         &self,
         request: &FuturesOrderRequest,
@@ -275,6 +294,24 @@ impl MexcBlockingPrivateClient {
 
     pub fn futures_assets(&self) -> Result<MexcFuturesResponse<Value>, AdapterError> {
         self.send_futures_signed(Method::GET, "/v1/private/account/assets", Vec::new(), None)
+    }
+
+    pub fn futures_history_orders(
+        &self,
+        page_num: u32,
+        page_size: u32,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        let params = vec![
+            ("page_num".to_string(), page_num.max(1).to_string()),
+            ("page_size".to_string(), page_size.clamp(1, 100).to_string()),
+        ];
+
+        self.send_futures_signed(
+            Method::GET,
+            "/v1/private/order/list/history_orders",
+            params,
+            None,
+        )
     }
 
     fn send_spot_signed(
