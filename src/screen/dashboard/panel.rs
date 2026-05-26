@@ -2,9 +2,10 @@ pub mod cscalp_dom;
 pub mod ladder;
 pub mod timeandsales;
 
+use crate::widget::loading;
 use iced::{
     Element, padding,
-    widget::{canvas, center, container, text},
+    widget::{canvas, container},
 };
 use std::time::Instant;
 
@@ -68,8 +69,7 @@ pub trait Panel: canvas::Program<Message> {
 
 pub fn view<T: Panel>(panel: &'_ T, _timezone: data::UserTimezone) -> Element<'_, Message> {
     if panel.is_empty() {
-        return center(text("Waiting for panel data...").size(crate::style::text_size::TITLE))
-            .into();
+        return loading::view("Waiting for panel data...");
     }
 
     container(

@@ -86,6 +86,9 @@ struct Flowsurface {
     theme: data::Theme,
     notifications: Notifications,
     panel_windows: HashMap<window::Id, panel_window::State>,
+    startup_loading_progress: widget::loading::FakeProgress,
+    startup_finalized_at: Option<std::time::Instant>,
+    startup_loading_finished: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +162,9 @@ impl Flowsurface {
             notifications: Notifications::new(),
             panel_windows: HashMap::new(),
             network: NetworkManager::new(saved_state.proxy_cfg),
+            startup_loading_progress: widget::loading::FakeProgress::new(),
+            startup_finalized_at: None,
+            startup_loading_finished: false,
         };
 
         if let Some(err) = audio_init_err {
@@ -246,6 +252,8 @@ impl Flowsurface {
                 }
             }
             Message::Tick(now) => {
+                self.tick_startup_loading(now);
+
                 for panel in self.panel_windows.values_mut() {
                     panel.tick(now);
                 }
@@ -680,7 +688,31 @@ impl Flowsurface {
         Task::none()
     }
 
+    fn tick_startup_loading(&mut self, now: std::time::Instant) {
+        if self.startup_loading_finished {
+            return;
+        }
+
+        self.startup_loading_progress.tick(now);
+
+        if !self.startup_loading_progress.is_finalizing() {
+            return;
+        }
+
+        let finalized_at = self.startup_finalized_at.get_or_insert(now);
+        if now.duration_since(*finalized_at) >= std::time::Duration::from_millis(800) {
+            self.startup_loading_finished = true;
+        }
+    }
+
     fn view(&self, id: window::Id) -> Element<'_, Message> {
+        if id == self.main_window.id && !self.startup_loading_finished {
+            return widget::loading::view_fake_progress(
+                "Opening Trading Desk",
+                &self.startup_loading_progress,
+            );
+        }
+
         let dashboard = self.active_dashboard();
         let sidebar_pos = self.sidebar.position();
 
