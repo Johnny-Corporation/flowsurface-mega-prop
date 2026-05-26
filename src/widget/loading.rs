@@ -2,7 +2,7 @@ use crate::style;
 use iced::{
     Alignment, ContentFit, Element, Font, Length, Rectangle, Size,
     font::Weight,
-    widget::{button, center, column, image, responsive, stack, text},
+    widget::{button, center, column, image, responsive, row, stack, text},
 };
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -13,8 +13,8 @@ const FRAME_WIDTH: u32 = 480;
 const FRAME_HEIGHT: u32 = 270;
 const FRAME_ASPECT_RATIO: f32 = FRAME_WIDTH as f32 / FRAME_HEIGHT as f32;
 const PROGRESS_CANDLES: u8 = 10;
-const MIN_PROGRESS_DELAY_MS: u64 = 100;
-const PROGRESS_DELAY_SPAN_MS: u64 = 200;
+const MIN_PROGRESS_DELAY_MS: u64 = 300;
+const PROGRESS_DELAY_SPAN_MS: u64 = 400;
 const MIN_DISPLAY_WIDTH: f32 = 120.0;
 const PANEL_WIDTH_RATIO: f32 = 0.55;
 const PANEL_HEIGHT_RATIO: f32 = 0.46;
@@ -98,28 +98,43 @@ pub fn view<'a, Message: 'a>(status: impl Into<String>) -> Element<'a, Message> 
     responsive(move |bounds| loading_content(status.clone(), None, bounds, 1.0)).into()
 }
 
-pub fn view_fake_progress_with_button<'a, Message: Clone + 'a>(
+pub fn view_fake_progress_with_controls<'a, Message: Clone + 'a>(
     status: impl Into<String>,
     progress: &'a FakeProgress,
-    button_label: &'static str,
-    on_press: Message,
+    replay_label: &'static str,
+    on_replay: Message,
+    skip_label: &'static str,
+    on_skip: Message,
 ) -> Element<'a, Message> {
     let status = progress.status_text(status.into());
     let reveal_fraction = progress.reveal_fraction();
 
     responsive(move |bounds| {
-        let skip_button = button(
-            text(button_label)
+        let replay_button = button(
+            text(replay_label)
                 .font(status_font())
                 .size(style::text_size::SECTION),
         )
         .padding([8, 16])
         .style(|theme, status| style::button::modifier(theme, status, false))
-        .on_press(on_press.clone());
+        .on_press(on_replay.clone());
+
+        let skip_button = button(
+            text(skip_label)
+                .font(status_font())
+                .size(style::text_size::SECTION),
+        )
+        .padding([8, 16])
+        .style(|theme, status| style::button::modifier(theme, status, false))
+        .on_press(on_skip.clone());
+
+        let controls = row![replay_button, skip_button]
+            .spacing(8)
+            .align_y(Alignment::Center);
 
         loading_content(
             status.clone(),
-            Some(skip_button.into()),
+            Some(controls.into()),
             bounds,
             reveal_fraction,
         )

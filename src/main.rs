@@ -120,6 +120,7 @@ enum Message {
     NetworkManager(modal::network_manager::Message),
     Layouts(modal::layout_manager::Message),
     AudioStream(modal::audio::Message),
+    ReplayStartupAnimation,
     SkipStartupAnimation,
 }
 
@@ -566,6 +567,10 @@ impl Flowsurface {
                     }
                 }
             }
+            Message::ReplayStartupAnimation => {
+                self.startup_animation_skipped = false;
+                self.startup_loading_progress.reset();
+            }
             Message::SkipStartupAnimation => {
                 self.startup_animation_skipped = true;
             }
@@ -692,9 +697,11 @@ impl Flowsurface {
 
     fn view(&self, id: window::Id) -> Element<'_, Message> {
         if id == self.main_window.id && !self.startup_animation_skipped {
-            return widget::loading::view_fake_progress_with_button(
+            return widget::loading::view_fake_progress_with_controls(
                 "Preparing trading workspace",
                 &self.startup_loading_progress,
+                "Replay animation",
+                Message::ReplayStartupAnimation,
                 "Skip animation",
                 Message::SkipStartupAnimation,
             );

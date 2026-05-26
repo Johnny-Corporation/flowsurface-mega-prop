@@ -105,6 +105,7 @@ pub enum Event {
     ComparisonChartInteraction(super::chart::comparison::Message),
     HeatmapShaderInteraction(crate::widget::chart::heatmap::Message),
     MiniTickersListInteraction(modal::pane::mini_tickers_list::Message),
+    ReplayLoadingAnimation,
     SkipLoadingAnimation,
 }
 
@@ -1147,9 +1148,11 @@ impl State {
         };
 
         if show_loading_gate {
-            body = loading::view_fake_progress_with_button(
+            body = loading::view_fake_progress_with_controls(
                 format!("Loading {}...", self.content.kind()),
                 &self.loading_progress,
+                "Replay animation",
+                Message::PaneEvent(id, Event::ReplayLoadingAnimation),
                 "Skip animation",
                 Message::PaneEvent(id, Event::SkipLoadingAnimation),
             );
@@ -1627,6 +1630,10 @@ impl State {
             }
             Event::SkipLoadingAnimation => {
                 self.loading_animation_skipped = true;
+            }
+            Event::ReplayLoadingAnimation => {
+                self.loading_animation_skipped = false;
+                self.loading_progress.reset();
             }
         }
         None
