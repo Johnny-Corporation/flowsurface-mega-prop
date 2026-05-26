@@ -126,6 +126,7 @@ enum Message {
 impl Flowsurface {
     fn new() -> (Self, Task<Message>) {
         let saved_state = layout::load_saved_state();
+        widget::loading::preload();
 
         let (main_window_id, open_main_window) = {
             let (position, size) = saved_state.window();

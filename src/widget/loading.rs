@@ -16,9 +16,10 @@ const MIN_DISPLAY_WIDTH: f32 = 120.0;
 const PANEL_WIDTH_RATIO: f32 = 0.55;
 const PANEL_HEIGHT_RATIO: f32 = 0.46;
 const DISPLAY_SCALE_DIVISOR: f32 = 2.5;
+const STARTUP_ANIMATION_WARMUP: Duration = Duration::from_millis(120);
 const STARTUP_PHRASE_COUNT: usize = 2;
 const STARTUP_PHRASE_DURATION: Duration = Duration::from_secs(2);
-const STARTUP_TOTAL_DURATION: Duration = Duration::from_secs(4);
+const STARTUP_TOTAL_DURATION: Duration = Duration::from_millis(4_120);
 
 const STARTUP_PHRASE_POOL: &[&str] = &[
     "Warming up the candlesticks...",
@@ -126,8 +127,9 @@ impl StartupPhrases {
         STARTUP_TOTAL_DURATION
     }
 
-    fn current(&self, elapsed: Duration) -> &'static str {
-        let index = if elapsed < STARTUP_PHRASE_DURATION {
+    fn current(&self, elapsed: Duration) -> Option<&'static str> {
+        let phrase_elapsed = elapsed.checked_sub(STARTUP_ANIMATION_WARMUP)?;
+        let index = if phrase_elapsed < STARTUP_PHRASE_DURATION {
             0
         } else {
             1
@@ -137,7 +139,7 @@ impl StartupPhrases {
             .get(index)
             .or_else(|| self.phrases.last())
             .copied()
-            .unwrap_or("Loading dashboard...")
+            .or(Some("Loading dashboard..."))
     }
 }
 
@@ -162,6 +164,10 @@ pub fn startup_view<'a, Message: 'a>(
     responsive(move |bounds| startup_loading_content(status, bounds)).into()
 }
 
+pub fn preload() {
+    let _ = color_atlas_handle();
+}
+
 fn loading_content<'a, Message: 'a>(status: String, bounds: Size) -> Element<'a, Message> {
     let content = column![
         animation(bounds),
@@ -175,16 +181,19 @@ fn loading_content<'a, Message: 'a>(status: String, bounds: Size) -> Element<'a,
 }
 
 fn startup_loading_content<'a, Message: 'a>(
-    status: &'static str,
+    status: Option<&'static str>,
     bounds: Size,
 ) -> Element<'a, Message> {
+    let visible = status.is_some();
+    let status = status.unwrap_or("Loading dashboard...");
+
     let content = column![
         animation(bounds),
         text(status)
             .font(startup_status_font())
             .size(style::text_size::TITLE + 4.0)
             .style(move |_theme| iced::widget::text::Style {
-                color: Some(iced::Color::WHITE),
+                color: Some(iced::Color::WHITE.scale_alpha(if visible { 1.0 } else { 0.0 })),
             })
     ];
 
