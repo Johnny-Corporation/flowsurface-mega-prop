@@ -85,6 +85,7 @@ struct Flowsurface {
     timezone: data::UserTimezone,
     theme: data::Theme,
     notifications: Notifications,
+    connection_state: panel_window::ConnectionPanelState,
     panel_windows: HashMap<window::Id, panel_window::State>,
 }
 
@@ -157,6 +158,7 @@ impl Flowsurface {
             volume_size_unit: saved_state.volume_size_unit,
             theme: saved_state.theme,
             notifications: Notifications::new(),
+            connection_state: panel_window::ConnectionPanelState::default(),
             panel_windows: HashMap::new(),
             network: NetworkManager::new(saved_state.proxy_cfg),
         };
@@ -246,6 +248,8 @@ impl Flowsurface {
                 }
             }
             Message::Tick(now) => {
+                self.connection_state.tick(now);
+
                 for panel in self.panel_windows.values_mut() {
                     panel.tick(now);
                 }
@@ -442,11 +446,22 @@ impl Flowsurface {
             Message::OpenPanel(kind) => {
                 return self.open_panel_window(kind);
             }
-            Message::PanelWindow(window, message) => {
-                if let Some(panel) = self.panel_windows.get_mut(&window) {
-                    panel.update(message);
+            Message::PanelWindow(window, message) => match message {
+                panel_window::PanelMessage::ConnectionAction(action) => {
+                    if self
+                        .panel_windows
+                        .get(&window)
+                        .is_some_and(|panel| panel.kind == panel_window::Kind::Connections)
+                    {
+                        self.connection_state.update(action);
+                    }
                 }
-            }
+                other => {
+                    if let Some(panel) = self.panel_windows.get_mut(&window) {
+                        panel.update(other);
+                    }
+                }
+            },
             Message::RemoveNotification(index) => {
                 self.notifications.remove(index);
             }
@@ -702,6 +717,9 @@ impl Flowsurface {
             let header_title = row![
                 panel_window::menu_bar(),
                 Space::new().width(iced::Length::Fill),
+                text(self.connection_state.top_bar_status())
+                    .size(crate::style::text_size::SMALL)
+                    .style(style::title_text),
                 text("FLOWSURFACE")
                     .font(iced::Font {
                         weight: iced::font::Weight::Bold,
@@ -712,6 +730,7 @@ impl Flowsurface {
             ]
             .height(24)
             .align_y(Alignment::Center)
+            .spacing(12)
             .padding(padding::top(4).left(8).right(8));
 
             let base = column![
@@ -732,7 +751,7 @@ impl Flowsurface {
         } else if let Some(panel) = self.panel_windows.get(&id) {
             container(
                 panel
-                    .view()
+                    .view(&self.connection_state)
                     .map(move |message| Message::PanelWindow(id, message)),
             )
             .padding(padding::top(style::TITLE_PADDING_TOP))
@@ -786,9 +805,10 @@ impl Flowsurface {
         let window_events = window::events().map(Message::WindowEvent);
         let sidebar = self.sidebar.subscription().map(Message::Sidebar);
 
+        let active_market_exchanges = self.connection_state.active_market_exchanges();
         let exchange_streams = self
             .active_dashboard()
-            .market_subscriptions(&self.handles)
+            .market_subscriptions(&self.handles, &active_market_exchanges)
             .map(Message::MarketWsEvent);
 
         let tick = iced::window::frames().map(Message::Tick);

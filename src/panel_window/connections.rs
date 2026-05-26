@@ -5,7 +5,7 @@ use data::config::connection_credentials::{
     save_connection_secret,
 };
 use exchange::adapter::{
-    MexcBlockingPrivateClient, MexcCredentials, available_balances_from_futures_assets,
+    Exchange, MexcBlockingPrivateClient, MexcCredentials, available_balances_from_futures_assets,
     available_balances_from_spot_account,
 };
 use iced::{
@@ -52,11 +52,12 @@ const MEXC_FUTURES_PUBLIC_PING_URL: &str = "https://api.mexc.com/api/v1/contract
 const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[derive(Debug)]
-pub(super) struct ConnectionPanelState {
+pub(crate) struct ConnectionPanelState {
     rows: Vec<ConnectionRow>,
     draft: Option<ConnectionDraft>,
     logs: Vec<String>,
     last_action: String,
+    session_vault_key: String,
     next_connection_id: u64,
     probe_tx: Sender<ConnectionProbeResult>,
     probe_rx: Receiver<ConnectionProbeResult>,
@@ -100,6 +101,7 @@ impl Default for ConnectionPanelState {
             draft: None,
             logs,
             last_action: "Ready".to_string(),
+            session_vault_key: String::new(),
             next_connection_id,
             probe_tx,
             probe_rx,
@@ -108,13 +110,13 @@ impl Default for ConnectionPanelState {
 }
 
 impl ConnectionPanelState {
-    pub(super) fn tick(&mut self, _now: std::time::Instant) {
+    pub(crate) fn tick(&mut self, _now: std::time::Instant) {
         while let Ok(result) = self.probe_rx.try_recv() {
             self.apply_probe_result(result);
         }
     }
 
-    pub(super) fn update(&mut self, action: ConnectionAction) {
+    pub(crate) fn update(&mut self, action: ConnectionAction) {
         match action {
             ConnectionAction::Toggle(index) => self.toggle(index),
             ConnectionAction::AddConnection => self.start_draft(),
@@ -148,15 +150,8 @@ impl ConnectionPanelState {
                     draft.secret_key = value;
                 }
             }
-            ConnectionAction::DraftVaultKeyChanged(value) => {
-                if let Some(draft) = self.draft.as_mut() {
-                    draft.vault_key = value;
-                }
-            }
-            ConnectionAction::RowVaultKeyChanged(index, value) => {
-                if let Some(row) = self.rows.get_mut(index) {
-                    row.vault_key = value;
-                }
+            ConnectionAction::SessionVaultKeyChanged(value) => {
+                self.session_vault_key = value;
             }
             ConnectionAction::SaveDraft => self.save_draft(),
             ConnectionAction::CancelDraft => {
@@ -184,6 +179,37 @@ impl ConnectionPanelState {
             }
             ConnectionAction::RowDelete(index) => self.delete(index),
         }
+    }
+
+    pub(crate) fn top_bar_status(&self) -> String {
+        let Some(row) = self.active_connection_row() else {
+            return if self.rows.is_empty() {
+                "Connected: none (Connections empty)".to_string()
+            } else {
+                "Connected: none".to_string()
+            };
+        };
+
+        format!(
+            "Connected: {}, {}, {} access",
+            row.exchange,
+            row.market.status_label(),
+            row.mode.access_label(),
+        )
+    }
+
+    pub(crate) fn active_market_exchanges(&self) -> Vec<Exchange> {
+        let mut exchanges = Vec::new();
+
+        for row in self.rows.iter().filter(|row| row.is_connected()) {
+            for exchange in row.market_exchanges() {
+                if !exchanges.contains(&exchange) {
+                    exchanges.push(exchange);
+                }
+            }
+        }
+
+        exchanges
     }
 
     fn toggle(&mut self, index: usize) {
@@ -275,7 +301,9 @@ impl ConnectionPanelState {
                 None
             };
 
-            if let Err(error) = save_connection_secret(&reference, &secret, &draft.vault_key) {
+            let vault_key = self.session_vault_key.trim();
+            if vault_key.is_empty() {
+                let error = "Enter session PIN/passphrase before saving API keys".to_string();
                 draft.error = Some(error.clone());
                 self.draft = Some(draft);
                 self.last_action = "Credential save failed".to_string();
@@ -283,7 +311,14 @@ impl ConnectionPanelState {
                 return;
             }
 
-            row.vault_key = draft.vault_key.clone();
+            if let Err(error) = save_connection_secret(&reference, &secret, vault_key) {
+                draft.error = Some(error.clone());
+                self.draft = Some(draft);
+                self.last_action = "Credential save failed".to_string();
+                self.push_log(format!("[credentials] {error}"));
+                return;
+            }
+
             row.credentials = CredentialState::Saved {
                 reference,
                 access_key_hint: secret.access_key_hint(),
@@ -329,6 +364,16 @@ impl ConnectionPanelState {
         self.rows.iter().filter(|row| row.enabled).count()
     }
 
+    fn active_connection_row(&self) -> Option<&ConnectionRow> {
+        self.rows
+            .iter()
+            .filter(|row| row.is_connected())
+            .max_by_key(|row| match row.mode {
+                ConnectionMode::Trade => 1,
+                ConnectionMode::View => 0,
+            })
+    }
+
     fn persist_rows(&mut self) {
         if let Err(error) = save_connections(self) {
             self.push_log(format!("[connections] Failed to save metadata: {error}"));
@@ -340,7 +385,7 @@ impl ConnectionPanelState {
             return;
         };
 
-        let Some(spec) = ConnectionProbeSpec::from_row(row) else {
+        let Some(spec) = ConnectionProbeSpec::from_row(row, self.session_vault_key.trim()) else {
             let status = row.exchange.draft_status(row.mode).to_string();
             let row_id = row.id.clone();
             self.apply_probe_result(ConnectionProbeResult {
@@ -395,7 +440,6 @@ struct ConnectionRow {
     credentials: CredentialState,
     test_state: ConnectionTestState,
     balance_summary: Option<String>,
-    vault_key: String,
 }
 
 impl ConnectionRow {
@@ -415,7 +459,6 @@ impl ConnectionRow {
             credentials: CredentialState::NotRequired,
             test_state: ConnectionTestState::Idle,
             balance_summary: None,
-            vault_key: String::new(),
         }
     }
 
@@ -455,6 +498,32 @@ impl ConnectionRow {
             CredentialState::Saved {
                 access_key_hint, ..
             } => format!("Saved ({access_key_hint})"),
+        }
+    }
+
+    fn is_connected(&self) -> bool {
+        self.enabled && matches!(self.test_state, ConnectionTestState::Success(_))
+    }
+
+    fn market_exchanges(&self) -> Vec<Exchange> {
+        match (self.exchange, self.market) {
+            (ConnectionExchange::Mexc, ConnectionMarket::Spot) => vec![Exchange::MexcSpot],
+            (ConnectionExchange::Mexc, ConnectionMarket::Futures) => {
+                vec![Exchange::MexcLinear, Exchange::MexcInverse]
+            }
+            (ConnectionExchange::Bybit, ConnectionMarket::Spot) => vec![Exchange::BybitSpot],
+            (ConnectionExchange::Bybit, ConnectionMarket::Futures) => {
+                vec![Exchange::BybitLinear, Exchange::BybitInverse]
+            }
+            (ConnectionExchange::Okx, ConnectionMarket::Spot) => vec![Exchange::OkexSpot],
+            (ConnectionExchange::Okx, ConnectionMarket::Futures) => {
+                vec![Exchange::OkexLinear, Exchange::OkexInverse]
+            }
+            (ConnectionExchange::Binance, ConnectionMarket::Spot) => vec![Exchange::BinanceSpot],
+            (ConnectionExchange::Binance, ConnectionMarket::Futures) => {
+                vec![Exchange::BinanceLinear, Exchange::BinanceInverse]
+            }
+            _ => Vec::new(),
         }
     }
 }
@@ -562,7 +631,6 @@ impl TryFrom<PersistedConnectionRow> for ConnectionRow {
             credentials,
             test_state: ConnectionTestState::Idle,
             balance_summary: None,
-            vault_key: String::new(),
         })
     }
 }
@@ -601,7 +669,7 @@ struct ConnectionProbeSpec {
 }
 
 impl ConnectionProbeSpec {
-    fn from_row(row: &ConnectionRow) -> Option<Self> {
+    fn from_row(row: &ConnectionRow, session_vault_key: &str) -> Option<Self> {
         if row.exchange != ConnectionExchange::Mexc {
             return None;
         }
@@ -620,7 +688,7 @@ impl ConnectionProbeSpec {
             mode: row.mode,
             credential_ref,
             access_key_hint,
-            vault_key: row.vault_key.clone(),
+            vault_key: session_vault_key.to_string(),
         })
     }
 }
@@ -811,7 +879,6 @@ struct ConnectionDraft {
     mode: ConnectionMode,
     access_key: String,
     secret_key: String,
-    vault_key: String,
     error: Option<String>,
 }
 
@@ -823,7 +890,6 @@ impl Default for ConnectionDraft {
             mode: ConnectionMode::View,
             access_key: String::new(),
             secret_key: String::new(),
-            vault_key: String::new(),
             error: None,
         }
     }
@@ -834,7 +900,6 @@ impl ConnectionDraft {
         if self.mode == ConnectionMode::View {
             self.access_key.clear();
             self.secret_key.clear();
-            self.vault_key.clear();
         }
         self.error = None;
     }
@@ -895,6 +960,13 @@ fn connection_status_strip<'a>(state: &ConnectionPanelState) -> Element<'a, Pane
                 state.rows.len()
             ))
             .size(style::text_size::BODY),
+            text_input("Session PIN/passphrase", &state.session_vault_key)
+                .secure(true)
+                .on_input(|value| {
+                    PanelMessage::ConnectionAction(ConnectionAction::SessionVaultKeyChanged(value))
+                })
+                .width(Length::Fixed(220.0))
+                .style(|theme, status| style::validated_text_input(theme, status, true)),
             iced::widget::Space::new().width(Length::Fill),
             text(format!("Last action: {}", state.last_action)).size(style::text_size::SMALL),
         ]
@@ -980,7 +1052,7 @@ fn connection_row<'a>(index: usize, connection: &'a ConnectionRow) -> Element<'a
             selected,
         ),
         connection_cell(
-            credential_control(index, connection),
+            credential_control(connection),
             Length::FillPortion(3),
             false,
             selected,
@@ -1022,12 +1094,6 @@ fn draft_row<'a>(draft: &'a ConnectionDraft) -> Element<'a, PanelMessage> {
                 .secure(true)
                 .on_input(|value| {
                     PanelMessage::ConnectionAction(ConnectionAction::DraftSecretKeyChanged(value))
-                })
-                .style(|theme, status| style::validated_text_input(theme, status, true)),
-            text_input("Local PIN/passphrase", &draft.vault_key)
-                .secure(true)
-                .on_input(|value| {
-                    PanelMessage::ConnectionAction(ConnectionAction::DraftVaultKeyChanged(value))
                 })
                 .style(|theme, status| style::validated_text_input(theme, status, true)),
         ]
@@ -1099,28 +1165,13 @@ fn draft_row<'a>(draft: &'a ConnectionDraft) -> Element<'a, PanelMessage> {
     .into()
 }
 
-fn credential_control<'a>(
-    index: usize,
-    connection: &'a ConnectionRow,
-) -> Element<'a, PanelMessage> {
+fn credential_control<'a>(connection: &'a ConnectionRow) -> Element<'a, PanelMessage> {
     if connection.mode != ConnectionMode::Trade {
         return value_box(connection.credential_label(), Length::Fill);
     }
 
     match &connection.credentials {
-        CredentialState::Saved { .. } => column![
-            value_box(connection.credential_label(), Length::Fill),
-            text_input("Local PIN/passphrase", &connection.vault_key)
-                .secure(true)
-                .on_input(move |value| {
-                    PanelMessage::ConnectionAction(ConnectionAction::RowVaultKeyChanged(
-                        index, value,
-                    ))
-                })
-                .style(|theme, status| style::validated_text_input(theme, status, true)),
-        ]
-        .spacing(4)
-        .into(),
+        CredentialState::Saved { .. } => value_box(connection.credential_label(), Length::Fill),
         CredentialState::NotRequired => value_box(connection.credential_label(), Length::Fill),
     }
 }

@@ -1280,10 +1280,19 @@ impl Dashboard {
         self.refresh_streams(main_window)
     }
 
-    pub fn market_subscriptions(&self, handles: &AdapterHandles) -> Subscription<exchange::Event> {
+    pub fn market_subscriptions(
+        &self,
+        handles: &AdapterHandles,
+        allowed_exchanges: &[Exchange],
+    ) -> Subscription<exchange::Event> {
+        if allowed_exchanges.is_empty() {
+            return Subscription::none();
+        }
+
         let unique_streams = self
             .streams
             .combined_used()
+            .filter(|(exchange, _)| allowed_exchanges.contains(exchange))
             .flat_map(|(exchange, specs)| {
                 let mut subs = vec![];
 

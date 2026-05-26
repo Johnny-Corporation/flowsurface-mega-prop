@@ -13,7 +13,8 @@ mod connections;
 mod settings;
 mod trades;
 
-use connections::{ConnectionPanelState, connections_panel};
+pub(crate) use connections::ConnectionPanelState;
+use connections::connections_panel;
 use settings::{SettingsAction, SettingsPanelState, settings_panel};
 use trades::trades_table;
 
@@ -109,7 +110,6 @@ impl Kind {
 pub(crate) struct State {
     pub kind: Kind,
     show_trades: bool,
-    connection_state: ConnectionPanelState,
     settings_state: SettingsPanelState,
 }
 
@@ -118,18 +118,13 @@ impl State {
         Self {
             kind,
             show_trades: false,
-            connection_state: ConnectionPanelState::default(),
             settings_state: SettingsPanelState::default(),
         }
     }
 
     pub(crate) fn update(&mut self, message: PanelMessage) {
         match message {
-            PanelMessage::ConnectionAction(action) => {
-                if self.kind == Kind::Connections {
-                    self.connection_state.update(action);
-                }
-            }
+            PanelMessage::ConnectionAction(_) => {}
             PanelMessage::SettingsAction(action) => {
                 if self.kind == Kind::Settings {
                     self.settings_state.update(action);
@@ -143,13 +138,12 @@ impl State {
         }
     }
 
-    pub(crate) fn tick(&mut self, now: std::time::Instant) {
-        if self.kind == Kind::Connections {
-            self.connection_state.tick(now);
-        }
-    }
+    pub(crate) fn tick(&mut self, _now: std::time::Instant) {}
 
-    pub(crate) fn view(&self) -> Element<'_, PanelMessage> {
+    pub(crate) fn view<'a>(
+        &'a self,
+        connection_state: &'a ConnectionPanelState,
+    ) -> Element<'a, PanelMessage> {
         let body = match self.kind {
             Kind::App => app_panel(),
             Kind::File => default_panel(
@@ -223,7 +217,7 @@ impl State {
             ),
             Kind::Settings => settings_panel(&self.settings_state),
             Kind::Pnl => pnl_panel(self.show_trades),
-            Kind::Connections => connections_panel(&self.connection_state),
+            Kind::Connections => connections_panel(connection_state),
             Kind::Account => account_panel(),
             Kind::Analytics => analytics_panel(),
             Kind::About => about_panel(),
@@ -269,8 +263,7 @@ pub(crate) enum ConnectionAction {
     DraftModeSelected(ConnectionMode),
     DraftAccessKeyChanged(String),
     DraftSecretKeyChanged(String),
-    DraftVaultKeyChanged(String),
-    RowVaultKeyChanged(usize, String),
+    SessionVaultKeyChanged(String),
     SaveDraft,
     CancelDraft,
     Refresh,
@@ -353,6 +346,13 @@ impl ConnectionMarket {
             Self::Futures => "futures",
         }
     }
+
+    fn status_label(self) -> &'static str {
+        match self {
+            Self::Spot => "spot",
+            Self::Futures => "futures",
+        }
+    }
 }
 
 impl std::fmt::Display for ConnectionMarket {
@@ -377,6 +377,13 @@ impl ConnectionMode {
         match self {
             Self::View => "view",
             Self::Trade => "trade",
+        }
+    }
+
+    fn access_label(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::Trade => "trading",
         }
     }
 }
