@@ -260,6 +260,21 @@ impl ConnectionPanelState {
                 }
             };
 
+            let auth_check = if draft.exchange == ConnectionExchange::Mexc {
+                match probe_mexc_private_secret(draft.market, &secret) {
+                    Ok(success) => Some(success),
+                    Err(error) => {
+                        draft.error = Some(format!("MEXC auth failed: {error}"));
+                        self.draft = Some(draft);
+                        self.last_action = "Credential validation failed".to_string();
+                        self.push_log(format!("[credentials] MEXC auth failed: {error}"));
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
             if let Err(error) = save_connection_secret(&reference, &secret, &draft.vault_key) {
                 draft.error = Some(error.clone());
                 self.draft = Some(draft);
@@ -273,6 +288,11 @@ impl ConnectionPanelState {
                 reference,
                 access_key_hint: secret.access_key_hint(),
             };
+
+            if let Some(success) = auth_check {
+                row.test_state = ConnectionTestState::Success(success.message);
+                row.balance_summary = success.balance_summary;
+            }
         }
 
         let label = row.label();
@@ -681,11 +701,18 @@ fn probe_mexc_private(spec: &ConnectionProbeSpec) -> Result<ProbeSuccess, String
         }
     }
 
+    probe_mexc_private_secret(spec.market, &secret)
+}
+
+fn probe_mexc_private_secret(
+    market: ConnectionMarket,
+    secret: &ConnectionSecret,
+) -> Result<ProbeSuccess, String> {
     let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
     let client =
         MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
 
-    let balance_summary = match spec.market {
+    let balance_summary = match market {
         ConnectionMarket::Spot => {
             let account = match client.spot_account_information() {
                 Ok(account) => account,
@@ -738,6 +765,10 @@ fn mexc_futures_error_with_market_hint(
             "This API key authenticated on MEXC Spot, not Futures. Re-add it with Market=Spot. {}",
             format_balance_summary(available_balances_from_spot_account(&account))
         );
+    }
+
+    if is_mexc_futures_key_invalid(&error) {
+        return "MEXC rejected this Futures key/secret pair (code 402). Re-paste both API key and secret; the access-key suffix can match even when the saved secret is wrong.".to_string();
     }
 
     error
