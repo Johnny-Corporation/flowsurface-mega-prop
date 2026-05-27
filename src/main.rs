@@ -10,6 +10,7 @@ mod notify;
 mod panel_window;
 mod screen;
 mod style;
+mod trading_state;
 mod version;
 mod widget;
 mod window;
@@ -238,6 +239,7 @@ impl Flowsurface {
             Message::Tick(now) => {
                 self.tick_startup_loading(now);
                 self.connection_state.tick(now);
+                let live_trading_snapshot = self.connection_state.live_trading_snapshot();
 
                 for panel in self.panel_windows.values_mut() {
                     panel.tick(now);
@@ -249,6 +251,8 @@ impl Flowsurface {
 
                 let main_window_id = main_window.id;
                 let handles = self.handles.clone();
+                self.active_dashboard_mut()
+                    .set_live_trading_snapshot(main_window_id, &live_trading_snapshot);
 
                 return self
                     .active_dashboard_mut()

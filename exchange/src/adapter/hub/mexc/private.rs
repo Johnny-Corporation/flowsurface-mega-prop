@@ -364,6 +364,22 @@ impl MexcBlockingPrivateClient {
         self.send_futures_signed(Method::GET, "/v1/private/account/assets", Vec::new(), None)
     }
 
+    pub fn futures_open_positions(
+        &self,
+        symbol: Option<&str>,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        let params = symbol
+            .map(|symbol| vec![("symbol".to_string(), symbol.to_string())])
+            .unwrap_or_default();
+
+        self.send_futures_signed(
+            Method::GET,
+            "/v1/private/position/open_positions",
+            params,
+            None,
+        )
+    }
+
     pub fn futures_history_orders(
         &self,
         page_num: u32,
@@ -377,6 +393,24 @@ impl MexcBlockingPrivateClient {
         self.send_futures_signed(
             Method::GET,
             "/v1/private/order/list/history_orders",
+            params,
+            None,
+        )
+    }
+
+    pub fn futures_open_orders(
+        &self,
+        page_num: u32,
+        page_size: u32,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        let params = vec![
+            ("page_num".to_string(), page_num.max(1).to_string()),
+            ("page_size".to_string(), page_size.clamp(1, 100).to_string()),
+        ];
+
+        self.send_futures_signed(
+            Method::GET,
+            "/v1/private/order/list/open_orders",
             params,
             None,
         )

@@ -1,5 +1,6 @@
 use super::Message;
 use crate::style;
+use crate::trading_state::LiveTradingSnapshot;
 use data::panel::{
     cscalp_dom::{ClusterColumn, Config, build_time_clusters},
     ladder::{GroupedDepth, Side, TradeStore},
@@ -102,6 +103,7 @@ pub struct CscalpDom {
     last_exchange_ts_ms: Option<UnixMs>,
     working_orders: Vec<PaperOrder>,
     paper_position: PaperPosition,
+    live_trading: LiveTradingSnapshot,
     fill_sounds: Option<crate::audio::SoundCache>,
 }
 
@@ -121,7 +123,17 @@ impl CscalpDom {
             last_exchange_ts_ms: None,
             working_orders: Vec::new(),
             paper_position: PaperPosition::default(),
+            live_trading: LiveTradingSnapshot::default(),
             fill_sounds: None,
+        }
+    }
+
+    pub fn set_live_trading_snapshot(&mut self, snapshot: &LiveTradingSnapshot) {
+        let (symbol, _) = self.ticker_info.ticker.to_full_symbol_and_type();
+        let snapshot = snapshot.for_symbol(&symbol);
+        if self.live_trading != snapshot {
+            self.live_trading = snapshot;
+            self.invalidate(Some(Instant::now()));
         }
     }
 

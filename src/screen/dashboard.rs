@@ -14,6 +14,7 @@ use crate::{
     },
     screen::dashboard::tickers_table::TickersTable,
     style,
+    trading_state::LiveTradingSnapshot,
     widget::toast::Toast,
     window::{self, Window},
 };
@@ -1122,6 +1123,19 @@ impl Dashboard {
         } else {
             self.refresh_streams(main_window)
         }
+    }
+
+    pub fn set_live_trading_snapshot(
+        &mut self,
+        main_window: window::Id,
+        snapshot: &LiveTradingSnapshot,
+    ) {
+        self.iter_all_panes_mut(main_window)
+            .for_each(|(_, _, pane_state)| {
+                if let pane::Content::CscalpDom(Some(panel)) = &mut pane_state.content {
+                    panel.set_live_trading_snapshot(snapshot);
+                }
+            });
     }
 
     pub fn ingest_trades(

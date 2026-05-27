@@ -6,6 +6,7 @@ use crate::{
     audio::SoundType,
     screen::dashboard::panel::{Action, LimitOrderIntent, OrderClickButton, OrderSide},
     style,
+    trading_state::{LiveOrderSide, LivePosition},
 };
 use exchange::unit::Price;
 use iced::{
@@ -152,7 +153,10 @@ impl CscalpDom {
         cols: &ColumnRanges,
         text_color: iced::Color,
     ) {
-        if self.working_orders.is_empty() {
+        if self.config.view_mode && self.working_orders.is_empty() {
+            return;
+        }
+        if !self.config.view_mode && self.live_trading.open_orders.is_empty() {
             return;
         }
 
@@ -370,11 +374,24 @@ impl CscalpDom {
 
     fn order_counts_by_price(&self) -> BTreeMap<Price, (usize, usize)> {
         let mut counts: BTreeMap<Price, (usize, usize)> = BTreeMap::new();
-        for order in &self.working_orders {
-            let entry = counts.entry(order.price).or_default();
-            match order.side {
-                PaperOrderSide::Buy => entry.0 += 1,
-                PaperOrderSide::Sell => entry.1 += 1,
+
+        if self.config.view_mode {
+            for order in &self.working_orders {
+                let entry = counts.entry(order.price).or_default();
+                match order.side {
+                    PaperOrderSide::Buy => entry.0 += 1,
+                    PaperOrderSide::Sell => entry.1 += 1,
+                }
+            }
+        } else {
+            for order in &self.live_trading.open_orders {
+                let entry = counts
+                    .entry(order.price.round_to_step(self.step))
+                    .or_default();
+                match order.side {
+                    LiveOrderSide::Buy => entry.0 += 1,
+                    LiveOrderSide::Sell => entry.1 += 1,
+                }
             }
         }
         counts
@@ -428,11 +445,20 @@ impl CscalpDom {
     }
 
     fn paper_position_values(&self) -> (f32, f32, f32) {
+        if !self.config.view_mode {
+            return self.live_position_values();
+        }
+
         let mark = self.mark_price().map_or(0.0, Price::to_f32_lossy);
-        self.paper_position.values(mark)
+        self.paper_position
+            .values(mark, self.contract_value_multiplier())
     }
 
     fn paper_position_range(&self, grid: &PriceGrid) -> Option<(Price, Price, bool, bool)> {
+        if !self.config.view_mode {
+            return self.live_position_range(grid);
+        }
+
         let avg_entry = self.paper_position.avg_entry?;
         let is_long = self.paper_position.contracts > POSITION_EPSILON;
         let is_short = self.paper_position.contracts < -POSITION_EPSILON;
@@ -457,6 +483,68 @@ impl CscalpDom {
         };
 
         Some((entry, spread, is_profitable, is_long))
+    }
+
+    fn live_position_values(&self) -> (f32, f32, f32) {
+        let Some(position) = self.primary_live_position() else {
+            return (0.0, 0.0, 0.0);
+        };
+        let mark = self
+            .position_exit_price(position.contracts)
+            .map_or(0.0, Price::to_f32_lossy);
+        position_values(position, mark, self.contract_value_multiplier())
+    }
+
+    fn live_position_range(&self, grid: &PriceGrid) -> Option<(Price, Price, bool, bool)> {
+        let position = self.primary_live_position()?;
+        let avg_entry = position.avg_entry?;
+        let is_long = position.contracts > POSITION_EPSILON;
+        let is_short = position.contracts < -POSITION_EPSILON;
+        if !is_long && !is_short {
+            return None;
+        }
+
+        let spread = self.position_exit_price(position.contracts)?;
+        let entry = Price::from_f32(avg_entry).round_to_step(grid.tick);
+        let spread = spread.round_to_step(grid.tick);
+        let (_, _, pnl) = position_values(
+            position,
+            spread.to_f32_lossy(),
+            self.contract_value_multiplier(),
+        );
+
+        Some((entry, spread, pnl >= 0.0, is_long))
+    }
+
+    fn primary_live_position(&self) -> Option<&LivePosition> {
+        self.live_trading
+            .positions
+            .iter()
+            .filter(|position| position.contracts.abs() > POSITION_EPSILON)
+            .max_by(|left, right| {
+                left.contracts
+                    .abs()
+                    .partial_cmp(&right.contracts.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
+    fn position_exit_price(&self, contracts: f32) -> Option<Price> {
+        if contracts > POSITION_EPSILON {
+            self.best_price(super::Side::Bid)
+        } else if contracts < -POSITION_EPSILON {
+            self.best_price(super::Side::Ask)
+        } else {
+            None
+        }
+        .or_else(|| self.mark_price())
+    }
+
+    fn contract_value_multiplier(&self) -> f32 {
+        self.ticker_info
+            .contract_size
+            .map(|size| size.as_f32())
+            .unwrap_or(1.0)
     }
 
     fn mark_price(&self) -> Option<Price> {
@@ -521,17 +609,21 @@ impl PaperPosition {
         }
     }
 
-    fn values(self, mark: f32) -> (f32, f32, f32) {
-        let position_dollars = self.contracts * mark;
+    fn values(self, mark: f32, contract_multiplier: f32) -> (f32, f32, f32) {
+        let position_dollars = self.contracts * contract_multiplier * mark;
         let unrealized = match self.avg_entry {
-            Some(avg) if self.contracts > POSITION_EPSILON => (mark - avg) * self.contracts,
-            Some(avg) if self.contracts < -POSITION_EPSILON => (avg - mark) * self.contracts.abs(),
+            Some(avg) if self.contracts > POSITION_EPSILON => {
+                (mark - avg) * self.contracts * contract_multiplier
+            }
+            Some(avg) if self.contracts < -POSITION_EPSILON => {
+                (avg - mark) * self.contracts.abs() * contract_multiplier
+            }
             _ => 0.0,
         };
         let total_pnl = self.realized_pnl + unrealized;
         let pnl_base = self
             .avg_entry
-            .map(|avg| avg.abs() * self.contracts.abs())
+            .map(|avg| avg.abs() * self.contracts.abs() * contract_multiplier)
             .unwrap_or(0.0);
         let pnl_percent = if pnl_base > POSITION_EPSILON {
             (unrealized / pnl_base) * 100.0
@@ -541,6 +633,35 @@ impl PaperPosition {
 
         (position_dollars, pnl_percent, total_pnl)
     }
+}
+
+fn position_values(
+    position: &LivePosition,
+    mark: f32,
+    contract_multiplier: f32,
+) -> (f32, f32, f32) {
+    let position_dollars = position.contracts * contract_multiplier * mark;
+    let unrealized = match position.avg_entry {
+        Some(avg) if position.contracts > POSITION_EPSILON => {
+            (mark - avg) * position.contracts * contract_multiplier
+        }
+        Some(avg) if position.contracts < -POSITION_EPSILON => {
+            (avg - mark) * position.contracts.abs() * contract_multiplier
+        }
+        _ => 0.0,
+    };
+    let total_pnl = position.realized_pnl + unrealized;
+    let pnl_base = position
+        .avg_entry
+        .map(|avg| avg.abs() * position.contracts.abs() * contract_multiplier)
+        .unwrap_or_default();
+    let pnl_percent = if pnl_base > POSITION_EPSILON {
+        (unrealized / pnl_base) * 100.0
+    } else {
+        0.0
+    };
+
+    (position_dollars, pnl_percent, total_pnl)
 }
 
 fn order_marker_label(buy_count: usize, sell_count: usize) -> String {
