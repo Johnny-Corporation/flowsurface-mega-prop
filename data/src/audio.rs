@@ -28,7 +28,7 @@ pub struct StreamCfg {
 impl Default for StreamCfg {
     fn default() -> Self {
         StreamCfg {
-            enabled: true,
+            enabled: false,
             threshold: Threshold::Count(10),
         }
     }

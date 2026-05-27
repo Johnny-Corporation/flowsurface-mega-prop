@@ -121,7 +121,7 @@ impl CscalpDom {
             last_exchange_ts_ms: None,
             working_orders: Vec::new(),
             paper_position: PaperPosition::default(),
-            fill_sounds: crate::audio::SoundCache::with_default_sounds(Some(45.0)).ok(),
+            fill_sounds: None,
         }
     }
 
