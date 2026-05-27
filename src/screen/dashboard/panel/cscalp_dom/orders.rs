@@ -178,19 +178,27 @@ impl CscalpDom {
             return;
         }
 
-        let counts = self.order_counts_by_price();
+        let contracts = self.order_contracts_by_price();
         for visible in visible_rows {
             let Some(price) = visible.row.price() else {
                 continue;
             };
-            let Some((buy_count, sell_count)) = counts.get(&price).copied() else {
+            let Some((buy_contracts, sell_contracts)) = contracts.get(&price).copied() else {
                 continue;
             };
             let Some(y) = self.price_to_screen_y(price, grid, bounds.height) else {
                 continue;
             };
-            let label = order_marker_label(buy_count, sell_count);
-            self.draw_order_marker(frame, &label, y, cols, text_color, buy_count, sell_count);
+            let label = order_marker_label(buy_contracts, sell_contracts);
+            self.draw_order_marker(
+                frame,
+                &label,
+                y,
+                cols,
+                text_color,
+                buy_contracts,
+                sell_contracts,
+            );
         }
     }
 
@@ -432,29 +440,29 @@ impl CscalpDom {
         }
     }
 
-    fn order_counts_by_price(&self) -> BTreeMap<Price, (usize, usize)> {
-        let mut counts: BTreeMap<Price, (usize, usize)> = BTreeMap::new();
+    fn order_contracts_by_price(&self) -> BTreeMap<Price, (f32, f32)> {
+        let mut contracts: BTreeMap<Price, (f32, f32)> = BTreeMap::new();
 
         if self.config.view_mode {
             for order in &self.working_orders {
-                let entry = counts.entry(order.price).or_default();
+                let entry = contracts.entry(order.price).or_default();
                 match order.side {
-                    PaperOrderSide::Buy => entry.0 += 1,
-                    PaperOrderSide::Sell => entry.1 += 1,
+                    PaperOrderSide::Buy => entry.0 += order.contracts,
+                    PaperOrderSide::Sell => entry.1 += order.contracts,
                 }
             }
         } else {
             for order in &self.live_trading.open_orders {
-                let entry = counts
+                let entry = contracts
                     .entry(order.price.round_to_step(self.step))
                     .or_default();
                 match order.side {
-                    LiveOrderSide::Buy => entry.0 += 1,
-                    LiveOrderSide::Sell => entry.1 += 1,
+                    LiveOrderSide::Buy => entry.0 += order.contracts,
+                    LiveOrderSide::Sell => entry.1 += order.contracts,
                 }
             }
         }
-        counts
+        contracts
     }
 
     fn draw_order_marker(
@@ -464,19 +472,21 @@ impl CscalpDom {
         y: f32,
         cols: &ColumnRanges,
         text_color: iced::Color,
-        buy_count: usize,
-        sell_count: usize,
+        buy_contracts: f32,
+        sell_contracts: f32,
     ) {
         let width = label.chars().count() as f32 * style::text_size::TINY * 0.66 + 8.0;
         let x = (cols.prints.1 - width - 4.0).max(cols.prints.0 + 2.0);
-        let color = if sell_count > 0 && buy_count == 0 {
+        let has_buy = buy_contracts > POSITION_EPSILON;
+        let has_sell = sell_contracts > POSITION_EPSILON;
+        let color = if has_sell && !has_buy {
             iced::Color {
                 r: 0.88,
                 g: 0.31,
                 b: 0.31,
                 a: 1.0,
             }
-        } else if buy_count > 0 && sell_count == 0 {
+        } else if has_buy && !has_sell {
             iced::Color {
                 r: 0.22,
                 g: 0.72,
@@ -751,13 +761,24 @@ fn position_values(
     (position_dollars, pnl_percent, total_pnl)
 }
 
-fn order_marker_label(buy_count: usize, sell_count: usize) -> String {
-    match (buy_count, sell_count) {
-        (0, 0) => String::new(),
-        (buy, 0) => format!("{buy}x↑"),
-        (0, sell) => format!("{sell}x↓"),
-        (buy, sell) => format!("{buy}x↑ {sell}x↓"),
+fn order_marker_label(buy_contracts: f32, sell_contracts: f32) -> String {
+    let has_buy = buy_contracts > POSITION_EPSILON;
+    let has_sell = sell_contracts > POSITION_EPSILON;
+
+    match (has_buy, has_sell) {
+        (false, false) => String::new(),
+        (true, false) => format!("{}↑", order_marker_contracts_label(buy_contracts)),
+        (false, true) => format!("{}↓", order_marker_contracts_label(sell_contracts)),
+        (true, true) => format!(
+            "{}↑ {}↓",
+            order_marker_contracts_label(buy_contracts),
+            order_marker_contracts_label(sell_contracts)
+        ),
     }
+}
+
+fn order_marker_contracts_label(value: f32) -> String {
+    format!("{:.0}", value.round().max(0.0))
 }
 
 fn signed_money(value: f32) -> String {
@@ -847,7 +868,10 @@ fn solid_mix(base: iced::Color, tint: iced::Color, tint_weight: f32) -> iced::Co
 
 #[cfg(test)]
 mod tests {
-    use super::{ClickOrderKind, PaperOrderSide, adjust_order_contracts, click_order_kind};
+    use super::{
+        ClickOrderKind, PaperOrderSide, adjust_order_contracts, click_order_kind,
+        order_marker_label,
+    };
     use crate::screen::dashboard::panel::OrderClickButton;
     use exchange::unit::Price;
 
@@ -888,5 +912,12 @@ mod tests {
         assert_eq!(adjust_order_contracts(1.0, -1.0), 1.0);
         assert_eq!(adjust_order_contracts(1.0, 1.0), 2.0);
         assert_eq!(adjust_order_contracts(100.0, 1.0), 100.0);
+    }
+
+    #[test]
+    fn order_marker_label_shows_contract_volume() {
+        assert_eq!(order_marker_label(5.0, 0.0), "5↑");
+        assert_eq!(order_marker_label(0.0, 3.0), "3↓");
+        assert_eq!(order_marker_label(5.0, 3.0), "5↑ 3↓");
     }
 }
