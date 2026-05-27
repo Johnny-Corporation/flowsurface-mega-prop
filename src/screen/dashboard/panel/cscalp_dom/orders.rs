@@ -56,6 +56,31 @@ impl CscalpDom {
         cursor_x >= cols.orderbook.0 && cursor_x <= cols.orderbook.1
     }
 
+    pub(super) fn is_in_trading_footer_area(
+        &self,
+        width: f32,
+        height: f32,
+        cursor_x: f32,
+        cursor_y: f32,
+    ) -> bool {
+        if cursor_y < height - ROW_HEIGHT * CLUSTER_FOOTER_ROWS {
+            return false;
+        }
+
+        let Some(grid) = self.build_price_grid() else {
+            return false;
+        };
+        let layout = self.price_layout_for(width, &grid);
+        let cols = self.column_ranges(width, layout.price_px);
+        cursor_x >= cols.orderbook.0 && cursor_x <= width.max(cols.price.1).max(cols.orderbook.1)
+    }
+
+    pub(super) fn adjust_order_size(&mut self, delta: f32) {
+        self.config.paper_order_contracts =
+            adjust_order_contracts(self.config.paper_order_contracts, delta);
+        self.invalidate(Some(Instant::now()));
+    }
+
     pub(super) fn handle_orderbook_click(
         &mut self,
         button: OrderClickButton,
@@ -266,12 +291,24 @@ impl CscalpDom {
         let footer_y = (bounds.height - footer_h).floor();
         let footer_h = bounds.height - footer_y;
         let (position_dollars, pnl_percent, pnl_dollars) = self.paper_position_values();
+        let position_contracts = if self.config.view_mode {
+            self.paper_position.contracts
+        } else {
+            self.primary_live_position()
+                .map(|position| position.contracts)
+                .unwrap_or_default()
+        };
         let panel_fill = trading_footer_panel_color(text_color);
         let cells = [
+            (
+                "Q",
+                order_contracts_label(self.config.paper_order_contracts),
+            ),
+            ("C", signed_contracts(position_contracts)),
             ("$", signed_money(position_dollars)),
-            ("C", signed_contracts(self.paper_position.contracts)),
             ("%", format!("{:+.2}%", pnl_percent)),
             ("P", signed_money(pnl_dollars)),
+            ("", mode_label(self.config.view_mode).to_string()),
         ];
 
         let x0 = cols.orderbook.0;
@@ -288,7 +325,7 @@ impl CscalpDom {
         );
 
         let cell_w = width / 2.0;
-        let cell_h = footer_h / 2.0;
+        let cell_h = footer_h / 3.0;
         for (idx, (label, value)) in cells.iter().enumerate() {
             let col = idx % 2;
             let row = idx / 2;
@@ -305,7 +342,11 @@ impl CscalpDom {
                 Size::new(cell_w, 1.0),
                 divider_color,
             );
-            let content = format!("{label} {value}");
+            let content = if label.is_empty() {
+                value.to_string()
+            } else {
+                format!("{label} {value}")
+            };
             let text_color = footer_value_color(label, value, text_color, bid_color, ask_color);
             let center_y = y + cell_h * 0.5;
             frame.fill_text(Text {
@@ -602,6 +643,10 @@ fn click_order_kind(
     None
 }
 
+fn adjust_order_contracts(current: f32, delta: f32) -> f32 {
+    (current + delta).round().clamp(1.0, 100.0)
+}
+
 impl PaperPosition {
     fn apply_fill(&mut self, side: PaperOrderSide, price: Price, contracts: f32) {
         let contracts = contracts.max(0.0);
@@ -728,6 +773,14 @@ fn signed_contracts(value: f32) -> String {
     }
 }
 
+fn order_contracts_label(value: f32) -> String {
+    format!("{:.0}", value.round().clamp(1.0, 100.0))
+}
+
+fn mode_label(view_mode: bool) -> &'static str {
+    if view_mode { "VIEW" } else { "LIVE" }
+}
+
 fn label_plate_color(text_color: iced::Color) -> iced::Color {
     let luminance = 0.2126 * text_color.r + 0.7152 * text_color.g + 0.0722 * text_color.b;
     if luminance > 0.5 {
@@ -794,7 +847,7 @@ fn solid_mix(base: iced::Color, tint: iced::Color, tint_weight: f32) -> iced::Co
 
 #[cfg(test)]
 mod tests {
-    use super::{ClickOrderKind, PaperOrderSide, click_order_kind};
+    use super::{ClickOrderKind, PaperOrderSide, adjust_order_contracts, click_order_kind};
     use crate::screen::dashboard::panel::OrderClickButton;
     use exchange::unit::Price;
 
@@ -828,5 +881,12 @@ mod tests {
             click_order_kind(OrderClickButton::Right, sell_price, bid, ask),
             Some(ClickOrderKind::Limit(PaperOrderSide::Sell, sell_price))
         );
+    }
+
+    #[test]
+    fn order_size_adjustment_stays_in_contract_bounds() {
+        assert_eq!(adjust_order_contracts(1.0, -1.0), 1.0);
+        assert_eq!(adjust_order_contracts(1.0, 1.0), 2.0);
+        assert_eq!(adjust_order_contracts(100.0, 1.0), 100.0);
     }
 }

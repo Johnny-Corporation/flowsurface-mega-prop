@@ -15,6 +15,7 @@ pub enum Message {
     Scrolled(f32),
     ResetScroll,
     Invalidate(Option<Instant>),
+    AdjustOrderSize(f32),
     CancelAllOrders,
     OrderbookClicked {
         button: OrderClickButton,
@@ -79,6 +80,8 @@ pub trait Panel: canvas::Program<Message> {
 
     fn is_empty(&self) -> bool;
 
+    fn adjust_order_size(&mut self, _delta: f32) {}
+
     fn drag_section_split(&mut self, _divider: SectionDivider, _cursor_x: f32, _width: f32) {}
 
     fn cancel_all_orders(&mut self) -> Option<Action> {
@@ -123,6 +126,10 @@ pub fn update<T: Panel>(panel: &mut T, message: Message) -> Option<Action> {
         }
         Message::Invalidate(now) => {
             panel.invalidate(now);
+            None
+        }
+        Message::AdjustOrderSize(delta) => {
+            panel.adjust_order_size(delta);
             None
         }
         Message::CancelAllOrders => panel.cancel_all_orders(),

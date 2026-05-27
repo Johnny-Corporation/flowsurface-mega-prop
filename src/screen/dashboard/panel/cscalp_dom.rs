@@ -58,6 +58,10 @@ impl super::Panel for CscalpDom {
         CscalpDom::invalidate(self, Some(Instant::now()));
     }
 
+    fn adjust_order_size(&mut self, delta: f32) {
+        CscalpDom::adjust_order_size(self, delta);
+    }
+
     fn cancel_all_orders(&mut self) -> Option<super::Action> {
         CscalpDom::cancel_all_orders(self)
     }
@@ -289,6 +293,18 @@ impl canvas::Program<Message> for CscalpDom {
                 key: keyboard::Key::Named(keyboard::key::Named::Space),
                 ..
             }) => Some(canvas::Action::publish(Message::CancelAllOrders).and_capture()),
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Character(value),
+                ..
+            }) if matches!(value.as_str(), "+" | "=") => {
+                Some(canvas::Action::publish(Message::AdjustOrderSize(1.0)).and_capture())
+            }
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Character(value),
+                ..
+            }) if matches!(value.as_str(), "-" | "_") => {
+                Some(canvas::Action::publish(Message::AdjustOrderSize(-1.0)).and_capture())
+            }
             Event::Mouse(mouse_event) => match mouse_event {
                 mouse::Event::ButtonPressed(mouse::Button::Left) => {
                     let cursor_position = cursor_position?;
@@ -359,6 +375,23 @@ impl canvas::Program<Message> for CscalpDom {
                     }
                 }
                 mouse::Event::WheelScrolled { delta } => {
+                    let cursor_position = cursor_position?;
+                    if self.is_in_trading_footer_area(
+                        bounds.width,
+                        bounds.height,
+                        cursor_position.x,
+                        cursor_position.y,
+                    ) {
+                        let quantity_delta = match delta {
+                            mouse::ScrollDelta::Lines { y, .. } => y.signum(),
+                            mouse::ScrollDelta::Pixels { y, .. } => y.signum(),
+                        };
+                        return Some(
+                            canvas::Action::publish(Message::AdjustOrderSize(quantity_delta))
+                                .and_capture(),
+                        );
+                    }
+
                     let scroll_amount = match delta {
                         mouse::ScrollDelta::Lines { y, .. } => -(*y) * ROW_HEIGHT,
                         mouse::ScrollDelta::Pixels { y, .. } => -*y,
