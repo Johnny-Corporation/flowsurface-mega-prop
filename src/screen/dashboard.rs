@@ -60,6 +60,7 @@ pub enum Message {
     },
     ResolveStreams(uuid::Uuid, Vec<PersistStreamKind>),
     RequestPalette,
+    PanelAction(panel::Action),
 }
 
 pub struct Dashboard {
@@ -85,6 +86,7 @@ impl Default for Dashboard {
 #[derive(Debug, Clone)]
 pub enum Event {
     Notification(Toast),
+    PanelAction(panel::Action),
     DistributeFetchedData {
         layout_id: uuid::Uuid,
         pane_id: uuid::Uuid,
@@ -469,6 +471,9 @@ impl Dashboard {
                             pane::Effect::FocusWidget(id) => {
                                 return (iced::widget::operation::focus(id), None);
                             }
+                            pane::Effect::PanelAction(action) => {
+                                return (Task::none(), Some(Event::PanelAction(action)));
+                            }
                         };
                         return (task, None);
                     }
@@ -476,6 +481,9 @@ impl Dashboard {
             },
             Message::RequestPalette => {
                 return (Task::none(), Some(Event::RequestPalette));
+            }
+            Message::PanelAction(action) => {
+                return (Task::none(), Some(Event::PanelAction(action)));
             }
             Message::ChangePaneStatus(pane_id, status) => {
                 if let Some(pane_state) = self.get_mut_pane_state_by_uuid(main_window.id, pane_id) {
@@ -1230,7 +1238,9 @@ impl Dashboard {
                     tasks.push(Task::done(Message::RequestPalette));
                 }
             },
-            Some(pane::Action::Panel(_action)) => {}
+            Some(pane::Action::Panel(action)) => {
+                tasks.push(Task::done(Message::PanelAction(action)));
+            }
             Some(pane::Action::ResolveStreams(streams)) => {
                 tasks.push(Task::done(Message::ResolveStreams(
                     state.unique_id(),

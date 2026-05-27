@@ -3,6 +3,7 @@ pub mod ladder;
 pub mod timeandsales;
 
 use crate::widget::loading;
+use exchange::{TickerInfo, unit::Price};
 use iced::{
     Element, padding,
     widget::{canvas, container},
@@ -29,7 +30,25 @@ pub enum Message {
     },
 }
 
-pub enum Action {}
+#[derive(Debug, Clone)]
+pub enum Action {
+    PlaceLimitOrder(LimitOrderIntent),
+    CancelAllOrders(TickerInfo),
+}
+
+#[derive(Debug, Clone)]
+pub struct LimitOrderIntent {
+    pub ticker_info: TickerInfo,
+    pub side: OrderSide,
+    pub price: Price,
+    pub quantity: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderSide {
+    Buy,
+    Sell,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderClickButton {
@@ -54,7 +73,9 @@ pub trait Panel: canvas::Program<Message> {
 
     fn drag_section_split(&mut self, _divider: SectionDivider, _cursor_x: f32, _width: f32) {}
 
-    fn cancel_all_orders(&mut self) {}
+    fn cancel_all_orders(&mut self) -> Option<Action> {
+        None
+    }
 
     fn handle_orderbook_click(
         &mut self,
@@ -63,7 +84,8 @@ pub trait Panel: canvas::Program<Message> {
         _cursor_y: f32,
         _width: f32,
         _height: f32,
-    ) {
+    ) -> Option<Action> {
+        None
     }
 }
 
@@ -81,35 +103,35 @@ pub fn view<T: Panel>(panel: &'_ T, _timezone: data::UserTimezone) -> Element<'_
     .into()
 }
 
-pub fn update<T: Panel>(panel: &mut T, message: Message) {
+pub fn update<T: Panel>(panel: &mut T, message: Message) -> Option<Action> {
     match message {
         Message::Scrolled(delta) => {
             panel.scroll(delta);
+            None
         }
         Message::ResetScroll => {
             panel.reset_scroll();
+            None
         }
         Message::Invalidate(now) => {
             panel.invalidate(now);
+            None
         }
-        Message::CancelAllOrders => {
-            panel.cancel_all_orders();
-        }
+        Message::CancelAllOrders => panel.cancel_all_orders(),
         Message::OrderbookClicked {
             button,
             cursor_x,
             cursor_y,
             width,
             height,
-        } => {
-            panel.handle_orderbook_click(button, cursor_x, cursor_y, width, height);
-        }
+        } => panel.handle_orderbook_click(button, cursor_x, cursor_y, width, height),
         Message::SectionSplitDragged {
             divider,
             cursor_x,
             width,
         } => {
             panel.drag_section_split(divider, cursor_x, width);
+            None
         }
     }
 }

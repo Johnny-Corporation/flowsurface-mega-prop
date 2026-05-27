@@ -374,6 +374,10 @@ impl Flowsurface {
                             self.notifications.push(toast);
                             Task::none()
                         }
+                        Some(dashboard::Event::PanelAction(action)) => {
+                            self.connection_state.handle_panel_action(action);
+                            Task::none()
+                        }
                         Some(dashboard::Event::ResolveStreams { pane_id, streams }) => {
                             let tickers_info = self.sidebar.tickers_info();
 

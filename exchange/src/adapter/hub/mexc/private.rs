@@ -111,6 +111,31 @@ impl MexcPrivateClient {
             .await
     }
 
+    pub async fn spot_open_orders(&self, symbol: &str) -> Result<Value, AdapterError> {
+        self.send_spot_signed(
+            Method::GET,
+            "/v3/openOrders",
+            vec![("symbol", symbol.to_string())],
+        )
+        .await
+    }
+
+    pub async fn spot_cancel_order(
+        &self,
+        symbol: &str,
+        order_id: &str,
+    ) -> Result<Value, AdapterError> {
+        self.send_spot_signed(
+            Method::DELETE,
+            "/v3/order",
+            vec![
+                ("symbol", symbol.to_string()),
+                ("orderId", order_id.to_string()),
+            ],
+        )
+        .await
+    }
+
     pub async fn futures_assets(&self) -> Result<MexcFuturesResponse<Value>, AdapterError> {
         self.send_futures_signed(Method::GET, "/v1/private/account/assets", Vec::new(), None)
             .await
@@ -152,6 +177,27 @@ impl MexcPrivateClient {
         .await
     }
 
+    pub async fn futures_open_orders_for_symbol(
+        &self,
+        symbol: &str,
+        page_num: u32,
+        page_size: u32,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        let params = vec![
+            ("symbol".to_string(), symbol.to_string()),
+            ("page_num".to_string(), page_num.max(1).to_string()),
+            ("page_size".to_string(), page_size.clamp(1, 100).to_string()),
+        ];
+
+        self.send_futures_signed(
+            Method::GET,
+            "/v1/private/order/list/open_orders",
+            params,
+            None,
+        )
+        .await
+    }
+
     pub async fn futures_history_orders(
         &self,
         page_num: u32,
@@ -177,9 +223,35 @@ impl MexcPrivateClient {
     ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
         self.send_futures_signed(
             Method::POST,
-            "/v1/private/order/create",
+            "/v1/private/order/submit",
             Vec::new(),
             Some(request.body()),
+        )
+        .await
+    }
+
+    pub async fn futures_cancel_order(
+        &self,
+        order_id: impl ToString,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        self.send_futures_signed(
+            Method::POST,
+            "/v1/private/order/cancel",
+            Vec::new(),
+            Some(serde_json::json!([order_id.to_string()])),
+        )
+        .await
+    }
+
+    pub async fn futures_cancel_all_orders(
+        &self,
+        symbol: &str,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        self.send_futures_signed(
+            Method::POST,
+            "/v1/private/order/cancel_all",
+            Vec::new(),
+            Some(serde_json::json!({ "symbol": symbol })),
         )
         .await
     }
@@ -307,6 +379,62 @@ impl MexcBlockingPrivateClient {
             "/v1/private/order/list/history_orders",
             params,
             None,
+        )
+    }
+
+    pub fn futures_open_orders_for_symbol(
+        &self,
+        symbol: &str,
+        page_num: u32,
+        page_size: u32,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        let params = vec![
+            ("symbol".to_string(), symbol.to_string()),
+            ("page_num".to_string(), page_num.max(1).to_string()),
+            ("page_size".to_string(), page_size.clamp(1, 100).to_string()),
+        ];
+
+        self.send_futures_signed(
+            Method::GET,
+            "/v1/private/order/list/open_orders",
+            params,
+            None,
+        )
+    }
+
+    pub fn futures_place_order(
+        &self,
+        request: &FuturesOrderRequest,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        self.send_futures_signed(
+            Method::POST,
+            "/v1/private/order/submit",
+            Vec::new(),
+            Some(request.body()),
+        )
+    }
+
+    pub fn futures_cancel_order(
+        &self,
+        order_id: impl ToString,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        self.send_futures_signed(
+            Method::POST,
+            "/v1/private/order/cancel",
+            Vec::new(),
+            Some(serde_json::json!([order_id.to_string()])),
+        )
+    }
+
+    pub fn futures_cancel_all_orders(
+        &self,
+        symbol: &str,
+    ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
+        self.send_futures_signed(
+            Method::POST,
+            "/v1/private/order/cancel_all",
+            Vec::new(),
+            Some(serde_json::json!({ "symbol": symbol })),
         )
     }
 

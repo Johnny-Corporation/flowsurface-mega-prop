@@ -2,7 +2,11 @@ use super::{
     CLUSTER_FOOTER_ROWS, CscalpDom, ROW_HEIGHT,
     types::{ColumnRanges, PriceGrid, VisibleRow},
 };
-use crate::{audio::SoundType, screen::dashboard::panel::OrderClickButton, style};
+use crate::{
+    audio::SoundType,
+    screen::dashboard::panel::{Action, LimitOrderIntent, OrderClickButton, OrderSide},
+    style,
+};
 use exchange::unit::Price;
 use iced::{
     Alignment, Point, Rectangle, Size,
@@ -50,49 +54,55 @@ impl CscalpDom {
         cursor_y: f32,
         width: f32,
         height: f32,
-    ) {
-        if !self.config.view_mode {
-            log::warn!("Live CSCALP DOM order submission is not wired; ignoring click.");
-            return;
-        }
-
-        let Some(grid) = self.build_price_grid() else {
-            return;
-        };
+    ) -> Option<Action> {
+        let grid = self.build_price_grid()?;
         let layout = self.price_layout_for(width, &grid);
         let cols = self.column_ranges(width, layout.price_px);
         if cursor_x < cols.orderbook.0 || cursor_x > cols.orderbook.1 {
-            return;
+            return None;
         }
         if cursor_y >= height - ROW_HEIGHT * CLUSTER_FOOTER_ROWS {
-            return;
+            return None;
         }
 
-        let Some(price) = self.screen_y_to_price(cursor_y, &grid, height) else {
-            return;
-        };
+        let price = self.screen_y_to_price(cursor_y, &grid, height)?;
 
+        let mut action = None;
         if price >= grid.best_ask {
             match button {
-                OrderClickButton::Left => self.execute_market_order(PaperOrderSide::Buy),
-                OrderClickButton::Right => self.place_limit_order(PaperOrderSide::Sell, price),
+                OrderClickButton::Left => {
+                    log::warn!("Crossed-spread market buys are not enabled from CSCALP DOM yet.");
+                }
+                OrderClickButton::Right => {
+                    action = self.handle_limit_order_click(PaperOrderSide::Sell, price);
+                }
             }
         } else if price <= grid.best_bid {
             match button {
-                OrderClickButton::Left => self.place_limit_order(PaperOrderSide::Buy, price),
-                OrderClickButton::Right => self.execute_market_order(PaperOrderSide::Sell),
+                OrderClickButton::Left => {
+                    action = self.handle_limit_order_click(PaperOrderSide::Buy, price);
+                }
+                OrderClickButton::Right => {
+                    log::warn!("Crossed-spread market sells are not enabled from CSCALP DOM yet.");
+                }
             }
         }
 
         self.invalidate(Some(Instant::now()));
+        action
     }
 
-    pub(super) fn cancel_all_orders(&mut self) {
-        if self.working_orders.is_empty() {
-            return;
+    pub(super) fn cancel_all_orders(&mut self) -> Option<Action> {
+        if self.working_orders.is_empty() && self.config.view_mode {
+            return None;
+        }
+
+        if !self.config.view_mode {
+            return Some(Action::CancelAllOrders(self.ticker_info));
         }
         self.working_orders.clear();
         self.invalidate(Some(Instant::now()));
+        None
     }
 
     pub(super) fn fill_view_mode_limit_orders(&mut self) {
@@ -323,14 +333,21 @@ impl CscalpDom {
         self.working_orders.push(order);
     }
 
-    fn execute_market_order(&mut self, side: PaperOrderSide) {
-        let fill_price = match side {
-            PaperOrderSide::Buy => self.best_price(super::Side::Ask),
-            PaperOrderSide::Sell => self.best_price(super::Side::Bid),
-        };
-        if let Some(price) = fill_price {
-            self.apply_paper_fill(side, price, self.config.paper_order_contracts.max(1.0));
+    fn handle_limit_order_click(&mut self, side: PaperOrderSide, price: Price) -> Option<Action> {
+        if self.config.view_mode {
+            self.place_limit_order(side, price);
+            return None;
         }
+
+        Some(Action::PlaceLimitOrder(LimitOrderIntent {
+            ticker_info: self.ticker_info,
+            side: match side {
+                PaperOrderSide::Buy => OrderSide::Buy,
+                PaperOrderSide::Sell => OrderSide::Sell,
+            },
+            price,
+            quantity: self.config.paper_order_contracts.max(1.0),
+        }))
     }
 
     fn apply_paper_fill(&mut self, side: PaperOrderSide, price: Price, contracts: f32) {

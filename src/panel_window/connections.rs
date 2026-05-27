@@ -1,11 +1,12 @@
-use crate::style;
+use crate::{screen::dashboard::panel, style};
 
 use data::config::connection_credentials::{
     ConnectionCredentialRef, ConnectionSecret, delete_connection_secret, load_connection_secret,
     load_or_create_device_vault_key, save_connection_secret,
 };
 use exchange::adapter::{
-    Exchange, MexcBlockingPrivateClient, MexcCredentials, MexcFuturesResponse,
+    Exchange, FuturesOpenType, FuturesOrderRequest, FuturesOrderSide, FuturesOrderType,
+    MexcBlockingPrivateClient, MexcCredentials, MexcFuturesResponse,
     available_balances_from_futures_assets, available_balances_from_spot_account,
 };
 use iced::{
@@ -329,6 +330,15 @@ impl ConnectionPanelState {
         trades
     }
 
+    pub(crate) fn handle_panel_action(&mut self, action: panel::Action) {
+        match action {
+            panel::Action::PlaceLimitOrder(intent) => self.place_limit_order(intent),
+            panel::Action::CancelAllOrders(ticker_info) => {
+                self.cancel_all_orders(ticker_info);
+            }
+        }
+    }
+
     pub(crate) fn autoconnect(&mut self) {
         if !self.autoconnect_enabled {
             self.last_action = "Autoconnect disabled".to_string();
@@ -555,6 +565,7 @@ impl ConnectionPanelState {
                 outcome: Err(status),
                 balances: Vec::new(),
                 trades: Vec::new(),
+                log_only: None,
             });
             return;
         };
@@ -565,7 +576,89 @@ impl ConnectionPanelState {
         });
     }
 
+    fn place_limit_order(&mut self, intent: panel::LimitOrderIntent) {
+        let Some(row) = self.active_trading_row() else {
+            self.last_action = "Order rejected".to_string();
+            self.push_log("[trading] No active trading connection is ON".to_string());
+            return;
+        };
+
+        if row.exchange != ConnectionExchange::Mexc || row.market != ConnectionMarket::Futures {
+            self.last_action = "Order rejected".to_string();
+            self.push_log(
+                "[trading] Only MEXC Futures live orders are wired right now".to_string(),
+            );
+            return;
+        }
+
+        let CredentialState::Saved { reference, .. } = &row.credentials else {
+            self.last_action = "Order rejected".to_string();
+            self.push_log(
+                "[trading] Active trading connection has no saved credentials".to_string(),
+            );
+            return;
+        };
+
+        let order = LiveLimitOrderSpec::new(reference.clone(), intent);
+        self.last_action = "Order submitted".to_string();
+        self.push_log(format!(
+            "[trading] Submitting {} {} {} @ {}",
+            order.symbol, order.side_label, order.quantity, order.price
+        ));
+
+        let tx = self.probe_tx.clone();
+        thread::spawn(move || {
+            let result = run_live_limit_order(order);
+            let _ = tx.send(ConnectionProbeResult::trading_log(result));
+        });
+    }
+
+    fn cancel_all_orders(&mut self, ticker_info: exchange::TickerInfo) {
+        let Some(row) = self.active_trading_row() else {
+            self.last_action = "Cancel rejected".to_string();
+            self.push_log("[trading] No active trading connection is ON".to_string());
+            return;
+        };
+
+        if row.exchange != ConnectionExchange::Mexc || row.market != ConnectionMarket::Futures {
+            self.last_action = "Cancel rejected".to_string();
+            self.push_log("[trading] Only MEXC Futures cancel-all is wired right now".to_string());
+            return;
+        }
+
+        let CredentialState::Saved { reference, .. } = &row.credentials else {
+            self.last_action = "Cancel rejected".to_string();
+            self.push_log(
+                "[trading] Active trading connection has no saved credentials".to_string(),
+            );
+            return;
+        };
+
+        let (symbol, _) = ticker_info.ticker.to_full_symbol_and_type();
+        let reference = reference.clone();
+        self.last_action = "Cancel all submitted".to_string();
+        self.push_log(format!("[trading] Cancel all submitted for {symbol}"));
+
+        let tx = self.probe_tx.clone();
+        thread::spawn(move || {
+            let result = run_cancel_all_orders(reference, &symbol);
+            let _ = tx.send(ConnectionProbeResult::trading_log(result));
+        });
+    }
+
+    fn active_trading_row(&self) -> Option<&ConnectionRow> {
+        self.rows
+            .iter()
+            .find(|row| row.is_connected() && row.mode == ConnectionMode::Trade)
+    }
+
     fn apply_probe_result(&mut self, result: ConnectionProbeResult) {
+        if let Some(message) = result.log_only {
+            self.last_action = "Trading".to_string();
+            self.push_log(message);
+            return;
+        }
+
         let Some(row) = self.rows.iter_mut().find(|row| row.id == result.row_id) else {
             return;
         };
@@ -935,6 +1028,19 @@ struct ConnectionProbeResult {
     outcome: Result<String, String>,
     balances: Vec<exchange::adapter::MexcAvailableBalance>,
     trades: Vec<ConnectionTradeRecord>,
+    log_only: Option<String>,
+}
+
+impl ConnectionProbeResult {
+    fn trading_log(message: String) -> Self {
+        Self {
+            row_id: String::new(),
+            outcome: Ok(String::new()),
+            balances: Vec::new(),
+            trades: Vec::new(),
+            log_only: Some(message),
+        }
+    }
 }
 
 fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
@@ -949,12 +1055,14 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
             outcome: Ok(success.message),
             balances: success.balances,
             trades: success.trades,
+            log_only: None,
         },
         Err(error) => ConnectionProbeResult {
             row_id: spec.row_id,
             outcome: Err(error),
             balances: Vec::new(),
             trades: Vec::new(),
+            log_only: None,
         },
     }
 }
@@ -964,6 +1072,115 @@ struct ProbeSuccess {
     message: String,
     balances: Vec<exchange::adapter::MexcAvailableBalance>,
     trades: Vec<ConnectionTradeRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct LiveLimitOrderSpec {
+    credential_ref: ConnectionCredentialRef,
+    symbol: String,
+    side: FuturesOrderSide,
+    side_label: &'static str,
+    price: String,
+    quantity: String,
+}
+
+impl LiveLimitOrderSpec {
+    fn new(credential_ref: ConnectionCredentialRef, intent: panel::LimitOrderIntent) -> Self {
+        let (symbol, _) = intent.ticker_info.ticker.to_full_symbol_and_type();
+        let side = match intent.side {
+            panel::OrderSide::Buy => FuturesOrderSide::OpenLong,
+            panel::OrderSide::Sell => FuturesOrderSide::OpenShort,
+        };
+        let side_label = match intent.side {
+            panel::OrderSide::Buy => "BUY",
+            panel::OrderSide::Sell => "SELL",
+        };
+        let price = intent.price.to_string(intent.ticker_info.min_ticksize);
+        let quantity = format!("{:.0}", intent.quantity.max(1.0).round());
+
+        Self {
+            credential_ref,
+            symbol,
+            side,
+            side_label,
+            price,
+            quantity,
+        }
+    }
+}
+
+fn run_live_limit_order(spec: LiveLimitOrderSpec) -> String {
+    match try_run_live_limit_order(spec) {
+        Ok(message) => format!("[trading] {message}"),
+        Err(error) => format!("[trading] Order failed: {error}"),
+    }
+}
+
+fn try_run_live_limit_order(spec: LiveLimitOrderSpec) -> Result<String, String> {
+    let vault_key = load_or_create_device_vault_key()?;
+    let secret = load_connection_secret(&spec.credential_ref, &vault_key)?.ok_or_else(|| {
+        "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
+    })?;
+    let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
+    let client =
+        MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
+    let external_oid = format!("fs{}", chrono::Utc::now().timestamp_millis());
+    let request = FuturesOrderRequest::new(
+        &spec.symbol,
+        &spec.price,
+        &spec.quantity,
+        spec.side,
+        FuturesOrderType::PostOnly,
+        FuturesOpenType::Cross,
+    )
+    .with_leverage(1)
+    .with_external_oid(external_oid);
+
+    let response = client
+        .futures_place_order(&request)
+        .map_err(|error| error.to_string())?;
+    let order_id = response
+        .data
+        .as_ref()
+        .and_then(value_as_display_string)
+        .unwrap_or_else(|| "unknown order id".to_string());
+    let open_orders = client
+        .futures_open_orders_for_symbol(&spec.symbol, 1, 20)
+        .map(|response| count_futures_order_items(response.data.as_ref()))
+        .unwrap_or_default();
+
+    Ok(format!(
+        "{} {} @ {} accepted as {}; open orders visible: {}",
+        spec.side_label, spec.quantity, spec.price, order_id, open_orders
+    ))
+}
+
+fn run_cancel_all_orders(reference: ConnectionCredentialRef, symbol: &str) -> String {
+    match try_cancel_all_orders(reference, symbol) {
+        Ok(message) => format!("[trading] {message}"),
+        Err(error) => format!("[trading] Cancel all failed: {error}"),
+    }
+}
+
+fn try_cancel_all_orders(
+    reference: ConnectionCredentialRef,
+    symbol: &str,
+) -> Result<String, String> {
+    let vault_key = load_or_create_device_vault_key()?;
+    let secret = load_connection_secret(&reference, &vault_key)?.ok_or_else(|| {
+        "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
+    })?;
+    let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
+    let client =
+        MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
+    let response = client
+        .futures_cancel_all_orders(symbol)
+        .map_err(|error| error.to_string())?;
+
+    Ok(format!(
+        "Cancel all accepted for {symbol}; success={} code={}",
+        response.success, response.code
+    ))
 }
 
 fn probe_mexc_public(market: ConnectionMarket) -> Result<ProbeSuccess, String> {
@@ -1101,6 +1318,16 @@ fn collect_futures_order_items<'a>(value: &'a Value, items: &mut Vec<&'a Value>)
         }
         _ => {}
     }
+}
+
+fn count_futures_order_items(value: Option<&Value>) -> usize {
+    let Some(value) = value else {
+        return 0;
+    };
+
+    let mut items = Vec::new();
+    collect_futures_order_items(value, &mut items);
+    items.len()
 }
 
 fn looks_like_futures_order(value: &Value) -> bool {

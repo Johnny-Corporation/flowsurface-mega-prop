@@ -54,6 +54,7 @@ pub enum Effect {
     RequestFetch(Vec<FetchSpec>),
     SwitchTickersInGroup(TickerInfo),
     FocusWidget(iced::widget::Id),
+    PanelAction(super::panel::Action),
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -1234,11 +1235,21 @@ impl State {
             },
             Event::PanelInteraction(msg) => match &mut self.content {
                 Content::CscalpDom(Some(p)) => {
-                    super::panel::update(p, msg);
+                    if let Some(action) = super::panel::update(p, msg) {
+                        return Some(Effect::PanelAction(action));
+                    }
                     self.settings.visual_config = Some(VisualConfig::CscalpDom(p.config));
                 }
-                Content::Ladder(Some(p)) => super::panel::update(p, msg),
-                Content::TimeAndSales(Some(p)) => super::panel::update(p, msg),
+                Content::Ladder(Some(p)) => {
+                    if let Some(action) = super::panel::update(p, msg) {
+                        return Some(Effect::PanelAction(action));
+                    }
+                }
+                Content::TimeAndSales(Some(p)) => {
+                    if let Some(action) = super::panel::update(p, msg) {
+                        return Some(Effect::PanelAction(action));
+                    }
+                }
                 _ => {}
             },
             Event::ToggleIndicator(ind) => {

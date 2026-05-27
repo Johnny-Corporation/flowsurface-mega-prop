@@ -57,8 +57,8 @@ impl super::Panel for CscalpDom {
         CscalpDom::invalidate(self, Some(Instant::now()));
     }
 
-    fn cancel_all_orders(&mut self) {
-        CscalpDom::cancel_all_orders(self);
+    fn cancel_all_orders(&mut self) -> Option<super::Action> {
+        CscalpDom::cancel_all_orders(self)
     }
 
     fn handle_orderbook_click(
@@ -68,8 +68,8 @@ impl super::Panel for CscalpDom {
         cursor_y: f32,
         width: f32,
         height: f32,
-    ) {
-        CscalpDom::handle_orderbook_click(self, button, cursor_x, cursor_y, width, height);
+    ) -> Option<super::Action> {
+        CscalpDom::handle_orderbook_click(self, button, cursor_x, cursor_y, width, height)
     }
 
     fn drag_section_split(&mut self, divider: super::SectionDivider, cursor_x: f32, width: f32) {
