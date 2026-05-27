@@ -502,9 +502,18 @@ pub(super) async fn fetch_historical_oi(
             .as_millis() as u64;
         let thirty_days_ago = now_ms.saturating_sub(THIRTY_DAYS_MS);
 
-        if end < thirty_days_ago {
+        let adjusted_end = end.min(now_ms);
+        if end > now_ms {
+            log::warn!(
+                "Adjusting end time from {} to {} (current time)",
+                end,
+                now_ms
+            );
+        }
+
+        if adjusted_end < thirty_days_ago {
             let err_msg = format!(
-                "Requested end time {end} is before available data (30 days is the API limit)"
+                "Requested end time {adjusted_end} is before available data (30 days is the API limit)"
             );
             log::error!("{}", err_msg);
             return Err(AdapterError::InvalidRequest(err_msg));
@@ -521,11 +530,19 @@ pub(super) async fn fetch_historical_oi(
             start
         };
 
+        if adjusted_start >= adjusted_end {
+            let err_msg = format!(
+                "Invalid open interest range after adjustment: start={adjusted_start}, end={adjusted_end}"
+            );
+            log::error!("{}", err_msg);
+            return Err(AdapterError::InvalidRequest(err_msg));
+        }
+
         let interval_ms = period.to_milliseconds();
-        let num_intervals = ((end - adjusted_start) / interval_ms).min(500);
+        let num_intervals = ((adjusted_end - adjusted_start) / interval_ms).clamp(1, 500);
 
         url.push_str(&format!(
-            "&startTime={adjusted_start}&endTime={end}&limit={num_intervals}"
+            "&startTime={adjusted_start}&endTime={adjusted_end}&limit={num_intervals}"
         ));
     } else {
         url.push_str("&limit=400");

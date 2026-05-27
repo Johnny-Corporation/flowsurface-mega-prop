@@ -1,7 +1,7 @@
 use std::ops::RangeInclusive;
 
 use iced::{
-    Theme,
+    Point, Theme,
     widget::canvas::{self, Path, Stroke},
 };
 
@@ -150,11 +150,13 @@ where
             let sx = x_for(x);
             let vy = (self.value)(y);
             let sy = scale.to_y(vy);
+            if !sx.is_finite() || !sy.is_finite() {
+                prev = None;
+                return;
+            }
+
             if let Some((px, py)) = prev {
-                frame.stroke(
-                    &Path::line(iced::Point::new(px, py), iced::Point::new(sx, sy)),
-                    stroke,
-                );
+                frame.stroke(&Path::line(Point::new(px, py), Point::new(sx, sy)), stroke);
             }
             prev = Some((sx, sy));
         });
@@ -164,7 +166,9 @@ where
             datapoints.for_each_in(range, |x, y| {
                 let sx = x_for(x);
                 let sy = scale.to_y((self.value)(y));
-                frame.fill(&Path::circle(iced::Point::new(sx, sy), radius), color);
+                if sx.is_finite() && sy.is_finite() && radius.is_finite() {
+                    frame.fill(&Path::circle(Point::new(sx, sy), radius), color);
+                }
             });
         }
     }
