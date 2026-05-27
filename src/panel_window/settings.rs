@@ -262,8 +262,7 @@ pub(super) fn settings_panel<'a>(state: &'a SettingsPanelState) -> Element<'a, P
             rule::vertical(1).style(style::split_ruler),
             settings_content(state)
         ]
-        .spacing(0)
-        .height(Length::Fill),
+        .spacing(0),
         rule::horizontal(1).style(style::split_ruler),
         settings_footer(state.last_action),
     ]
@@ -279,7 +278,6 @@ fn settings_nav<'a>(active: SettingsSection) -> Element<'a, PanelMessage> {
     }
 
     container(nav)
-        .height(Length::Fill)
         .padding(padding::top(12).right(18).bottom(18))
         .into()
 }
@@ -323,7 +321,6 @@ fn settings_content<'a>(state: &'a SettingsPanelState) -> Element<'a, PanelMessa
             .width(Length::Fill),
     )
     .width(Length::Fill)
-    .height(Length::Fill)
     .padding(padding::left(28).right(20).top(28).bottom(20))
     .into()
 }
