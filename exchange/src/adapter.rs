@@ -17,6 +17,12 @@ use serde::{Deserialize, Serialize};
 use std::{str::FromStr, sync::Arc, time::Duration};
 
 pub use client::{AdapterHandles, MAX_KLINE_STREAMS_PER_STREAM, MAX_TRADE_TICKERS_PER_STREAM};
+pub use hub::mexc::private::{
+    FuturesOpenType, FuturesOrderRequest, FuturesOrderSide, FuturesOrderType, MexcAvailableBalance,
+    MexcBlockingPrivateClient, MexcCredentials, MexcFuturesResponse, MexcPrivateClient,
+    SpotOrderRequest, SpotOrderSide, SpotOrderType, available_balances_from_futures_assets,
+    available_balances_from_spot_account,
+};
 pub use proxy::Proxy;
 
 /// Buffer trades and flush in this interval

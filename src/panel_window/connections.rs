@@ -1,218 +1,380 @@
-use std::{
-    sync::mpsc::{self, Receiver, Sender},
-    thread,
-    time::{Duration, Instant},
-};
-
 use crate::style;
 
+use data::config::connection_credentials::{
+    ConnectionCredentialRef, ConnectionSecret, delete_connection_secret, load_connection_secret,
+    load_or_create_device_vault_key, save_connection_secret,
+};
+use exchange::adapter::{
+    Exchange, MexcBlockingPrivateClient, MexcCredentials, MexcFuturesResponse,
+    available_balances_from_futures_assets, available_balances_from_spot_account,
+};
 use iced::{
-    Alignment, Element, Length, Point, Rectangle, Renderer, Theme, mouse, padding,
-    widget::{
-        Canvas, button,
-        canvas::{self, Geometry, Path, Stroke},
-        column, container, row, text,
-    },
+    Alignment, Element, Length, Theme, padding,
+    widget::{button, column, container, pick_list, row, text, text_input},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::{
+    cmp::Reverse,
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
+    time::Duration,
 };
 
-use super::{ConnectionAction, PanelMessage, panel_card, value_box};
+use super::{
+    ConnectionAction, ConnectionExchange, ConnectionMarket, ConnectionMode, PanelMessage,
+    panel_card, value_box,
+};
 
-const CONNECTIONS: [ConnectionTemplate; 7] = [
-    ConnectionTemplate::new(false, "Bybit", "Market data", "$", 0x7d55c7, "Direct", 138),
-    ConnectionTemplate::new(
-        false,
-        "Binance: USDT-M",
-        "Futures",
-        "K",
-        0x7f9442,
-        "Direct",
-        156,
+const DEFAULT_ROWS: [(ConnectionExchange, ConnectionMarket, ConnectionMode); 4] = [
+    (
+        ConnectionExchange::Okx,
+        ConnectionMarket::Spot,
+        ConnectionMode::View,
     ),
-    ConnectionTemplate::new(false, "Binance: Spot", "Spot", "K", 0xab735d, "Direct", 148),
-    ConnectionTemplate::new(
-        false,
-        "Tiger.com Binance",
-        "USDT-M",
-        "T",
-        0xc64058,
-        "Direct",
-        171,
+    (
+        ConnectionExchange::Okx,
+        ConnectionMarket::Futures,
+        ConnectionMode::View,
     ),
-    ConnectionTemplate::new(
-        true,
-        "OKX: USDT-M / USDC-M",
-        "View mode",
-        "O",
-        0x3447b8,
-        "Direct",
-        294,
+    (
+        ConnectionExchange::Mexc,
+        ConnectionMarket::Spot,
+        ConnectionMode::View,
     ),
-    ConnectionTemplate::new(
-        true,
-        "OKX: Spot (Margin)",
-        "View mode",
-        "O",
-        0x6ca889,
-        "Direct",
-        292,
-    ),
-    ConnectionTemplate::new(
-        true,
-        "MEXC: Spot",
-        "Market data",
-        "M",
-        0x2d9cdb,
-        "Direct",
-        94,
+    (
+        ConnectionExchange::Mexc,
+        ConnectionMarket::Futures,
+        ConnectionMode::View,
     ),
 ];
-const COLOR_CHOICES: [u32; 6] = [0x7d55c7, 0x2d9cdb, 0x6ca889, 0xd6a23a, 0xc64058, 0x3447b8];
-const MEXC_API_PING_URL: &str = "https://api.mexc.com/api/v3/time";
-const MEXC_API_PING_INTERVAL: Duration = Duration::from_secs(2);
-
-#[derive(Debug, Clone, Copy)]
-struct ConnectionTemplate {
-    enabled: bool,
-    exchange: &'static str,
-    market: &'static str,
-    key: &'static str,
-    color: u32,
-    proxy: &'static str,
-    base_ping_ms: u16,
-}
-
-impl ConnectionTemplate {
-    const fn new(
-        enabled: bool,
-        exchange: &'static str,
-        market: &'static str,
-        key: &'static str,
-        color: u32,
-        proxy: &'static str,
-        base_ping_ms: u16,
-    ) -> Self {
-        Self {
-            enabled,
-            exchange,
-            market,
-            key,
-            color,
-            proxy,
-            base_ping_ms,
-        }
-    }
-}
+const CONNECTIONS_FILE: &str = "connections.json";
+const MEXC_SPOT_PUBLIC_PING_URL: &str = "https://api.mexc.com/api/v3/time";
+const MEXC_FUTURES_PUBLIC_PING_URL: &str = "https://api.mexc.com/api/v1/contract/detail";
+const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[derive(Debug)]
-pub(super) struct ConnectionPanelState {
+pub(crate) struct ConnectionPanelState {
     rows: Vec<ConnectionRow>,
+    draft: Option<ConnectionDraft>,
     logs: Vec<String>,
-    last_action: &'static str,
-    proxy_enabled: bool,
-    ping_tick: u32,
-    last_ping_update: Option<Instant>,
-    mexc_ping_tx: Sender<MexcPingResult>,
-    mexc_ping_rx: Receiver<MexcPingResult>,
-    mexc_probe_inflight: bool,
-    last_mexc_probe: Option<Instant>,
-    mexc_status: String,
+    last_action: String,
+    autoconnect_enabled: bool,
+    last_connection_id: Option<String>,
+    next_connection_id: u64,
+    probe_tx: Sender<ConnectionProbeResult>,
+    probe_rx: Receiver<ConnectionProbeResult>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionAccountSummary {
+    pub status: String,
+    pub asset_count: usize,
+    pub non_zero_asset_count: usize,
+    pub market_data: String,
+    pub trading: String,
+    pub balances: Vec<ConnectionAccountBalance>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionAccountBalance {
+    pub source: String,
+    pub asset: String,
+    pub available: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionTradeRecord {
+    pub timestamp_ms: i64,
+    pub timestamp: String,
+    pub source: String,
+    pub symbol: String,
+    pub side: String,
+    pub order_type: String,
+    pub order_price: String,
+    pub average_price: String,
+    pub quantity: String,
+    pub filled_quantity: String,
+    pub pnl: String,
+    pub fee: String,
+    pub state: String,
+    pub order_id: String,
 }
 
 impl Default for ConnectionPanelState {
     fn default() -> Self {
-        let (mexc_ping_tx, mexc_ping_rx) = mpsc::channel();
-        let mut rows = CONNECTIONS
-            .iter()
-            .copied()
-            .map(ConnectionRow::from_template)
-            .collect::<Vec<_>>();
+        let (probe_tx, probe_rx) = mpsc::channel();
 
-        let mut state = Self {
-            rows: Vec::new(),
-            logs: vec![
-                "[02:32:08] [OKX: USDT-M / USDC-M] Connected".to_string(),
-                "[02:32:08] [OKX: Spot (Margin)] Connected".to_string(),
-                "[02:32:09] [MEXC: Spot] API RTT probe pending; engine latency unknown".to_string(),
-            ],
-            last_action: "Ready",
-            proxy_enabled: false,
-            ping_tick: 0,
-            last_ping_update: None,
-            mexc_ping_tx,
-            mexc_ping_rx,
-            mexc_probe_inflight: false,
-            last_mexc_probe: None,
-            mexc_status: "MEXC API RTT pending; engine latency unknown".to_string(),
-        };
+        let (rows, next_connection_id, autoconnect_enabled, last_connection_id, logs) =
+            if let Some(saved) = load_saved_connections() {
+                (
+                    saved.rows,
+                    saved.next_connection_id,
+                    saved.autoconnect_enabled,
+                    saved.last_connection_id,
+                    vec!["[connections] Saved metadata loaded".to_string()],
+                )
+            } else {
+                (
+                    DEFAULT_ROWS
+                        .into_iter()
+                        .map(|(exchange, market, mode)| {
+                            let id = format!(
+                                "default-{}-{}-{}",
+                                exchange.storage_key(),
+                                market.storage_key(),
+                                mode.storage_key()
+                            );
+                            ConnectionRow::new(id, exchange, market, mode, false)
+                        })
+                        .collect(),
+                    1,
+                    true,
+                    None,
+                    vec![
+                        "[connections] Defaults loaded: OKX/MEXC spot and futures in view mode"
+                            .to_string(),
+                    ],
+                )
+            };
 
-        state.rows.append(&mut rows);
-        state.refresh_pings();
-        state
+        Self {
+            rows,
+            draft: None,
+            logs,
+            last_action: "Ready".to_string(),
+            autoconnect_enabled,
+            last_connection_id,
+            next_connection_id,
+            probe_tx,
+            probe_rx,
+        }
     }
 }
 
 impl ConnectionPanelState {
-    pub(super) fn tick(&mut self, now: Instant) {
-        self.poll_mexc_ping();
-
-        let should_update = self
-            .last_ping_update
-            .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(350));
-
-        if should_update {
-            self.last_ping_update = Some(now);
-            self.refresh_pings();
+    pub(crate) fn tick(&mut self, _now: std::time::Instant) {
+        while let Ok(result) = self.probe_rx.try_recv() {
+            self.apply_probe_result(result);
         }
-
-        self.start_mexc_ping_if_needed(now);
     }
 
-    pub(super) fn update(&mut self, action: ConnectionAction) {
+    pub(crate) fn update(&mut self, action: ConnectionAction) {
         match action {
             ConnectionAction::Toggle(index) => self.toggle(index),
-            ConnectionAction::SetColor(index, color) => self.set_color(index, color),
-            ConnectionAction::AddConnection => self.add_connection(),
-            ConnectionAction::MyProxy => {
-                self.proxy_enabled = !self.proxy_enabled;
-                self.last_action = "My proxy";
+            ConnectionAction::AddConnection => self.start_draft(),
+            ConnectionAction::DraftExchangeSelected(exchange) => {
+                if let Some(draft) = self.draft.as_mut() {
+                    draft.exchange = exchange;
+                    draft.clear_credentials_if_view_mode();
+                    self.last_action = "Exchange selected".to_string();
+                }
+            }
+            ConnectionAction::DraftMarketSelected(market) => {
+                if let Some(draft) = self.draft.as_mut() {
+                    draft.market = market;
+                    self.last_action = "Market selected".to_string();
+                }
+            }
+            ConnectionAction::DraftModeSelected(mode) => {
+                if let Some(draft) = self.draft.as_mut() {
+                    draft.mode = mode;
+                    draft.clear_credentials_if_view_mode();
+                    self.last_action = "Mode selected".to_string();
+                }
+            }
+            ConnectionAction::DraftAccessKeyChanged(value) => {
+                if let Some(draft) = self.draft.as_mut() {
+                    draft.access_key = value;
+                }
+            }
+            ConnectionAction::DraftSecretKeyChanged(value) => {
+                if let Some(draft) = self.draft.as_mut() {
+                    draft.secret_key = value;
+                }
+            }
+            ConnectionAction::AutoconnectChanged(enabled) => {
+                self.autoconnect_enabled = enabled;
+                self.last_action = "Auto-connect".to_string();
                 self.push_log(format!(
-                    "[ui] Proxy mode {}",
-                    if self.proxy_enabled {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
+                    "[connections] Auto-connect {}",
+                    if enabled { "enabled" } else { "disabled" }
                 ));
+                self.persist_rows();
+            }
+            ConnectionAction::SaveDraft => self.save_draft(),
+            ConnectionAction::CancelDraft => {
+                self.draft = None;
+                self.last_action = "Draft canceled".to_string();
             }
             ConnectionAction::Refresh => {
-                self.last_action = "Refresh";
-                self.refresh_pings();
-                self.push_log("[ui] Manual refresh requested; demo pings updated".to_string());
+                self.last_action = "Refresh".to_string();
+                let indices = self
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, row)| row.enabled.then_some(index))
+                    .collect::<Vec<_>>();
+
+                for index in indices {
+                    self.start_connection_test(index);
+                }
+
+                self.push_log("[connections] Enabled connections retested".to_string());
             }
             ConnectionAction::Confirm => {
-                self.last_action = "OK";
-                self.push_log("[ui] OK pressed; connection template accepted".to_string());
-            }
-            ConnectionAction::BecomeTrader => {
-                self.last_action = "Become a trader";
-                self.push_log("[ui] Become a trader pressed".to_string());
-            }
-            ConnectionAction::OpenAccount => {
-                self.last_action = "Open an account";
-                self.push_log("[ui] Open an account pressed".to_string());
-            }
-            ConnectionAction::RowSettings(index) => {
-                let label = self.row_label(index);
-                self.last_action = "Row settings";
-                self.push_log(format!("[ui] Settings pressed for {label}"));
-            }
-            ConnectionAction::RowHelp(index) => {
-                let label = self.row_label(index);
-                self.last_action = "Row help";
-                self.push_log(format!("[ui] Help pressed for {label}"));
+                self.last_action = "OK".to_string();
+                self.push_log("[connections] Connection list accepted".to_string());
             }
             ConnectionAction::RowDelete(index) => self.delete(index),
         }
+    }
+
+    pub(crate) fn top_bar_status(&self) -> String {
+        let Some(row) = self.active_connection_row() else {
+            return if self.rows.is_empty() {
+                "Connected: none (Connections empty)".to_string()
+            } else {
+                "Connected: none".to_string()
+            };
+        };
+
+        format!(
+            "Connected: {}, {}, {} access",
+            row.exchange,
+            row.market.status_label(),
+            row.mode.access_label(),
+        )
+    }
+
+    pub(crate) fn active_market_exchanges(&self) -> Vec<Exchange> {
+        let mut exchanges = Vec::new();
+
+        for row in self.rows.iter().filter(|row| row.is_connected()) {
+            for exchange in row.market_exchanges() {
+                if !exchanges.contains(&exchange) {
+                    exchanges.push(exchange);
+                }
+            }
+        }
+
+        exchanges
+    }
+
+    pub(crate) fn credential_storage_status(&self) -> &'static str {
+        "Device-local encrypted storage"
+    }
+
+    pub(crate) fn autoconnect_enabled(&self) -> bool {
+        self.autoconnect_enabled
+    }
+
+    pub(crate) fn account_summary(&self) -> ConnectionAccountSummary {
+        let connected_rows = self
+            .rows
+            .iter()
+            .filter(|row| row.is_connected())
+            .collect::<Vec<_>>();
+
+        let mut asset_count = 0;
+        let mut non_zero_asset_count = 0;
+        let mut balances = Vec::new();
+
+        for row in &connected_rows {
+            asset_count += row.balances.len();
+            for balance in &row.balances {
+                if is_zero_amount(&balance.available) {
+                    continue;
+                }
+
+                non_zero_asset_count += 1;
+                balances.push(ConnectionAccountBalance {
+                    source: row.label(),
+                    asset: balance.asset.clone(),
+                    available: balance.available.clone(),
+                });
+            }
+        }
+
+        ConnectionAccountSummary {
+            status: self.top_bar_status(),
+            asset_count,
+            non_zero_asset_count,
+            market_data: if connected_rows.is_empty() {
+                "Disabled until a connection is ON".to_string()
+            } else {
+                connected_rows
+                    .iter()
+                    .map(|row| row.label())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+            trading: connected_rows
+                .iter()
+                .find(|row| row.mode == ConnectionMode::Trade)
+                .map(|row| format!("Enabled via {}", row.label()))
+                .unwrap_or_else(|| "No active trading connection".to_string()),
+            balances,
+        }
+    }
+
+    pub(crate) fn trade_history(&self) -> Vec<ConnectionTradeRecord> {
+        let mut trades = self
+            .rows
+            .iter()
+            .flat_map(|row| row.trades.iter().cloned())
+            .collect::<Vec<_>>();
+        trades.sort_by_key(|trade| Reverse(trade.timestamp_ms));
+        trades.truncate(200);
+        trades
+    }
+
+    pub(crate) fn autoconnect(&mut self) {
+        if !self.autoconnect_enabled {
+            self.last_action = "Autoconnect disabled".to_string();
+            return;
+        }
+
+        let Some(index) = self.last_autoconnect_index() else {
+            self.last_action = "Autoconnect skipped".to_string();
+            return;
+        };
+
+        self.last_action = "Autoconnect".to_string();
+        if let Some(row) = self.rows.get_mut(index) {
+            row.enabled = true;
+            row.test_state = ConnectionTestState::Loading;
+            row.balances.clear();
+            row.trades.clear();
+            let label = row.label();
+            self.push_log(format!("[connections] Autoconnect testing {label}"));
+        }
+
+        self.persist_rows();
+        self.start_connection_test(index);
+    }
+
+    fn last_autoconnect_index(&self) -> Option<usize> {
+        self.last_connection_id
+            .as_ref()
+            .and_then(|id| {
+                self.rows
+                    .iter()
+                    .position(|row| &row.id == id && row.is_autoconnect_eligible())
+            })
+            .or_else(|| {
+                self.rows
+                    .iter()
+                    .rposition(ConnectionRow::is_autoconnect_eligible)
+            })
+    }
+
+    pub(crate) fn last_connection_label(&self) -> String {
+        self.last_connection_id
+            .as_ref()
+            .and_then(|id| self.rows.iter().find(|row| &row.id == id))
+            .map(ConnectionRow::label)
+            .unwrap_or_else(|| "None".to_string())
     }
 
     fn toggle(&mut self, index: usize) {
@@ -220,56 +382,121 @@ impl ConnectionPanelState {
             return;
         };
 
-        row.enabled = !row.enabled;
-        row.ping_ms = if row.enabled && !row.api_ping {
-            Some(row.base_ping_ms)
-        } else {
-            None
-        };
+        let label = row.label();
 
-        let label = row.exchange.clone();
-        let state = if row.enabled {
-            "connected"
-        } else {
-            "disconnected"
-        };
+        if row.enabled {
+            row.enabled = false;
+            row.test_state = ConnectionTestState::Idle;
+            row.balances.clear();
+            row.trades.clear();
+            self.last_action = "Toggle".to_string();
+            self.push_log(format!("[connections] {label} disabled"));
+            self.persist_rows();
+            return;
+        }
 
-        self.last_action = "Toggle";
-        self.push_log(format!("[ui] {label} {state}"));
-        self.refresh_pings();
+        row.enabled = true;
+        row.test_state = ConnectionTestState::Loading;
+        row.balances.clear();
+        row.trades.clear();
+        self.last_action = "Toggle".to_string();
+        self.push_log(format!("[connections] Testing {label}"));
+        self.persist_rows();
+        self.start_connection_test(index);
     }
 
-    fn set_color(&mut self, index: usize, color: u32) {
-        let Some(row) = self.rows.get_mut(index) else {
+    fn start_draft(&mut self) {
+        if self.draft.is_none() {
+            self.draft = Some(ConnectionDraft::default());
+        }
+
+        self.last_action = "Add connection".to_string();
+    }
+
+    fn save_draft(&mut self) {
+        let Some(mut draft) = self.draft.take() else {
             return;
         };
 
-        row.color = color;
-        let label = row.exchange.clone();
-        self.last_action = "Color";
-        self.push_log(format!("[ui] {label} color changed"));
-    }
-
-    fn add_connection(&mut self) {
-        let number = self.rows.len() + 1;
-        let color = 0x4a90e2 + ((number as u32 * 0x031415) & 0x202020);
-
-        self.rows.push(ConnectionRow {
-            enabled: true,
-            exchange: format!("Demo exchange {number}"),
-            market: "Template stream".to_string(),
-            key: "D".to_string(),
-            color,
-            proxy: "Direct".to_string(),
-            base_ping_ms: 82 + (number as u16 * 11),
-            ping_ms: None,
-            ping_history: Vec::new(),
-            api_ping: false,
+        let existing_index = self.rows.iter().position(|row| {
+            row.exchange == draft.exchange && row.market == draft.market && row.mode == draft.mode
         });
+        let id = if let Some(index) = existing_index {
+            self.rows[index].id.clone()
+        } else {
+            let id = format!(
+                "{}-{}-{}-{}",
+                draft.exchange.storage_key(),
+                draft.market.storage_key(),
+                draft.mode.storage_key(),
+                self.next_connection_id
+            );
+            self.next_connection_id += 1;
+            id
+        };
 
-        self.last_action = "Add connection";
-        self.push_log(format!("[ui] Demo exchange {number} added and connected"));
-        self.refresh_pings();
+        let mut row =
+            ConnectionRow::new(id.clone(), draft.exchange, draft.market, draft.mode, false);
+
+        if draft.mode == ConnectionMode::Trade {
+            let reference = match ConnectionCredentialRef::new(&id) {
+                Ok(reference) => reference,
+                Err(error) => {
+                    draft.error = Some(error.clone());
+                    self.draft = Some(draft);
+                    self.last_action = "Credential id error".to_string();
+                    self.push_log(format!("[credentials] {error}"));
+                    return;
+                }
+            };
+
+            let secret = match ConnectionSecret::new(&draft.access_key, &draft.secret_key) {
+                Ok(secret) => secret,
+                Err(error) => {
+                    draft.error = Some(error.clone());
+                    self.draft = Some(draft);
+                    self.last_action = "Credential validation failed".to_string();
+                    self.push_log(format!("[credentials] {error}"));
+                    return;
+                }
+            };
+
+            let vault_key = match load_or_create_device_vault_key() {
+                Ok(vault_key) => vault_key,
+                Err(error) => {
+                    draft.error = Some(error.clone());
+                    self.draft = Some(draft);
+                    self.last_action = "Credential save failed".to_string();
+                    self.push_log(format!("[credentials] {error}"));
+                    return;
+                }
+            };
+
+            if let Err(error) = save_connection_secret(&reference, &secret, &vault_key) {
+                draft.error = Some(error.clone());
+                self.draft = Some(draft);
+                self.last_action = "Credential save failed".to_string();
+                self.push_log(format!("[credentials] {error}"));
+                return;
+            }
+
+            row.credentials = CredentialState::Saved {
+                reference,
+                access_key_hint: secret.access_key_hint(),
+            };
+        }
+
+        let label = row.label();
+        if let Some(index) = existing_index {
+            self.rows[index] = row;
+            self.last_action = "Connection updated".to_string();
+            self.push_log(format!("[connections] {label} updated"));
+        } else {
+            self.rows.push(row);
+            self.last_action = "Connection saved".to_string();
+            self.push_log(format!("[connections] {label} saved"));
+        }
+        self.persist_rows();
     }
 
     fn delete(&mut self, index: usize) {
@@ -277,182 +504,852 @@ impl ConnectionPanelState {
             return;
         }
 
-        let label = self.rows[index].exchange.clone();
-        self.rows.remove(index);
-        self.last_action = "Delete";
-        self.push_log(format!("[ui] {label} removed from template list"));
-    }
-
-    fn refresh_pings(&mut self) {
-        self.ping_tick = self.ping_tick.wrapping_add(1);
-
-        for (index, row) in self.rows.iter_mut().enumerate() {
-            if row.api_ping {
-                if !row.enabled {
-                    row.ping_ms = None;
-                }
-                continue;
-            }
-
-            if row.enabled {
-                let wave = ((self.ping_tick as i32 * (index as i32 + 5)) % 43) - 21;
-                let ping = (row.base_ping_ms as i32 + wave).clamp(18, 480) as u16;
-                row.push_ping(ping);
-            } else {
-                row.ping_ms = None;
-            }
-        }
-    }
-
-    fn poll_mexc_ping(&mut self) {
-        while let Ok(result) = self.mexc_ping_rx.try_recv() {
-            self.mexc_probe_inflight = false;
-
-            match result {
-                Ok(ping_ms) => {
-                    if let Some(row) = self.rows.iter_mut().find(|row| row.api_ping) {
-                        row.push_ping(ping_ms);
-                    }
-                    self.mexc_status = format!("MEXC API RTT: {ping_ms}ms; engine unknown");
-                }
-                Err(error) => {
-                    self.mexc_status = format!("MEXC API RTT failed: {error}");
-                    if let Some(row) = self.rows.iter_mut().find(|row| row.api_ping) {
-                        row.ping_ms = None;
-                    }
-                }
-            }
-        }
-    }
-
-    fn start_mexc_ping_if_needed(&mut self, now: Instant) {
-        if self.mexc_probe_inflight
-            || !self.rows.iter().any(|row| row.enabled && row.api_ping)
-            || self
-                .last_mexc_probe
-                .is_some_and(|last| now.duration_since(last) < MEXC_API_PING_INTERVAL)
-        {
-            return;
+        let row = self.rows.remove(index);
+        if let CredentialState::Saved { reference, .. } = &row.credentials {
+            let _ = delete_connection_secret(reference);
         }
 
-        self.mexc_probe_inflight = true;
-        self.last_mexc_probe = Some(now);
-        let tx = self.mexc_ping_tx.clone();
-
-        thread::spawn(move || {
-            let _ = tx.send(measure_mexc_api_rtt());
-        });
+        self.last_action = "Delete".to_string();
+        self.push_log(format!("[connections] {} removed", row.label()));
+        self.persist_rows();
     }
 
     fn push_log(&mut self, message: String) {
         self.logs.push(message);
 
-        while self.logs.len() > 8 {
+        while self.logs.len() > 6 {
             self.logs.remove(0);
         }
     }
 
-    fn row_label(&self, index: usize) -> String {
-        self.rows
-            .get(index)
-            .map(|row| row.exchange.clone())
-            .unwrap_or_else(|| "unknown connection".to_string())
-    }
-
-    fn online_count(&self) -> usize {
+    fn enabled_count(&self) -> usize {
         self.rows.iter().filter(|row| row.enabled).count()
     }
 
-    fn ping_status(&self) -> String {
-        format!(
-            "{} | other rows use demo pings: {} online / {} total | refresh #{}",
-            self.mexc_status,
-            self.online_count(),
-            self.rows.len(),
-            self.ping_tick
-        )
+    fn active_connection_row(&self) -> Option<&ConnectionRow> {
+        self.rows
+            .iter()
+            .filter(|row| row.is_connected())
+            .max_by_key(|row| match row.mode {
+                ConnectionMode::Trade => 1,
+                ConnectionMode::View => 0,
+            })
+    }
+
+    fn persist_rows(&mut self) {
+        if let Err(error) = save_connections(self) {
+            self.push_log(format!("[connections] Failed to save metadata: {error}"));
+        }
+    }
+
+    fn start_connection_test(&mut self, index: usize) {
+        let Some(row) = self.rows.get(index) else {
+            return;
+        };
+
+        let Some(spec) = ConnectionProbeSpec::from_row(row) else {
+            let status = row.exchange.draft_status(row.mode).to_string();
+            let row_id = row.id.clone();
+            self.apply_probe_result(ConnectionProbeResult {
+                row_id,
+                outcome: Err(status),
+                balances: Vec::new(),
+                trades: Vec::new(),
+            });
+            return;
+        };
+
+        let tx = self.probe_tx.clone();
+        thread::spawn(move || {
+            let _ = tx.send(run_connection_probe(spec));
+        });
+    }
+
+    fn apply_probe_result(&mut self, result: ConnectionProbeResult) {
+        let Some(row) = self.rows.iter_mut().find(|row| row.id == result.row_id) else {
+            return;
+        };
+
+        let log_message = match result.outcome {
+            Ok(message) => {
+                let label = row.label();
+                row.enabled = true;
+                row.test_state = ConnectionTestState::Success(message.clone());
+                row.balances = result.balances;
+                row.trades = result.trades;
+                self.last_connection_id = Some(row.id.clone());
+                format!("[connections] {label} connected")
+            }
+            Err(error) => {
+                let label = row.label();
+                row.enabled = false;
+                row.test_state = ConnectionTestState::Error(error.clone());
+                row.balances.clear();
+                row.trades.clear();
+                format!("[connections] {label} failed: {error}")
+            }
+        };
+
+        self.push_log(log_message);
+
+        self.persist_rows();
     }
 }
 
 #[derive(Debug, Clone)]
 struct ConnectionRow {
+    id: String,
     enabled: bool,
-    exchange: String,
-    market: String,
-    key: String,
-    color: u32,
-    proxy: String,
-    base_ping_ms: u16,
-    ping_ms: Option<u16>,
-    ping_history: Vec<u16>,
-    api_ping: bool,
+    exchange: ConnectionExchange,
+    market: ConnectionMarket,
+    mode: ConnectionMode,
+    credentials: CredentialState,
+    test_state: ConnectionTestState,
+    balances: Vec<exchange::adapter::MexcAvailableBalance>,
+    trades: Vec<ConnectionTradeRecord>,
 }
 
 impl ConnectionRow {
-    fn from_template(template: ConnectionTemplate) -> Self {
+    fn new(
+        id: String,
+        exchange: ConnectionExchange,
+        market: ConnectionMarket,
+        mode: ConnectionMode,
+        enabled: bool,
+    ) -> Self {
         Self {
-            enabled: template.enabled,
-            exchange: template.exchange.to_string(),
-            market: template.market.to_string(),
-            key: template.key.to_string(),
-            color: template.color,
-            proxy: template.proxy.to_string(),
-            base_ping_ms: template.base_ping_ms,
-            ping_ms: None,
-            ping_history: Vec::new(),
-            api_ping: template.exchange.starts_with("MEXC"),
+            id,
+            enabled,
+            exchange,
+            market,
+            mode,
+            credentials: CredentialState::NotRequired,
+            test_state: ConnectionTestState::Idle,
+            balances: Vec::new(),
+            trades: Vec::new(),
         }
     }
 
-    fn speed_label(&self) -> String {
-        match (self.enabled, self.ping_ms, self.api_ping) {
-            (false, _, _) => "-".to_string(),
-            (true, Some(ping), true) => format!("{ping}ms API"),
-            (true, Some(ping), false) => format!("{ping}ms demo"),
-            (true, None, true) => "API check".to_string(),
-            (true, None, false) => "-".to_string(),
+    fn label(&self) -> String {
+        format!("{} {} {}", self.exchange, self.market, self.mode)
+    }
+
+    fn status(&self) -> String {
+        match &self.test_state {
+            ConnectionTestState::Loading => return "Testing connection...".to_string(),
+            ConnectionTestState::Success(message) => {
+                if !self.balances.is_empty() {
+                    let balance = format_balance_summary(&self.balances);
+                    return format!("{message}; {balance}");
+                }
+                return message.clone();
+            }
+            ConnectionTestState::Error(error) => return format!("Failed: {error}"),
+            ConnectionTestState::Idle => {}
+        }
+
+        match self.exchange {
+            ConnectionExchange::Mexc => match self.mode {
+                ConnectionMode::View => "Off".to_string(),
+                ConnectionMode::Trade => match self.credentials {
+                    CredentialState::Saved { .. } => "Off".to_string(),
+                    _ => "MEXC API keys required".to_string(),
+                },
+            },
+            ConnectionExchange::Bybit => "Will be implemented soon".to_string(),
+            _ => "Not implemented yet".to_string(),
         }
     }
 
-    fn push_ping(&mut self, ping_ms: u16) {
-        self.ping_ms = Some(ping_ms);
-        self.ping_history.push(ping_ms);
+    fn credential_label(&self) -> String {
+        match &self.credentials {
+            CredentialState::NotRequired => "Not required".to_string(),
+            CredentialState::Saved {
+                access_key_hint, ..
+            } => format!("Saved ({access_key_hint})"),
+        }
+    }
 
-        while self.ping_history.len() > 36 {
-            self.ping_history.remove(0);
+    fn is_connected(&self) -> bool {
+        self.enabled && matches!(self.test_state, ConnectionTestState::Success(_))
+    }
+
+    fn is_autoconnect_eligible(&self) -> bool {
+        if self.exchange != ConnectionExchange::Mexc {
+            return false;
+        }
+
+        match self.mode {
+            ConnectionMode::View => true,
+            ConnectionMode::Trade => matches!(self.credentials, CredentialState::Saved { .. }),
+        }
+    }
+
+    fn market_exchanges(&self) -> Vec<Exchange> {
+        match (self.exchange, self.market) {
+            (ConnectionExchange::Mexc, ConnectionMarket::Spot) => vec![Exchange::MexcSpot],
+            (ConnectionExchange::Mexc, ConnectionMarket::Futures) => {
+                vec![Exchange::MexcLinear, Exchange::MexcInverse]
+            }
+            (ConnectionExchange::Bybit, ConnectionMarket::Spot) => vec![Exchange::BybitSpot],
+            (ConnectionExchange::Bybit, ConnectionMarket::Futures) => {
+                vec![Exchange::BybitLinear, Exchange::BybitInverse]
+            }
+            (ConnectionExchange::Okx, ConnectionMarket::Spot) => vec![Exchange::OkexSpot],
+            (ConnectionExchange::Okx, ConnectionMarket::Futures) => {
+                vec![Exchange::OkexLinear, Exchange::OkexInverse]
+            }
+            (ConnectionExchange::Binance, ConnectionMarket::Spot) => vec![Exchange::BinanceSpot],
+            (ConnectionExchange::Binance, ConnectionMarket::Futures) => {
+                vec![Exchange::BinanceLinear, Exchange::BinanceInverse]
+            }
+            _ => Vec::new(),
         }
     }
 }
 
-type MexcPingResult = Result<u16, String>;
+#[derive(Debug, Clone)]
+enum ConnectionTestState {
+    Idle,
+    Loading,
+    Success(String),
+    Error(String),
+}
 
-fn measure_mexc_api_rtt() -> MexcPingResult {
+#[derive(Debug, Clone)]
+enum CredentialState {
+    NotRequired,
+    Saved {
+        reference: ConnectionCredentialRef,
+        access_key_hint: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedConnections {
+    rows: Vec<PersistedConnectionRow>,
+    #[serde(default = "default_autoconnect_enabled")]
+    autoconnect_enabled: bool,
+    #[serde(default)]
+    last_connection_id: Option<String>,
+    next_connection_id: u64,
+}
+
+#[derive(Debug)]
+struct LoadedConnections {
+    rows: Vec<ConnectionRow>,
+    next_connection_id: u64,
+    autoconnect_enabled: bool,
+    last_connection_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedConnectionRow {
+    #[serde(default)]
+    id: Option<String>,
+    enabled: bool,
+    exchange: ConnectionExchange,
+    market: ConnectionMarket,
+    mode: ConnectionMode,
+    credential_id: Option<String>,
+    access_key_hint: Option<String>,
+}
+
+impl From<&ConnectionPanelState> for PersistedConnections {
+    fn from(state: &ConnectionPanelState) -> Self {
+        Self {
+            rows: state
+                .rows
+                .iter()
+                .map(PersistedConnectionRow::from)
+                .collect(),
+            autoconnect_enabled: state.autoconnect_enabled,
+            last_connection_id: state.last_connection_id.clone(),
+            next_connection_id: state.next_connection_id,
+        }
+    }
+}
+
+impl From<&ConnectionRow> for PersistedConnectionRow {
+    fn from(row: &ConnectionRow) -> Self {
+        let (credential_id, access_key_hint) = match &row.credentials {
+            CredentialState::NotRequired => (None, None),
+            CredentialState::Saved {
+                reference,
+                access_key_hint,
+            } => (
+                Some(reference.id().to_string()),
+                Some(access_key_hint.clone()),
+            ),
+        };
+
+        Self {
+            id: Some(row.id.clone()),
+            enabled: row.enabled,
+            exchange: row.exchange,
+            market: row.market,
+            mode: row.mode,
+            credential_id,
+            access_key_hint,
+        }
+    }
+}
+
+impl TryFrom<PersistedConnectionRow> for ConnectionRow {
+    type Error = String;
+
+    fn try_from(value: PersistedConnectionRow) -> Result<Self, Self::Error> {
+        let credentials = match (value.credential_id, value.access_key_hint) {
+            (Some(id), Some(access_key_hint)) => CredentialState::Saved {
+                reference: ConnectionCredentialRef::new(id)?,
+                access_key_hint,
+            },
+            _ => CredentialState::NotRequired,
+        };
+
+        let id = value.id.unwrap_or_else(|| {
+            format!(
+                "{}-{}-{}",
+                value.exchange.storage_key(),
+                value.market.storage_key(),
+                value.mode.storage_key()
+            )
+        });
+
+        Ok(Self {
+            id,
+            enabled: false,
+            exchange: value.exchange,
+            market: value.market,
+            mode: value.mode,
+            credentials,
+            test_state: ConnectionTestState::Idle,
+            balances: Vec::new(),
+            trades: Vec::new(),
+        })
+    }
+}
+
+fn load_saved_connections() -> Option<LoadedConnections> {
+    let path = data::data_path(Some(CONNECTIONS_FILE));
+    let contents = std::fs::read_to_string(path).ok()?;
+    let persisted: PersistedConnections = serde_json::from_str(&contents).ok()?;
+    let last_connection_id = persisted
+        .last_connection_id
+        .clone()
+        .or_else(|| last_enabled_connection_id(&persisted.rows));
+    let rows = persisted
+        .rows
+        .into_iter()
+        .filter_map(|row| ConnectionRow::try_from(row).ok())
+        .collect::<Vec<_>>();
+    let rows = deduplicate_connection_rows(rows);
+
+    if rows.is_empty() {
+        return None;
+    }
+
+    Some(LoadedConnections {
+        rows,
+        next_connection_id: persisted.next_connection_id.max(1),
+        autoconnect_enabled: persisted.autoconnect_enabled,
+        last_connection_id,
+    })
+}
+
+fn last_enabled_connection_id(rows: &[PersistedConnectionRow]) -> Option<String> {
+    rows.iter().rev().find(|row| row.enabled).and_then(|row| {
+        row.id.clone().or_else(|| {
+            Some(format!(
+                "{}-{}-{}",
+                row.exchange.storage_key(),
+                row.market.storage_key(),
+                row.mode.storage_key()
+            ))
+        })
+    })
+}
+
+fn deduplicate_connection_rows(rows: Vec<ConnectionRow>) -> Vec<ConnectionRow> {
+    rows.into_iter().fold(Vec::new(), |mut deduped, row| {
+        if let Some(index) = deduped.iter().position(|existing: &ConnectionRow| {
+            existing.exchange == row.exchange
+                && existing.market == row.market
+                && existing.mode == row.mode
+        }) {
+            deduped[index] = row;
+        } else {
+            deduped.push(row);
+        }
+
+        deduped
+    })
+}
+
+fn default_autoconnect_enabled() -> bool {
+    true
+}
+
+fn save_connections(state: &ConnectionPanelState) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(&PersistedConnections::from(state))
+        .map_err(|error| error.to_string())?;
+    data::write_json_to_file(&json, CONNECTIONS_FILE).map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone)]
+struct ConnectionProbeSpec {
+    row_id: String,
+    market: ConnectionMarket,
+    mode: ConnectionMode,
+    credential_ref: Option<ConnectionCredentialRef>,
+    access_key_hint: Option<String>,
+}
+
+impl ConnectionProbeSpec {
+    fn from_row(row: &ConnectionRow) -> Option<Self> {
+        if row.exchange != ConnectionExchange::Mexc {
+            return None;
+        }
+
+        let (credential_ref, access_key_hint) = match &row.credentials {
+            CredentialState::NotRequired => (None, None),
+            CredentialState::Saved {
+                reference,
+                access_key_hint,
+            } => (Some(reference.clone()), Some(access_key_hint.clone())),
+        };
+
+        Some(Self {
+            row_id: row.id.clone(),
+            market: row.market,
+            mode: row.mode,
+            credential_ref,
+            access_key_hint,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ConnectionProbeResult {
+    row_id: String,
+    outcome: Result<String, String>,
+    balances: Vec<exchange::adapter::MexcAvailableBalance>,
+    trades: Vec<ConnectionTradeRecord>,
+}
+
+fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
+    let result = match spec.mode {
+        ConnectionMode::View => probe_mexc_public(spec.market),
+        ConnectionMode::Trade => probe_mexc_private(&spec),
+    };
+
+    match result {
+        Ok(success) => ConnectionProbeResult {
+            row_id: spec.row_id,
+            outcome: Ok(success.message),
+            balances: success.balances,
+            trades: success.trades,
+        },
+        Err(error) => ConnectionProbeResult {
+            row_id: spec.row_id,
+            outcome: Err(error),
+            balances: Vec::new(),
+            trades: Vec::new(),
+        },
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ProbeSuccess {
+    message: String,
+    balances: Vec<exchange::adapter::MexcAvailableBalance>,
+    trades: Vec<ConnectionTradeRecord>,
+}
+
+fn probe_mexc_public(market: ConnectionMarket) -> Result<ProbeSuccess, String> {
+    let url = match market {
+        ConnectionMarket::Spot => MEXC_SPOT_PUBLIC_PING_URL,
+        ConnectionMarket::Futures => MEXC_FUTURES_PUBLIC_PING_URL,
+    };
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(2_500))
-        .user_agent("flowsurface-latency-probe")
+        .timeout(CONNECTION_TEST_TIMEOUT)
+        .user_agent("flowsurface-connection-test")
         .build()
         .map_err(|error| error.to_string())?;
 
-    let start = Instant::now();
-    let response = client
-        .get(MEXC_API_PING_URL)
+    client
+        .get(url)
         .send()
+        .map_err(|error| error.to_string())?
+        .error_for_status()
         .map_err(|error| error.to_string())?;
 
-    response
-        .error_for_status_ref()
-        .map_err(|error| error.to_string())?;
+    Ok(ProbeSuccess {
+        message: "Public API reachable".to_string(),
+        balances: Vec::new(),
+        trades: Vec::new(),
+    })
+}
 
-    let _ = response.bytes().map_err(|error| error.to_string())?;
+fn probe_mexc_private(spec: &ConnectionProbeSpec) -> Result<ProbeSuccess, String> {
+    let reference = spec
+        .credential_ref
+        .as_ref()
+        .ok_or_else(|| "API keys are missing".to_string())?;
+    let vault_key = load_or_create_device_vault_key()?;
 
-    Ok(start.elapsed().as_millis().clamp(1, u16::MAX as u128) as u16)
+    let secret = load_connection_secret(reference, &vault_key)?.ok_or_else(|| {
+        "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
+    })?;
+
+    if let Some(expected_hint) = &spec.access_key_hint {
+        let actual_hint = secret.access_key_hint();
+        if actual_hint != *expected_hint {
+            return Err(format!(
+                "Saved API key mismatch: metadata shows {expected_hint}, local vault has {actual_hint}. Delete and re-add this connection."
+            ));
+        }
+    }
+
+    probe_mexc_private_secret(spec.market, &secret)
+}
+
+fn probe_mexc_private_secret(
+    market: ConnectionMarket,
+    secret: &ConnectionSecret,
+) -> Result<ProbeSuccess, String> {
+    let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
+    let client =
+        MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
+
+    let mut message = "Private API authenticated".to_string();
+    let (balances, trades) = match market {
+        ConnectionMarket::Spot => {
+            let account = match client.spot_account_information() {
+                Ok(account) => account,
+                Err(error) => {
+                    let error = error.to_string();
+                    return Err(mexc_spot_error_with_market_hint(&client, error));
+                }
+            };
+            (available_balances_from_spot_account(&account), Vec::new())
+        }
+        ConnectionMarket::Futures => {
+            let assets = match client.futures_assets() {
+                Ok(assets) => assets,
+                Err(error) => {
+                    let error = error.to_string();
+                    return Err(mexc_futures_error_with_market_hint(&client, error));
+                }
+            };
+            let balances = available_balances_from_futures_assets(&assets);
+            let trades = match client.futures_history_orders(1, 50) {
+                Ok(history) => futures_history_records(&history, "MEXC Futures"),
+                Err(error) => {
+                    message = format!("Private API authenticated; history unavailable: {error}");
+                    Vec::new()
+                }
+            };
+            (balances, trades)
+        }
+    };
+
+    Ok(ProbeSuccess {
+        message,
+        balances,
+        trades,
+    })
+}
+
+fn futures_history_records(
+    response: &MexcFuturesResponse<Value>,
+    source: &str,
+) -> Vec<ConnectionTradeRecord> {
+    let Some(data) = response.data.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut order_items = Vec::new();
+    collect_futures_order_items(data, &mut order_items);
+
+    order_items
+        .into_iter()
+        .map(|item| futures_order_record(item, source))
+        .collect()
+}
+
+fn collect_futures_order_items<'a>(value: &'a Value, items: &mut Vec<&'a Value>) {
+    match value {
+        Value::Array(values) => {
+            for item in values {
+                if looks_like_futures_order(item) {
+                    items.push(item);
+                }
+            }
+        }
+        Value::Object(object) => {
+            if looks_like_futures_order(value) {
+                items.push(value);
+                return;
+            }
+
+            for key in ["resultList", "list", "orders", "data"] {
+                if let Some(nested) = object.get(key) {
+                    collect_futures_order_items(nested, items);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn looks_like_futures_order(value: &Value) -> bool {
+    value.get("symbol").is_some()
+        && (value.get("orderId").is_some()
+            || value.get("id").is_some()
+            || value.get("externalOid").is_some())
+}
+
+fn futures_order_record(item: &Value, source: &str) -> ConnectionTradeRecord {
+    let timestamp_ms = normalize_timestamp_ms(
+        value_as_i64(item.get("updateTime"))
+            .or_else(|| value_as_i64(item.get("createTime")))
+            .or_else(|| value_as_i64(item.get("createdTime")))
+            .unwrap_or_default(),
+    );
+    let fee = display_field(item, &["fee"])
+        .map(|fee| {
+            display_field(item, &["feeCurrency", "feeCoin"])
+                .map(|currency| format!("{fee} {currency}"))
+                .unwrap_or(fee)
+        })
+        .unwrap_or_else(missing_value);
+
+    ConnectionTradeRecord {
+        timestamp_ms,
+        timestamp: format_timestamp(timestamp_ms),
+        source: source.to_string(),
+        symbol: display_field(item, &["symbol"]).unwrap_or_else(missing_value),
+        side: order_side_label(item.get("side")),
+        order_type: order_type_label(item.get("type").or_else(|| item.get("orderType"))),
+        order_price: display_field(item, &["price", "orderPrice"]).unwrap_or_else(missing_value),
+        average_price: display_field(item, &["dealAvgPrice", "avgPrice", "averagePrice"])
+            .unwrap_or_else(missing_value),
+        quantity: display_field(item, &["vol", "quantity", "origQty"])
+            .unwrap_or_else(missing_value),
+        filled_quantity: display_field(item, &["dealVol", "executedQty", "filledQty"])
+            .unwrap_or_else(missing_value),
+        pnl: display_field(item, &["profit", "realizedPnl", "realisedPnl", "pnl"])
+            .unwrap_or_else(missing_value),
+        fee,
+        state: order_state_label(item.get("state").or_else(|| item.get("status"))),
+        order_id: display_field(item, &["orderId", "id", "externalOid"])
+            .unwrap_or_else(missing_value),
+    }
+}
+
+fn display_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key))
+        .and_then(value_as_display_string)
+}
+
+fn value_as_display_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn value_as_i64(value: Option<&Value>) -> Option<i64> {
+    match value? {
+        Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok())),
+        Value::String(value) => value.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn normalize_timestamp_ms(timestamp: i64) -> i64 {
+    if timestamp > 0 && timestamp < 10_000_000_000 {
+        timestamp * 1_000
+    } else {
+        timestamp
+    }
+}
+
+fn format_timestamp(timestamp_ms: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp_ms)
+        .map(|timestamp| {
+            timestamp
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(missing_value)
+}
+
+fn order_side_label(value: Option<&Value>) -> String {
+    match value_as_i64(value) {
+        Some(1) => "Open long".to_string(),
+        Some(2) => "Close short".to_string(),
+        Some(3) => "Open short".to_string(),
+        Some(4) => "Close long".to_string(),
+        Some(value) => format!("Side {value}"),
+        None => value
+            .and_then(value_as_display_string)
+            .unwrap_or_else(missing_value),
+    }
+}
+
+fn order_type_label(value: Option<&Value>) -> String {
+    match value_as_i64(value) {
+        Some(1) => "Limit".to_string(),
+        Some(2) => "Post only".to_string(),
+        Some(3) => "IOC".to_string(),
+        Some(4) => "FOK".to_string(),
+        Some(5) => "Market".to_string(),
+        Some(value) => format!("Type {value}"),
+        None => value
+            .and_then(value_as_display_string)
+            .unwrap_or_else(missing_value),
+    }
+}
+
+fn order_state_label(value: Option<&Value>) -> String {
+    match value_as_i64(value) {
+        Some(1) => "New".to_string(),
+        Some(2) => "Partially filled".to_string(),
+        Some(3) => "Filled".to_string(),
+        Some(4) => "Canceled".to_string(),
+        Some(5) => "Invalid".to_string(),
+        Some(value) => format!("State {value}"),
+        None => value
+            .and_then(value_as_display_string)
+            .unwrap_or_else(missing_value),
+    }
+}
+
+fn missing_value() -> String {
+    "-".to_string()
+}
+
+fn mexc_spot_error_with_market_hint(client: &MexcBlockingPrivateClient, error: String) -> String {
+    if is_mexc_spot_key_invalid(&error)
+        && let Ok(assets) = client.futures_assets()
+    {
+        return format!(
+            "This API key authenticated on MEXC Futures, not Spot. Re-add it with Market=Futures. {}",
+            format_balance_summary(&available_balances_from_futures_assets(&assets))
+        );
+    }
+
+    error
+}
+
+fn mexc_futures_error_with_market_hint(
+    client: &MexcBlockingPrivateClient,
+    error: String,
+) -> String {
+    if is_mexc_futures_key_invalid(&error)
+        && let Ok(account) = client.spot_account_information()
+    {
+        return format!(
+            "This API key authenticated on MEXC Spot, not Futures. Re-add it with Market=Spot. {}",
+            format_balance_summary(&available_balances_from_spot_account(&account))
+        );
+    }
+
+    if is_mexc_futures_key_invalid(&error) {
+        return "MEXC rejected this Futures key/secret pair (code 402). Re-paste both API key and secret; the access-key suffix can match even when the saved secret is wrong.".to_string();
+    }
+
+    if is_mexc_futures_contract_network_error(&error) {
+        return "MEXC Futures contract API returned code 1005 after signing the private request. Check Futures API permissions, IP whitelist, and contract account activation; this is no longer a local keychain/auth prompt issue.".to_string();
+    }
+
+    error
+}
+
+fn is_mexc_spot_key_invalid(error: &str) -> bool {
+    error.contains("\"code\":10072") || error.contains("Api key info invalid")
+}
+
+fn is_mexc_futures_key_invalid(error: &str) -> bool {
+    error.contains("\"code\":402") || error.contains("API Key expired")
+}
+
+fn is_mexc_futures_contract_network_error(error: &str) -> bool {
+    error.contains("code 1005") || error.contains("\"code\":1005")
+}
+
+fn format_balance_summary(balances: &[exchange::adapter::MexcAvailableBalance]) -> String {
+    let non_zero = balances
+        .iter()
+        .filter(|balance| !is_zero_amount(&balance.available))
+        .take(3)
+        .map(|balance| format!("{} {}", balance.asset, balance.available))
+        .collect::<Vec<_>>();
+
+    if non_zero.is_empty() {
+        "Available balance: none returned".to_string()
+    } else {
+        format!("Available balance: {}", non_zero.join(", "))
+    }
+}
+
+fn is_zero_amount(value: &str) -> bool {
+    value
+        .parse::<f64>()
+        .map(|amount| amount.abs() <= f64::EPSILON)
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Clone)]
+struct ConnectionDraft {
+    exchange: ConnectionExchange,
+    market: ConnectionMarket,
+    mode: ConnectionMode,
+    access_key: String,
+    secret_key: String,
+    error: Option<String>,
+}
+
+impl Default for ConnectionDraft {
+    fn default() -> Self {
+        Self {
+            exchange: ConnectionExchange::Mexc,
+            market: ConnectionMarket::Futures,
+            mode: ConnectionMode::View,
+            access_key: String::new(),
+            secret_key: String::new(),
+            error: None,
+        }
+    }
+}
+
+impl ConnectionDraft {
+    fn clear_credentials_if_view_mode(&mut self) {
+        if self.mode == ConnectionMode::View {
+            self.access_key.clear();
+            self.secret_key.clear();
+        }
+        self.error = None;
+    }
 }
 
 pub(super) fn connections_panel<'a>(state: &'a ConnectionPanelState) -> Element<'a, PanelMessage> {
     let mut rows = column![connection_header()].spacing(0);
 
     for (index, connection) in state.rows.iter().enumerate() {
-        rows = rows.push(connection_row(index, connection, state));
+        rows = rows.push(connection_row(index, connection));
+    }
+
+    if let Some(draft) = &state.draft {
+        rows = rows.push(draft_row(draft));
     }
 
     column![
@@ -466,9 +1363,8 @@ pub(super) fn connections_panel<'a>(state: &'a ConnectionPanelState) -> Element<
                     connection_button(
                         "+ Add connection",
                         ConnectionAction::AddConnection,
-                        state.last_action == "Add connection"
+                        state.draft.is_some()
                     ),
-                    connection_button("My proxy", ConnectionAction::MyProxy, state.proxy_enabled),
                     connection_button(
                         "Refresh",
                         ConnectionAction::Refresh,
@@ -480,8 +1376,7 @@ pub(super) fn connections_panel<'a>(state: &'a ConnectionPanelState) -> Element<
             ]
             .spacing(12),
         ),
-        connection_notice(state),
-        connection_support_log(state),
+        connection_log(state),
         row![
             iced::widget::Space::new().width(Length::Fill),
             connection_button("OK", ConnectionAction::Confirm, state.last_action == "OK"),
@@ -495,7 +1390,19 @@ pub(super) fn connections_panel<'a>(state: &'a ConnectionPanelState) -> Element<
 fn connection_status_strip<'a>(state: &ConnectionPanelState) -> Element<'a, PanelMessage> {
     container(
         row![
-            text(state.ping_status()).size(style::text_size::BODY),
+            text(format!(
+                "{} enabled / {} total",
+                state.enabled_count(),
+                state.rows.len()
+            ))
+            .size(style::text_size::BODY),
+            text(state.top_bar_status()).size(style::text_size::BODY),
+            iced::widget::checkbox(state.autoconnect_enabled())
+                .label("Auto-connect last used")
+                .on_toggle(|enabled| {
+                    PanelMessage::ConnectionAction(ConnectionAction::AutoconnectChanged(enabled))
+                }),
+            text(format!("Last: {}", state.last_connection_label())).size(style::text_size::SMALL),
             iced::widget::Space::new().width(Length::Fill),
             text(format!("Last action: {}", state.last_action)).size(style::text_size::SMALL),
         ]
@@ -510,41 +1417,40 @@ fn connection_status_strip<'a>(state: &ConnectionPanelState) -> Element<'a, Pane
 
 fn connection_header<'a>() -> Element<'a, PanelMessage> {
     row![
-        connection_cell(table_header_text("State"), Length::Fixed(78.0), true, false),
+        connection_cell(table_header_text("State"), Length::Fixed(72.0), true, false),
         connection_cell(
             table_header_text("Exchange"),
-            Length::FillPortion(4),
-            true,
-            false
-        ),
-        connection_cell(table_header_text("Key"), Length::Fixed(66.0), true, false),
-        connection_cell(
-            table_header_text("Color"),
-            Length::Fixed(144.0),
+            Length::FillPortion(2),
             true,
             false
         ),
         connection_cell(
-            table_header_text("Proxy"),
+            table_header_text("Market"),
+            Length::FillPortion(2),
+            true,
+            false
+        ),
+        connection_cell(
+            table_header_text("Mode"),
+            Length::FillPortion(2),
+            true,
+            false
+        ),
+        connection_cell(
+            table_header_text("Credentials"),
             Length::FillPortion(3),
             true,
             false
         ),
         connection_cell(
-            table_header_text("Speed"),
-            Length::Fixed(108.0),
-            true,
-            false
-        ),
-        connection_cell(
-            table_header_text("Trend"),
-            Length::Fixed(150.0),
+            table_header_text("Status"),
+            Length::FillPortion(4),
             true,
             false
         ),
         connection_cell(
             table_header_text("Actions"),
-            Length::Fixed(118.0),
+            Length::Fixed(92.0),
             true,
             false
         ),
@@ -553,98 +1459,157 @@ fn connection_header<'a>() -> Element<'a, PanelMessage> {
     .into()
 }
 
-fn table_header_text<'a>(label: &'static str) -> Element<'a, PanelMessage> {
-    text(label)
-        .size(style::text_size::BODY)
-        .font(style::AZERET_MONO)
-        .style(|theme: &Theme| text::Style {
-            color: Some(theme.extended_palette().background.base.text),
-        })
-        .into()
-}
-
-fn connection_row<'a>(
-    index: usize,
-    connection: &'a ConnectionRow,
-    state: &ConnectionPanelState,
-) -> Element<'a, PanelMessage> {
+fn connection_row<'a>(index: usize, connection: &'a ConnectionRow) -> Element<'a, PanelMessage> {
     let selected = connection.enabled;
-    let proxy = if state.proxy_enabled {
-        "Demo proxy"
-    } else {
-        connection.proxy.as_str()
-    };
 
     row![
         connection_cell(
             connection_toggle(index, connection.enabled),
-            Length::Fixed(78.0),
+            Length::Fixed(72.0),
             false,
             selected
         ),
         connection_cell(
-            row![
-                exchange_badge(&connection.exchange),
-                column![
-                    text(connection.exchange.clone())
-                        .size(style::text_size::EMPHASIS)
-                        .font(iced::Font {
-                            weight: iced::font::Weight::Bold,
-                            ..Default::default()
-                        }),
-                    text(connection.market.clone())
-                        .size(style::text_size::TINY)
-                        .style(|theme: &Theme| text::Style {
-                            color: Some(theme.extended_palette().background.weak.text),
-                        }),
-                ]
-                .spacing(2),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
+            value_box(connection.exchange.to_string(), Length::Fill),
+            Length::FillPortion(2),
+            false,
+            selected,
+        ),
+        connection_cell(
+            value_box(connection.market.to_string(), Length::Fill),
+            Length::FillPortion(2),
+            false,
+            selected,
+        ),
+        connection_cell(
+            value_box(connection.mode.to_string(), Length::Fill),
+            Length::FillPortion(2),
+            false,
+            selected,
+        ),
+        connection_cell(
+            credential_control(connection),
+            Length::FillPortion(3),
+            false,
+            selected,
+        ),
+        connection_cell(
+            text(connection.status())
+                .size(style::text_size::SMALL)
+                .style(move |theme: &Theme| text::Style {
+                    color: Some(status_text_color(theme, &connection.test_state)),
+                }),
             Length::FillPortion(4),
             false,
             selected,
         ),
         connection_cell(
-            key_badge(&connection.key),
-            Length::Fixed(66.0),
-            false,
-            selected
-        ),
-        connection_cell(
-            color_picker(index, connection.color),
-            Length::Fixed(144.0),
-            false,
-            selected
-        ),
-        connection_cell(
-            value_box(format!("{proxy} connection"), Length::Fill),
-            Length::FillPortion(3),
-            false,
-            selected
-        ),
-        connection_cell(
-            speed_text(connection.speed_label(), connection.enabled),
-            Length::Fixed(108.0),
-            false,
-            selected,
-        ),
-        connection_cell(
-            ping_sparkline(connection),
-            Length::Fixed(150.0),
-            false,
-            selected,
-        ),
-        connection_cell(
-            connection_actions(index, state.last_action),
-            Length::Fixed(118.0),
+            row![icon_button(
+                style::icon_text(style::Icon::TrashBin, 13),
+                ConnectionAction::RowDelete(index),
+            )]
+            .align_y(Alignment::Center),
+            Length::Fixed(92.0),
             false,
             selected,
         ),
     ]
     .spacing(0)
     .into()
+}
+
+fn draft_row<'a>(draft: &'a ConnectionDraft) -> Element<'a, PanelMessage> {
+    let credentials: Element<'a, PanelMessage> = if draft.mode == ConnectionMode::Trade {
+        column![
+            text_input("API key ID", &draft.access_key)
+                .on_input(|value| {
+                    PanelMessage::ConnectionAction(ConnectionAction::DraftAccessKeyChanged(value))
+                })
+                .style(|theme, status| style::validated_text_input(theme, status, true)),
+            text_input("Secret key", &draft.secret_key)
+                .secure(true)
+                .on_input(|value| {
+                    PanelMessage::ConnectionAction(ConnectionAction::DraftSecretKeyChanged(value))
+                })
+                .style(|theme, status| style::validated_text_input(theme, status, true)),
+        ]
+        .spacing(4)
+        .into()
+    } else {
+        value_box("Not required", Length::Fill)
+    };
+
+    let status = draft
+        .error
+        .as_deref()
+        .unwrap_or_else(|| draft.exchange.draft_status(draft.mode));
+
+    row![
+        connection_cell(
+            text("New").size(style::text_size::SMALL),
+            Length::Fixed(72.0),
+            false,
+            true
+        ),
+        connection_cell(
+            pick_list(ConnectionExchange::ALL, Some(draft.exchange), |exchange| {
+                PanelMessage::ConnectionAction(ConnectionAction::DraftExchangeSelected(exchange))
+            }),
+            Length::FillPortion(2),
+            false,
+            true,
+        ),
+        connection_cell(
+            pick_list(ConnectionMarket::ALL, Some(draft.market), |market| {
+                PanelMessage::ConnectionAction(ConnectionAction::DraftMarketSelected(market))
+            }),
+            Length::FillPortion(2),
+            false,
+            true,
+        ),
+        connection_cell(
+            pick_list(ConnectionMode::ALL, Some(draft.mode), |mode| {
+                PanelMessage::ConnectionAction(ConnectionAction::DraftModeSelected(mode))
+            }),
+            Length::FillPortion(2),
+            false,
+            true,
+        ),
+        connection_cell(credentials, Length::FillPortion(3), false, true),
+        connection_cell(
+            text(status).size(style::text_size::SMALL),
+            Length::FillPortion(4),
+            false,
+            true
+        ),
+        connection_cell(
+            row![
+                connection_button("Save", ConnectionAction::SaveDraft, true),
+                icon_button(
+                    text("x").size(style::text_size::BODY),
+                    ConnectionAction::CancelDraft,
+                )
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+            Length::Fixed(92.0),
+            false,
+            true,
+        ),
+    ]
+    .spacing(0)
+    .into()
+}
+
+fn credential_control<'a>(connection: &'a ConnectionRow) -> Element<'a, PanelMessage> {
+    if connection.mode != ConnectionMode::Trade {
+        return value_box(connection.credential_label(), Length::Fill);
+    }
+
+    match &connection.credentials {
+        CredentialState::Saved { .. } => value_box(connection.credential_label(), Length::Fill),
+        CredentialState::NotRequired => value_box(connection.credential_label(), Length::Fill),
+    }
 }
 
 fn connection_cell<'a>(
@@ -655,8 +1620,8 @@ fn connection_cell<'a>(
 ) -> Element<'a, PanelMessage> {
     container(content.into())
         .width(width)
-        .height(Length::Fixed(if is_header { 36.0 } else { 52.0 }))
-        .padding(padding::left(11).right(11).top(7).bottom(7))
+        .height(Length::Fixed(if is_header { 36.0 } else { 92.0 }))
+        .padding(padding::left(8).right(8).top(6).bottom(6))
         .align_y(Alignment::Center)
         .style(move |theme| {
             if is_header {
@@ -670,230 +1635,69 @@ fn connection_cell<'a>(
         .into()
 }
 
+fn table_header_text<'a>(label: &'static str) -> Element<'a, PanelMessage> {
+    text(label)
+        .size(style::text_size::BODY)
+        .font(style::AZERET_MONO)
+        .style(|theme: &Theme| text::Style {
+            color: Some(theme.extended_palette().background.base.text),
+        })
+        .into()
+}
+
 fn connection_toggle<'a>(index: usize, enabled: bool) -> Element<'a, PanelMessage> {
     button(text(if enabled { "ON" } else { "OFF" }).size(style::text_size::TINY))
-        .width(Length::Fixed(52.0))
+        .width(Length::Fixed(48.0))
         .height(Length::Fixed(26.0))
         .padding(padding::left(5).right(5).top(3).bottom(3))
-        .style(move |theme, status| style::button::bordered_toggle(theme, status, enabled))
+        .style(move |theme, status| connection_toggle_style(theme, status, enabled))
         .on_press(PanelMessage::ConnectionAction(ConnectionAction::Toggle(
             index,
         )))
         .into()
 }
 
-fn exchange_badge<'a>(exchange: &str) -> Element<'a, PanelMessage> {
-    let letter = exchange.chars().next().unwrap_or('X').to_string();
+fn connection_toggle_style(
+    theme: &Theme,
+    status: iced::widget::button::Status,
+    enabled: bool,
+) -> iced::widget::button::Style {
+    let palette = theme.extended_palette();
+    let base = if enabled {
+        palette.success.strong.color
+    } else {
+        palette.danger.strong.color
+    };
+    let background = match status {
+        iced::widget::button::Status::Hovered => base.scale_alpha(0.26),
+        iced::widget::button::Status::Pressed => base.scale_alpha(0.34),
+        iced::widget::button::Status::Disabled => base.scale_alpha(0.10),
+        iced::widget::button::Status::Active => base.scale_alpha(0.18),
+    };
 
-    container(text(letter).size(style::text_size::TINY))
-        .width(Length::Fixed(22.0))
-        .height(Length::Fixed(22.0))
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(style::panel_value_box)
-        .into()
-}
-
-fn key_badge<'a>(key: &str) -> Element<'a, PanelMessage> {
-    container(
-        text(key.to_string())
-            .size(style::text_size::TINY)
-            .font(style::AZERET_MONO),
-    )
-    .width(Length::Fixed(28.0))
-    .height(Length::Fixed(24.0))
-    .align_x(Alignment::Center)
-    .align_y(Alignment::Center)
-    .style(style::panel_value_box)
-    .into()
-}
-
-fn color_picker<'a>(index: usize, selected: u32) -> Element<'a, PanelMessage> {
-    let mut swatches = row![].spacing(4).align_y(Alignment::Center);
-
-    for color in COLOR_CHOICES {
-        swatches = swatches.push(
-            button(
-                container("")
-                    .width(Length::Fixed(16.0))
-                    .height(Length::Fixed(16.0))
-                    .style(move |theme| style::panel_swatch(theme, rgb(color), color == selected)),
-            )
-            .padding(2)
-            .style(move |theme, status| {
-                style::button::bordered_toggle(theme, status, color == selected)
-            })
-            .on_press(PanelMessage::ConnectionAction(ConnectionAction::SetColor(
-                index, color,
-            ))),
-        );
-    }
-
-    swatches.into()
-}
-
-fn speed_text<'a>(speed: String, online: bool) -> Element<'a, PanelMessage> {
-    text(speed)
-        .size(style::text_size::BODY)
-        .font(style::AZERET_MONO)
-        .style(move |theme: &Theme| text::Style {
-            color: Some(if online {
-                theme.extended_palette().success.strong.color
-            } else {
-                theme.extended_palette().background.weak.text
-            }),
-        })
-        .into()
-}
-
-fn ping_sparkline<'a>(connection: &ConnectionRow) -> Element<'a, PanelMessage> {
-    Canvas::new(PingSparkline {
-        points: connection.ping_history.clone(),
-        online: connection.enabled,
-        api: connection.api_ping,
-    })
-    .width(Length::Fill)
-    .height(Length::Fixed(34.0))
-    .into()
-}
-
-fn connection_actions<'a>(index: usize, last_action: &'static str) -> Element<'a, PanelMessage> {
-    row![
-        icon_button(
-            style::icon_text(style::Icon::Cog, 13),
-            ConnectionAction::RowSettings(index),
-            last_action == "Row settings"
-        ),
-        icon_button(
-            text("?").size(style::text_size::BODY),
-            ConnectionAction::RowHelp(index),
-            last_action == "Row help"
-        ),
-        icon_button(
-            style::icon_text(style::Icon::TrashBin, 13),
-            ConnectionAction::RowDelete(index),
-            last_action == "Delete"
-        ),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .into()
-}
-
-fn rgb(value: u32) -> iced::Color {
-    iced::Color::from_rgb8(
-        ((value >> 16) & 0xff) as u8,
-        ((value >> 8) & 0xff) as u8,
-        (value & 0xff) as u8,
-    )
-}
-
-struct PingSparkline {
-    points: Vec<u16>,
-    online: bool,
-    api: bool,
-}
-
-impl canvas::Program<PanelMessage> for PingSparkline {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let palette = theme.extended_palette();
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let width = bounds.width.max(1.0);
-        let height = bounds.height.max(1.0);
-        let mid_y = height * 0.62;
-
-        let color = if !self.online {
-            palette.background.weak.text.scale_alpha(0.55)
-        } else if self.api {
-            palette.success.strong.color
-        } else {
-            palette.success.weak.color
-        };
-
-        frame.stroke(
-            &Path::line(Point::new(2.0, mid_y), Point::new(width - 2.0, mid_y)),
-            Stroke::default()
-                .with_color(color.scale_alpha(0.45))
-                .with_width(1.0),
-        );
-
-        if self.points.len() >= 2 && self.online {
-            let min = self.points.iter().copied().min().unwrap_or(0) as f32;
-            let max = self.points.iter().copied().max().unwrap_or(1) as f32;
-            let range = (max - min).max(12.0);
-            let step = (width - 4.0) / (self.points.len() - 1) as f32;
-            let points = self
-                .points
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(index, value)| {
-                    let x = 2.0 + index as f32 * step;
-                    let normalized = (value as f32 - min) / range;
-                    let y = (height - 4.0) - normalized * (height - 8.0);
-                    Point::new(x, y.clamp(3.0, height - 3.0))
-                })
-                .collect::<Vec<_>>();
-
-            let path = Path::new(|builder| {
-                builder.move_to(points[0]);
-
-                for pair in points.windows(2) {
-                    let from = pair[0];
-                    let to = pair[1];
-                    let control_dx = (to.x - from.x) * 0.45;
-
-                    builder.bezier_curve_to(
-                        Point::new(from.x + control_dx, from.y),
-                        Point::new(to.x - control_dx, to.y),
-                        to,
-                    );
-                }
-            });
-
-            frame.stroke(&path, Stroke::default().with_color(color).with_width(2.15));
-        }
-
-        vec![frame.into_geometry()]
+    iced::widget::button::Style {
+        text_color: base,
+        border: iced::Border {
+            radius: 3.0.into(),
+            width: 1.0,
+            color: base.scale_alpha(0.80),
+        },
+        background: Some(background.into()),
+        ..Default::default()
     }
 }
 
-fn connection_notice<'a>(state: &ConnectionPanelState) -> Element<'a, PanelMessage> {
-    container(
-        row![
-            text("Become a prop company trader or open a personal account on favorable terms")
-                .size(style::text_size::BODY),
-            iced::widget::Space::new().width(Length::Fill),
-            connection_button(
-                "Become a trader",
-                ConnectionAction::BecomeTrader,
-                state.last_action == "Become a trader"
-            ),
-            connection_button(
-                "Open an account",
-                ConnectionAction::OpenAccount,
-                state.last_action == "Open an account"
-            ),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-    )
-    .width(Length::Fill)
-    .padding(12)
-    .style(style::panel_card)
-    .into()
+fn status_text_color(theme: &Theme, state: &ConnectionTestState) -> iced::Color {
+    let palette = theme.extended_palette();
+    match state {
+        ConnectionTestState::Loading => palette.warning.strong.color,
+        ConnectionTestState::Success(_) => palette.success.strong.color,
+        ConnectionTestState::Error(_) => palette.danger.strong.color,
+        ConnectionTestState::Idle => palette.background.base.text,
+    }
 }
 
-fn connection_support_log<'a>(state: &ConnectionPanelState) -> Element<'a, PanelMessage> {
+fn connection_log<'a>(state: &ConnectionPanelState) -> Element<'a, PanelMessage> {
     let mut lines = column![].spacing(3);
 
     for line in &state.logs {
@@ -903,7 +1707,7 @@ fn connection_support_log<'a>(state: &ConnectionPanelState) -> Element<'a, Panel
     panel_card(
         "Connection log",
         container(lines)
-            .height(Length::Fixed(170.0))
+            .height(Length::Fixed(128.0))
             .width(Length::Fill)
             .padding(10)
             .style(style::panel_value_box),
@@ -925,11 +1729,123 @@ fn connection_button<'a>(
 fn icon_button<'a>(
     content: impl Into<Element<'a, PanelMessage>>,
     action: ConnectionAction,
-    active: bool,
 ) -> Element<'a, PanelMessage> {
     button(content)
         .padding(padding::left(5).right(5).top(4).bottom(4))
-        .style(move |theme, status| style::button::bordered_toggle(theme, status, active))
+        .style(|theme, status| style::button::bordered_toggle(theme, status, false))
         .on_press(PanelMessage::ConnectionAction(action))
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConnectionExchange, ConnectionMarket, ConnectionMode, ConnectionRow, MexcFuturesResponse,
+        PersistedConnectionRow, PersistedConnections, futures_history_records,
+        last_enabled_connection_id,
+    };
+
+    #[test]
+    fn futures_history_records_extracts_core_order_fields() {
+        let response = MexcFuturesResponse {
+            success: true,
+            code: 0,
+            message: None,
+            data: Some(serde_json::json!({
+                "resultList": [{
+                    "orderId": "123",
+                    "symbol": "BTC_USDT",
+                    "side": 1,
+                    "type": 5,
+                    "price": "64000",
+                    "dealAvgPrice": "64010",
+                    "vol": "2",
+                    "dealVol": "1",
+                    "profit": "3.5",
+                    "fee": "0.12",
+                    "feeCurrency": "USDT",
+                    "state": 3,
+                    "createTime": 1_700_000_000_000_i64
+                }]
+            })),
+        };
+
+        let records = futures_history_records(&response, "MEXC Futures");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].source, "MEXC Futures");
+        assert_eq!(records[0].symbol, "BTC_USDT");
+        assert_eq!(records[0].side, "Open long");
+        assert_eq!(records[0].order_type, "Market");
+        assert_eq!(records[0].pnl, "3.5");
+        assert_eq!(records[0].fee, "0.12 USDT");
+        assert_eq!(records[0].state, "Filled");
+    }
+
+    #[test]
+    fn persisted_connections_default_autoconnects_legacy_files() {
+        let persisted: PersistedConnections = serde_json::from_value(serde_json::json!({
+            "rows": [],
+            "next_connection_id": 3
+        }))
+        .unwrap();
+
+        assert!(persisted.autoconnect_enabled);
+        assert!(persisted.last_connection_id.is_none());
+    }
+
+    #[test]
+    fn last_enabled_connection_id_uses_last_enabled_row() {
+        let rows = vec![
+            persisted_row("first", true),
+            persisted_row("middle-disabled", false),
+            persisted_row("last", true),
+        ];
+
+        assert_eq!(last_enabled_connection_id(&rows).as_deref(), Some("last"));
+    }
+
+    #[test]
+    fn futures_contract_network_error_detection_matches_private_response() {
+        assert!(super::is_mexc_futures_contract_network_error(
+            "MEXC futures private request GET /v1/private/account/assets returned code 1005: Network error"
+        ));
+    }
+
+    #[test]
+    fn deduplicate_connection_rows_keeps_latest_same_kind() {
+        let rows = vec![
+            ConnectionRow::new(
+                "old".to_string(),
+                ConnectionExchange::Mexc,
+                ConnectionMarket::Futures,
+                ConnectionMode::Trade,
+                false,
+            ),
+            ConnectionRow::new(
+                "latest".to_string(),
+                ConnectionExchange::Mexc,
+                ConnectionMarket::Futures,
+                ConnectionMode::Trade,
+                false,
+            ),
+        ];
+
+        let rows = super::deduplicate_connection_rows(rows);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "latest");
+    }
+
+    fn persisted_row(id: &str, enabled: bool) -> PersistedConnectionRow {
+        PersistedConnectionRow {
+            id: Some(id.to_string()),
+            enabled,
+            exchange: ConnectionExchange::Mexc,
+            market: ConnectionMarket::Futures,
+            mode: ConnectionMode::View,
+            credential_id: None,
+            access_key_hint: None,
+        }
+    }
 }

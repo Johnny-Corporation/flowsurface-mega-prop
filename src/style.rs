@@ -18,7 +18,7 @@ pub const AZERET_MONO: Font = Font {
     style: iced::font::Style::Normal,
 };
 
-pub const TITLE_PADDING_TOP: f32 = if cfg!(target_os = "macos") { 20.0 } else { 0.0 };
+pub const TITLE_PADDING_TOP: f32 = 0.0;
 
 pub mod text_size {
     pub const SMALL: f32 = 11.0;
@@ -35,8 +35,6 @@ pub mod text_size {
 /// Enum variant names may differ from Fontello CSS names.
 #[repr(u32)]
 pub enum Icon {
-    Locked = 59392,
-    Unlocked = 59393,
     ResizeFull = 59395,
     ResizeSmall = 59396,
     Close = 59397,

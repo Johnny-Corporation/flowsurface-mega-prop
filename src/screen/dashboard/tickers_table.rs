@@ -168,6 +168,15 @@ impl TickersTable {
         }
     }
 
+    pub fn initial_fetch(&self) -> Task<Message> {
+        Task::batch(
+            self.selected_exchanges
+                .iter()
+                .map(|venue| fetch_metadata_task(&self.handles, *venue))
+                .collect::<Vec<_>>(),
+        )
+    }
+
     pub fn update(&mut self, message: Message) -> Option<Action> {
         match message {
             Message::UpdateSearchQuery(query) => {
