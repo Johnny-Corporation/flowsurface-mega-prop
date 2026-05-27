@@ -238,11 +238,7 @@ impl MexcPrivateClient {
             signing_params,
             &self.credentials.secret_key,
         );
-        let url = if query.is_empty() {
-            format!("{FETCH_DOMAIN}{path}")
-        } else {
-            format!("{FETCH_DOMAIN}{path}?{query}")
-        };
+        let url = futures_request_url(path, &query);
 
         let mut builder = self
             .client
@@ -250,12 +246,11 @@ impl MexcPrivateClient {
             .header("ApiKey", self.credentials.access_key())
             .header("Request-Time", timestamp.to_string())
             .header("Signature", signature)
-            .header("Recv-Window", self.futures_recv_window_ms.to_string());
+            .header("Recv-Window", self.futures_recv_window_ms.to_string())
+            .header(header::CONTENT_TYPE, "application/json");
 
         if method == Method::POST {
-            builder = builder
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(body_string);
+            builder = builder.body(body_string);
         }
 
         let response = builder.send().await.map_err(|error| {
@@ -264,7 +259,8 @@ impl MexcPrivateClient {
             ))
         })?;
 
-        parse_json_response(method, path, response).await
+        let parsed = parse_json_response(method.clone(), path, response).await?;
+        ensure_futures_success(&method, path, parsed)
     }
 }
 
@@ -367,11 +363,7 @@ impl MexcBlockingPrivateClient {
             signing_params,
             &self.credentials.secret_key,
         );
-        let url = if query.is_empty() {
-            format!("{FETCH_DOMAIN}{path}")
-        } else {
-            format!("{FETCH_DOMAIN}{path}?{query}")
-        };
+        let url = futures_request_url(path, &query);
 
         let mut builder = self
             .client
@@ -379,12 +371,11 @@ impl MexcBlockingPrivateClient {
             .header("ApiKey", self.credentials.access_key())
             .header("Request-Time", timestamp.to_string())
             .header("Signature", signature)
-            .header("Recv-Window", self.futures_recv_window_ms.to_string());
+            .header("Recv-Window", self.futures_recv_window_ms.to_string())
+            .header(header::CONTENT_TYPE, "application/json");
 
         if method == Method::POST {
-            builder = builder
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(body_string);
+            builder = builder.body(body_string);
         }
 
         let response = builder.send().map_err(|error| {
@@ -393,7 +384,8 @@ impl MexcBlockingPrivateClient {
             ))
         })?;
 
-        parse_blocking_json_response(method, path, response)
+        let parsed = parse_blocking_json_response(method.clone(), path, response)?;
+        ensure_futures_success(&method, path, parsed)
     }
 }
 
@@ -700,6 +692,30 @@ fn encode_sorted_params(params: Vec<(String, String)>) -> String {
     serializer.finish()
 }
 
+fn futures_request_url(path: &str, query: &str) -> String {
+    if query.is_empty() {
+        format!("{FETCH_DOMAIN}{path}")
+    } else {
+        format!("{FETCH_DOMAIN}{path}?{query}")
+    }
+}
+
+fn ensure_futures_success<T>(
+    method: &Method,
+    path: &str,
+    response: MexcFuturesResponse<T>,
+) -> Result<MexcFuturesResponse<T>, AdapterError> {
+    if response.success && response.code == 0 {
+        return Ok(response);
+    }
+
+    let message = response.message.as_deref().unwrap_or("No message returned");
+    Err(AdapterError::InvalidRequest(format!(
+        "MEXC futures private request {method} {path} returned code {}: {message}",
+        response.code
+    )))
+}
+
 fn collect_futures_balances(value: &Value, balances: &mut Vec<MexcAvailableBalance>) {
     match value {
         Value::Array(items) => {
@@ -889,6 +905,34 @@ mod tests {
     #[test]
     fn futures_recv_window_uses_milliseconds() {
         assert_eq!(super::DEFAULT_FUTURES_RECV_WINDOW_MS, 5_000);
+    }
+
+    #[test]
+    fn futures_private_url_uses_current_api_host() {
+        let url = super::futures_request_url("/v1/private/account/assets", "");
+
+        assert_eq!(url, "https://api.mexc.com/api/v1/private/account/assets");
+    }
+
+    #[test]
+    fn futures_success_false_response_is_error() {
+        let response = MexcFuturesResponse::<serde_json::Value> {
+            success: false,
+            code: 1005,
+            message: Some("Network error. Please try again.".to_string()),
+            data: None,
+        };
+
+        let error = super::ensure_futures_success(
+            &reqwest::Method::GET,
+            "/v1/private/account/assets",
+            response,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("code 1005"));
+        assert!(error.contains("Network error"));
     }
 
     #[test]

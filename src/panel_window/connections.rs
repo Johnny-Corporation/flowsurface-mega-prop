@@ -418,14 +418,22 @@ impl ConnectionPanelState {
             return;
         };
 
-        let id = format!(
-            "{}-{}-{}-{}",
-            draft.exchange.storage_key(),
-            draft.market.storage_key(),
-            draft.mode.storage_key(),
-            self.next_connection_id
-        );
-        self.next_connection_id += 1;
+        let existing_index = self.rows.iter().position(|row| {
+            row.exchange == draft.exchange && row.market == draft.market && row.mode == draft.mode
+        });
+        let id = if let Some(index) = existing_index {
+            self.rows[index].id.clone()
+        } else {
+            let id = format!(
+                "{}-{}-{}-{}",
+                draft.exchange.storage_key(),
+                draft.market.storage_key(),
+                draft.mode.storage_key(),
+                self.next_connection_id
+            );
+            self.next_connection_id += 1;
+            id
+        };
 
         let mut row =
             ConnectionRow::new(id.clone(), draft.exchange, draft.market, draft.mode, false);
@@ -479,9 +487,15 @@ impl ConnectionPanelState {
         }
 
         let label = row.label();
-        self.rows.push(row);
-        self.last_action = "Connection saved".to_string();
-        self.push_log(format!("[connections] {label} saved"));
+        if let Some(index) = existing_index {
+            self.rows[index] = row;
+            self.last_action = "Connection updated".to_string();
+            self.push_log(format!("[connections] {label} updated"));
+        } else {
+            self.rows.push(row);
+            self.last_action = "Connection saved".to_string();
+            self.push_log(format!("[connections] {label} saved"));
+        }
         self.persist_rows();
     }
 
@@ -829,6 +843,7 @@ fn load_saved_connections() -> Option<LoadedConnections> {
         .into_iter()
         .filter_map(|row| ConnectionRow::try_from(row).ok())
         .collect::<Vec<_>>();
+    let rows = deduplicate_connection_rows(rows);
 
     if rows.is_empty() {
         return None;
@@ -852,6 +867,22 @@ fn last_enabled_connection_id(rows: &[PersistedConnectionRow]) -> Option<String>
                 row.mode.storage_key()
             ))
         })
+    })
+}
+
+fn deduplicate_connection_rows(rows: Vec<ConnectionRow>) -> Vec<ConnectionRow> {
+    rows.into_iter().fold(Vec::new(), |mut deduped, row| {
+        if let Some(index) = deduped.iter().position(|existing: &ConnectionRow| {
+            existing.exchange == row.exchange
+                && existing.market == row.market
+                && existing.mode == row.mode
+        }) {
+            deduped[index] = row;
+        } else {
+            deduped.push(row);
+        }
+
+        deduped
     })
 }
 
@@ -1236,6 +1267,10 @@ fn mexc_futures_error_with_market_hint(
         return "MEXC rejected this Futures key/secret pair (code 402). Re-paste both API key and secret; the access-key suffix can match even when the saved secret is wrong.".to_string();
     }
 
+    if is_mexc_futures_contract_network_error(&error) {
+        return "MEXC Futures contract API returned code 1005 after signing the private request. Check Futures API permissions, IP whitelist, and contract account activation; this is no longer a local keychain/auth prompt issue.".to_string();
+    }
+
     error
 }
 
@@ -1245,6 +1280,10 @@ fn is_mexc_spot_key_invalid(error: &str) -> bool {
 
 fn is_mexc_futures_key_invalid(error: &str) -> bool {
     error.contains("\"code\":402") || error.contains("API Key expired")
+}
+
+fn is_mexc_futures_contract_network_error(error: &str) -> bool {
+    error.contains("code 1005") || error.contains("\"code\":1005")
 }
 
 fn format_balance_summary(balances: &[exchange::adapter::MexcAvailableBalance]) -> String {
@@ -1701,7 +1740,7 @@ fn icon_button<'a>(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionExchange, ConnectionMarket, ConnectionMode, MexcFuturesResponse,
+        ConnectionExchange, ConnectionMarket, ConnectionMode, ConnectionRow, MexcFuturesResponse,
         PersistedConnectionRow, PersistedConnections, futures_history_records,
         last_enabled_connection_id,
     };
@@ -1764,6 +1803,38 @@ mod tests {
         ];
 
         assert_eq!(last_enabled_connection_id(&rows).as_deref(), Some("last"));
+    }
+
+    #[test]
+    fn futures_contract_network_error_detection_matches_private_response() {
+        assert!(super::is_mexc_futures_contract_network_error(
+            "MEXC futures private request GET /v1/private/account/assets returned code 1005: Network error"
+        ));
+    }
+
+    #[test]
+    fn deduplicate_connection_rows_keeps_latest_same_kind() {
+        let rows = vec![
+            ConnectionRow::new(
+                "old".to_string(),
+                ConnectionExchange::Mexc,
+                ConnectionMarket::Futures,
+                ConnectionMode::Trade,
+                false,
+            ),
+            ConnectionRow::new(
+                "latest".to_string(),
+                ConnectionExchange::Mexc,
+                ConnectionMarket::Futures,
+                ConnectionMode::Trade,
+                false,
+            ),
+        ];
+
+        let rows = super::deduplicate_connection_rows(rows);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "latest");
     }
 
     fn persisted_row(id: &str, enabled: bool) -> PersistedConnectionRow {
