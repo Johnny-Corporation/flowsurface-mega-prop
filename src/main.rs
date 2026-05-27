@@ -87,6 +87,7 @@ struct Flowsurface {
     ui_scale_factor: data::ScaleFactor,
     timezone: data::UserTimezone,
     theme: data::Theme,
+    accent_color: String,
     notifications: Notifications,
     connection_state: panel_window::ConnectionPanelState,
     panel_windows: HashMap<window::Id, panel_window::State>,
@@ -155,6 +156,7 @@ impl Flowsurface {
             ui_scale_factor: saved_state.scale_factor,
             volume_size_unit: saved_state.volume_size_unit,
             theme: saved_state.theme,
+            accent_color: saved_state.accent_color,
             notifications: Notifications::new(),
             connection_state: panel_window::ConnectionPanelState::default(),
             panel_windows: HashMap::new(),
@@ -469,8 +471,10 @@ impl Flowsurface {
                     }
                 }
                 other => {
-                    if let Some(panel) = self.panel_windows.get_mut(&window) {
-                        panel.update(other);
+                    if let Some(panel) = self.panel_windows.get_mut(&window)
+                        && let Some(accent_color) = panel.update(other)
+                    {
+                        self.accent_color = accent_color;
                     }
                 }
             },
@@ -992,7 +996,7 @@ impl Flowsurface {
         });
 
         self.panel_windows
-            .insert(window, panel_window::State::new(kind));
+            .insert(window, panel_window::State::new(kind, &self.accent_color));
 
         task.discard()
     }
@@ -1493,6 +1497,7 @@ impl Flowsurface {
             connector::fetcher::is_trade_fetch_enabled(),
             self.volume_size_unit,
             proxy_cfg_persisted,
+            self.accent_color.clone(),
         );
 
         match serde_json::to_string(&state) {

@@ -2,10 +2,22 @@ use crate::style::{self, Icon};
 
 use iced::{
     Alignment, Border, Element, Length, Theme, padding,
-    widget::{button, column, container, row, rule, text},
+    widget::{button, column, container, row, rule, scrollable, text},
 };
 
-use super::{PanelMessage, value_box};
+use super::PanelMessage;
+
+const SETTINGS_SMALL: f32 = style::text_size::SMALL + 1.0;
+const SETTINGS_BODY: f32 = style::text_size::BODY + 2.0;
+const SETTINGS_TITLE: f32 = style::text_size::TITLE + 2.0;
+pub(crate) const DEFAULT_ACCENT_COLOR: &str = "#5B6CFF";
+const ACCENT_COLORS: [(u32, &str); 5] = [
+    (0x5b6cff, DEFAULT_ACCENT_COLOR),
+    (0x51cda0, "#51CDA0"),
+    (0xeeca8b, "#EECA8B"),
+    (0xd95f7a, "#D95F7A"),
+    (0xc8c8c8, "#C8C8C8"),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsSection {
@@ -32,6 +44,7 @@ pub(crate) struct SettingsPanelState {
     fetch_trades: bool,
     theme_mode: usize,
     theme_index: usize,
+    accent_color_index: usize,
     update_channel: usize,
     start_on_launch: bool,
     minimize_to_tray: bool,
@@ -48,6 +61,12 @@ pub(crate) struct SettingsPanelState {
 
 impl Default for SettingsPanelState {
     fn default() -> Self {
+        Self::new(DEFAULT_ACCENT_COLOR)
+    }
+}
+
+impl SettingsPanelState {
+    pub(crate) fn new(accent_color: &str) -> Self {
         Self {
             section: SettingsSection::General,
             language_index: 0,
@@ -58,6 +77,7 @@ impl Default for SettingsPanelState {
             fetch_trades: false,
             theme_mode: 0,
             theme_index: 0,
+            accent_color_index: accent_color_index(accent_color),
             update_channel: 0,
             start_on_launch: true,
             minimize_to_tray: true,
@@ -72,10 +92,8 @@ impl Default for SettingsPanelState {
             last_action: "Ready",
         }
     }
-}
 
-impl SettingsPanelState {
-    pub(crate) fn update(&mut self, action: SettingsAction) {
+    pub(crate) fn update(&mut self, action: SettingsAction) -> Option<String> {
         match action {
             SettingsAction::SelectSection(section) => {
                 self.section = section;
@@ -113,6 +131,12 @@ impl SettingsPanelState {
             SettingsAction::SelectTheme(index) => {
                 self.theme_index = index;
                 self.last_action = "Theme selected";
+            }
+            SettingsAction::SelectAccentColor(index) => {
+                let index = index.min(ACCENT_COLORS.len().saturating_sub(1));
+                self.accent_color_index = index;
+                self.last_action = "Accent color saved";
+                return Some(accent_color_hex(index).to_string());
             }
             SettingsAction::SelectUpdateChannel(index) => {
                 self.update_channel = index;
@@ -166,7 +190,23 @@ impl SettingsPanelState {
                 self.last_action = label;
             }
         }
+
+        None
     }
+}
+
+pub(crate) fn accent_color_hex(index: usize) -> &'static str {
+    ACCENT_COLORS
+        .get(index)
+        .map(|(_, hex)| *hex)
+        .unwrap_or(DEFAULT_ACCENT_COLOR)
+}
+
+fn accent_color_index(hex: &str) -> usize {
+    ACCENT_COLORS
+        .iter()
+        .position(|(_, candidate)| candidate.eq_ignore_ascii_case(hex))
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +220,7 @@ pub(crate) enum SettingsAction {
     ToggleTradeFetch,
     SelectThemeMode(usize),
     SelectTheme(usize),
+    SelectAccentColor(usize),
     SelectUpdateChannel(usize),
     ToggleStartOnLaunch,
     ToggleMinimizeToTray,
@@ -257,28 +298,31 @@ impl SettingsSection {
 
 pub(super) fn settings_panel<'a>(state: &'a SettingsPanelState) -> Element<'a, PanelMessage> {
     column![
+        settings_actions(state.last_action),
+        rule::horizontal(1).style(style::split_ruler),
         row![
             settings_nav(state.section),
             rule::vertical(1).style(style::split_ruler),
             settings_content(state)
         ]
-        .spacing(0),
-        rule::horizontal(1).style(style::split_ruler),
-        settings_footer(state.last_action),
+        .spacing(0)
+        .height(Length::Fill),
     ]
-    .spacing(0)
+    .spacing(8)
+    .height(Length::Fill)
     .into()
 }
 
 fn settings_nav<'a>(active: SettingsSection) -> Element<'a, PanelMessage> {
-    let mut nav = column![].spacing(8).width(Length::Fixed(258.0));
+    let mut nav = column![].spacing(2).width(Length::Fixed(188.0));
 
     for section in SettingsSection::ALL {
         nav = nav.push(settings_nav_item(section, section == active));
     }
 
     container(nav)
-        .padding(padding::top(12).right(18).bottom(18))
+        .height(Length::Fill)
+        .padding(padding::top(6).right(10).bottom(8))
         .into()
 }
 
@@ -286,14 +330,14 @@ fn settings_nav_item<'a>(section: SettingsSection, active: bool) -> Element<'a, 
     button(
         row![
             style::icon_text(section.icon(), 17),
-            text(section.label()).size(style::text_size::BODY),
+            text(section.label()).size(SETTINGS_BODY),
         ]
-        .spacing(14)
-        .height(Length::Fixed(34.0))
+        .spacing(10)
+        .height(Length::Fixed(25.0))
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding(padding::left(16).right(16).top(9).bottom(9))
+    .padding(padding::left(9).right(9).top(5).bottom(5))
     .style(move |theme, status| settings_nav_button(theme, status, active))
     .on_press(PanelMessage::SettingsAction(SettingsAction::SelectSection(
         section,
@@ -316,25 +360,30 @@ fn settings_content<'a>(state: &'a SettingsPanelState) -> Element<'a, PanelMessa
     };
 
     container(
-        column![settings_section_title(state.section), rows]
-            .spacing(22)
-            .width(Length::Fill),
+        column![
+            settings_section_title(state.section),
+            scrollable(rows)
+                .height(Length::Fill)
+                .style(style::scroll_bar),
+        ]
+        .spacing(12)
+        .height(Length::Fill)
+        .width(Length::Fill),
     )
     .width(Length::Fill)
-    .padding(padding::left(28).right(20).top(28).bottom(20))
+    .height(Length::Fill)
+    .padding(padding::left(18).right(10).top(12).bottom(8))
     .into()
 }
 
 fn settings_section_title<'a>(section: SettingsSection) -> Element<'a, PanelMessage> {
     column![
-        text(section.label())
-            .size(style::text_size::TITLE)
-            .font(iced::Font {
-                weight: iced::font::Weight::Bold,
-                ..Default::default()
-            }),
+        text(section.label()).size(SETTINGS_TITLE).font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..Default::default()
+        }),
         text(section.subtitle())
-            .size(style::text_size::BODY)
+            .size(SETTINGS_BODY)
             .style(|theme: &Theme| text::Style {
                 color: Some(theme.extended_palette().background.weak.text),
             }),
@@ -384,7 +433,7 @@ fn settings_general_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Pa
             SettingsAction::SelectUpdateChannel
         ),
     ]
-    .spacing(10)
+    .spacing(8)
     .into()
 }
 
@@ -411,7 +460,7 @@ fn settings_chart_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Pane
         settings_value("Default chart", "Candles and order-flow panes"),
         settings_value("History preload", "Managed per active pane"),
     ]
-    .spacing(10)
+    .spacing(8)
     .into()
 }
 
@@ -427,7 +476,7 @@ fn settings_trading_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Pa
         settings_value("Allowed venue", "Bybit beta subaccount first"),
         settings_value("Dangerous actions", "Confirm before scaling beyond beta"),
     ]
-    .spacing(10)
+    .spacing(8)
     .into()
 }
 
@@ -443,7 +492,7 @@ fn settings_dom_content<'a>(state: &'a SettingsPanelState) -> Element<'a, PanelM
         settings_value("Order book refresh", "Driven by active exchange stream"),
         settings_value("Position marker", "Future trading-state overlay"),
     ]
-    .spacing(10)
+    .spacing(8)
     .into()
 }
 
@@ -458,7 +507,7 @@ fn settings_notifications_content<'a>(state: &'a SettingsPanelState) -> Element<
         settings_value("Connection alerts", "Visible in panel status"),
         settings_value("Risk warnings", "Always visible when configured"),
     ]
-    .spacing(10)
+    .spacing(8)
     .into()
 }
 
@@ -473,7 +522,7 @@ fn settings_hotkeys_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Pa
         settings_value("Pane navigation", "Default"),
         settings_value("Emergency close", "Requires explicit binding"),
     ]
-    .spacing(10)
+    .spacing(8)
     .into()
 }
 
@@ -485,11 +534,12 @@ fn settings_appearance_content<'a>(state: &'a SettingsPanelState) -> Element<'a,
             state.theme_mode,
             SettingsAction::SelectThemeMode
         ),
+        settings_accent_color_row(state.accent_color_index),
         settings_swatch_row(state.theme_index),
         settings_value("Theme editor", "Open theme editor"),
         settings_value("Density", "Balanced"),
     ]
-    .spacing(10)
+    .spacing(8)
     .into()
 }
 
@@ -510,7 +560,7 @@ fn settings_data_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Panel
         ),
         settings_value("Footprint trades", "Experimental fetcher"),
     ]
-    .spacing(10)
+    .spacing(8)
     .into()
 }
 
@@ -526,7 +576,7 @@ fn settings_risk_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Panel
         settings_value("Allowed symbols", "Connection default"),
         settings_value("Kill switch", "Future proxy control"),
     ]
-    .spacing(10)
+    .spacing(8)
     .into()
 }
 
@@ -539,7 +589,7 @@ fn settings_about_content<'a>() -> Element<'a, PanelMessage> {
         settings_value("Connections", "Stateful template with live pings"),
         settings_value("PnL", "Chart and trades template"),
     ]
-    .spacing(10)
+    .spacing(8)
     .into()
 }
 
@@ -565,15 +615,17 @@ fn settings_dropdown<'a>(
 fn dropdown_box<'a>(value: impl Into<String>) -> Element<'a, PanelMessage> {
     container(
         row![
-            text(value.into()).size(style::text_size::BODY),
+            text(value.into()).size(SETTINGS_BODY),
             iced::widget::Space::new().width(Length::Fill),
-            text("v").size(style::text_size::SMALL),
+            text("v").size(SETTINGS_SMALL),
         ]
+        .height(Length::Fill)
         .spacing(10)
         .align_y(Alignment::Center),
     )
-    .width(Length::Fixed(280.0))
-    .padding(padding::left(14).right(14).top(9).bottom(9))
+    .width(Length::Fixed(240.0))
+    .height(Length::Fixed(34.0))
+    .padding(padding::left(12).right(12).top(5).bottom(5))
     .style(style::panel_value_box)
     .into()
 }
@@ -590,9 +642,9 @@ fn settings_segmented<'a>(
         let active = index == active_index;
 
         choices = choices.push(
-            button(text(*value).size(style::text_size::BODY))
-                .width(Length::Fixed(88.0))
-                .padding(padding::left(8).right(8).top(9).bottom(9))
+            button(text(*value).size(SETTINGS_BODY))
+                .width(Length::Fixed(74.0))
+                .padding(padding::left(7).right(7).top(7).bottom(7))
                 .style(move |theme, status| settings_segment_button(theme, status, active))
                 .on_press(PanelMessage::SettingsAction(action(index))),
         );
@@ -609,7 +661,7 @@ fn settings_stepper<'a>(
         label,
         row![
             compact_action_button("-", SettingsAction::ChangeScale(-10)),
-            value_box(value, Length::Fixed(74.0)),
+            settings_value_box(value, Length::Fixed(70.0)),
             compact_action_button("+", SettingsAction::ChangeScale(10)),
         ]
         .spacing(6)
@@ -655,24 +707,51 @@ fn settings_value<'a>(label: &'static str, value: &'static str) -> Element<'a, P
     setting_row(label, dropdown_box(value))
 }
 
+fn settings_value_box<'a>(value: impl Into<String>, width: Length) -> Element<'a, PanelMessage> {
+    container(text(value.into()).size(SETTINGS_BODY))
+        .width(width)
+        .height(Length::Fixed(34.0))
+        .align_y(Alignment::Center)
+        .padding(padding::left(10).right(10).top(5).bottom(5))
+        .style(style::panel_value_box)
+        .into()
+}
+
 fn setting_row<'a>(
     label: &'static str,
     control: impl Into<Element<'a, PanelMessage>>,
 ) -> Element<'a, PanelMessage> {
     container(
         row![
-            text(label).size(style::text_size::BODY),
+            text(label).size(SETTINGS_BODY),
             iced::widget::Space::new().width(Length::Fill),
             control.into(),
         ]
+        .height(Length::Fill)
         .spacing(16)
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .height(Length::Fixed(58.0))
-    .padding(padding::left(18).right(18))
+    .height(Length::Fixed(50.0))
+    .padding(padding::left(14).right(14))
     .style(settings_row_card)
     .into()
+}
+
+fn settings_accent_color_row<'a>(selected_index: usize) -> Element<'a, PanelMessage> {
+    let swatches = ACCENT_COLORS.iter().enumerate().fold(
+        row![].spacing(8).align_y(Alignment::Center),
+        |row, (index, (color, _))| {
+            row.push(color_swatch(
+                index,
+                *color,
+                selected_index == index,
+                SettingsAction::SelectAccentColor,
+            ))
+        },
+    );
+
+    setting_row("Accent color", swatches)
 }
 
 fn settings_swatch_row<'a>(selected_index: usize) -> Element<'a, PanelMessage> {
@@ -684,39 +763,38 @@ fn settings_swatch_row<'a>(selected_index: usize) -> Element<'a, PanelMessage> {
         theme_swatch(4, 0x1f1f1f, selected_index == 4),
         compact_action_button("+", SettingsAction::Note("Add theme pressed")),
     ]
-    .spacing(10)
+    .spacing(8)
     .align_y(Alignment::Center);
 
     setting_row("Theme palette", swatches)
 }
 
-fn settings_footer<'a>(last_action: &'static str) -> Element<'a, PanelMessage> {
+fn settings_actions<'a>(last_action: &'static str) -> Element<'a, PanelMessage> {
     row![
-        button(text("Reset to defaults").size(style::text_size::BODY))
-            .padding(padding::left(16).right(16).top(11).bottom(11))
+        button(text("Reset to defaults").size(SETTINGS_BODY))
+            .padding(padding::left(12).right(12).top(7).bottom(7))
             .style(settings_secondary_button)
             .on_press(PanelMessage::SettingsAction(SettingsAction::Reset)),
-        iced::widget::Space::new().width(Length::Fill),
-        text(format!("Last action: {last_action}"))
-            .size(style::text_size::SMALL)
-            .style(|theme: &Theme| text::Style {
-                color: Some(theme.extended_palette().background.weak.text),
-            }),
-        button(text("Cancel").size(style::text_size::BODY))
-            .padding(padding::left(22).right(22).top(11).bottom(11))
+        button(text("Cancel").size(SETTINGS_BODY))
+            .padding(padding::left(18).right(18).top(7).bottom(7))
             .style(settings_secondary_button)
             .on_press(PanelMessage::SettingsAction(SettingsAction::Note(
                 "Cancel pressed"
             ))),
-        button(text("Apply").size(style::text_size::BODY))
-            .padding(padding::left(24).right(24).top(11).bottom(11))
+        button(text("Apply").size(SETTINGS_BODY))
+            .padding(padding::left(20).right(20).top(7).bottom(7))
             .style(settings_apply_button)
             .on_press(PanelMessage::SettingsAction(SettingsAction::Note(
                 "Apply pressed"
             ))),
+        text(format!("Last action: {last_action}"))
+            .size(SETTINGS_SMALL)
+            .style(|theme: &Theme| text::Style {
+                color: Some(theme.extended_palette().background.weak.text),
+            }),
+        iced::widget::Space::new().width(Length::Fill),
     ]
-    .spacing(12)
-    .padding(padding::top(18).bottom(18))
+    .spacing(8)
     .align_y(Alignment::Center)
     .into()
 }
@@ -725,25 +803,32 @@ fn compact_action_button<'a>(
     label: &'static str,
     action: SettingsAction,
 ) -> Element<'a, PanelMessage> {
-    button(text(label).size(style::text_size::BODY))
-        .padding(padding::left(12).right(12).top(7).bottom(7))
+    button(text(label).size(SETTINGS_BODY))
+        .padding(padding::left(10).right(10).top(5).bottom(5))
         .style(settings_secondary_button)
         .on_press(PanelMessage::SettingsAction(action))
         .into()
 }
 
 fn theme_swatch<'a>(index: usize, color: u32, selected: bool) -> Element<'a, PanelMessage> {
+    color_swatch(index, color, selected, SettingsAction::SelectTheme)
+}
+
+fn color_swatch<'a>(
+    index: usize,
+    color: u32,
+    selected: bool,
+    action: fn(usize) -> SettingsAction,
+) -> Element<'a, PanelMessage> {
     button(
         container("")
-            .width(Length::Fixed(40.0))
-            .height(Length::Fixed(32.0))
+            .width(Length::Fixed(32.0))
+            .height(Length::Fixed(26.0))
             .style(move |theme| style::panel_swatch(theme, rgb(color), selected)),
     )
     .padding(1)
     .style(move |theme, status| settings_segment_button(theme, status, selected))
-    .on_press(PanelMessage::SettingsAction(SettingsAction::SelectTheme(
-        index,
-    )))
+    .on_press(PanelMessage::SettingsAction(action(index)))
     .into()
 }
 

@@ -15,7 +15,7 @@ mod trades;
 
 pub(crate) use connections::ConnectionPanelState;
 use connections::connections_panel;
-use settings::{SettingsAction, SettingsPanelState, settings_panel};
+use settings::{DEFAULT_ACCENT_COLOR, SettingsAction, SettingsPanelState, settings_panel};
 use trades::trades_table;
 
 const PNL_POINTS: [f32; 12] = [
@@ -92,7 +92,7 @@ impl Kind {
         match self {
             Self::Connections => Size::new(1_140.0, 720.0),
             Self::Pnl => Size::new(820.0, 560.0),
-            Self::Settings => Size::new(1_080.0, 720.0),
+            Self::Settings => Size::new(760.0, 520.0),
             Self::Analytics => Size::new(760.0, 540.0),
             Self::Account => Size::new(680.0, 480.0),
             Self::App
@@ -118,20 +118,26 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn new(kind: Kind) -> Self {
+    pub(crate) fn new(kind: Kind, accent_color: &str) -> Self {
+        let accent_color = if accent_color.is_empty() {
+            DEFAULT_ACCENT_COLOR
+        } else {
+            accent_color
+        };
+
         Self {
             kind,
             show_trades: false,
-            settings_state: SettingsPanelState::default(),
+            settings_state: SettingsPanelState::new(accent_color),
         }
     }
 
-    pub(crate) fn update(&mut self, message: PanelMessage) {
+    pub(crate) fn update(&mut self, message: PanelMessage) -> Option<String> {
         match message {
             PanelMessage::ConnectionAction(_) => {}
             PanelMessage::SettingsAction(action) => {
                 if self.kind == Kind::Settings {
-                    self.settings_state.update(action);
+                    return self.settings_state.update(action);
                 }
             }
             PanelMessage::TogglePnlTrades => {
@@ -140,6 +146,8 @@ impl State {
                 }
             }
         }
+
+        None
     }
 
     pub(crate) fn tick(&mut self, _now: std::time::Instant) {}
@@ -148,6 +156,28 @@ impl State {
         &'a self,
         connection_state: &'a ConnectionPanelState,
     ) -> Element<'a, PanelMessage> {
+        if self.kind == Kind::Settings {
+            return container(
+                column![
+                    text(self.kind.title())
+                        .size(style::text_size::TITLE)
+                        .font(iced::Font {
+                            weight: iced::font::Weight::Bold,
+                            ..Default::default()
+                        }),
+                    rule::horizontal(1).style(style::split_ruler),
+                    settings_panel(&self.settings_state),
+                ]
+                .spacing(10)
+                .padding(14)
+                .height(Length::Fill),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(style::panel_window)
+            .into();
+        }
+
         let body = match self.kind {
             Kind::App => app_panel(),
             Kind::File => default_panel(
