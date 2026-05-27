@@ -454,6 +454,27 @@ impl Flowsurface {
                 return self.open_panel_window(kind);
             }
             Message::PanelWindow(window, message) => match message {
+                panel_window::PanelMessage::RequestSettingsReset => {
+                    self.confirm_dialog = Some(
+                        screen::ConfirmDialog::new(
+                            "Reset settings to defaults?".to_string(),
+                            Box::new(Message::PanelWindow(
+                                window,
+                                panel_window::PanelMessage::ConfirmSettingsReset,
+                            )),
+                        )
+                        .with_confirm_btn_text("Reset".to_string()),
+                    );
+                }
+                panel_window::PanelMessage::ConfirmSettingsReset => {
+                    self.confirm_dialog = None;
+                    if let Some(panel) = self.panel_windows.get_mut(&window)
+                        && let Some(accent_color) =
+                            panel.update(panel_window::PanelMessage::ConfirmSettingsReset)
+                    {
+                        self.accent_color = accent_color;
+                    }
+                }
                 panel_window::PanelMessage::ConnectionAction(action) => {
                     let Some(kind) = self.panel_windows.get(&window).map(|panel| panel.kind) else {
                         return Task::none();
@@ -819,13 +840,21 @@ impl Flowsurface {
                 base.into()
             }
         } else if let Some(panel) = self.panel_windows.get(&id) {
-            container(
+            let base = container(
                 panel
                     .view(&self.connection_state)
                     .map(move |message| Message::PanelWindow(id, message)),
             )
-            .padding(padding::top(style::TITLE_PADDING_TOP))
-            .into()
+            .padding(padding::top(style::TITLE_PADDING_TOP));
+
+            if let Some(dialog) = &self.confirm_dialog {
+                let dialog_content =
+                    confirm_dialog_container(dialog.clone(), Message::ToggleDialogModal(None));
+
+                main_dialog_modal(base, dialog_content, Message::ToggleDialogModal(None))
+            } else {
+                base.into()
+            }
         } else {
             match main_window {
                 Some(main_window) => container(

@@ -140,6 +140,12 @@ impl State {
                     return self.settings_state.update(action);
                 }
             }
+            PanelMessage::ConfirmSettingsReset => {
+                if self.kind == Kind::Settings {
+                    return self.settings_state.update(SettingsAction::Reset);
+                }
+            }
+            PanelMessage::RequestSettingsReset => {}
             PanelMessage::TogglePnlTrades => {
                 if self.kind == Kind::Pnl {
                     self.show_trades = !self.show_trades;
@@ -285,6 +291,8 @@ impl State {
 pub(crate) enum PanelMessage {
     ConnectionAction(ConnectionAction),
     SettingsAction(SettingsAction),
+    RequestSettingsReset,
+    ConfirmSettingsReset,
     TogglePnlTrades,
 }
 

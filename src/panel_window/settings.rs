@@ -185,6 +185,7 @@ impl SettingsPanelState {
             SettingsAction::Reset => {
                 *self = Self::default();
                 self.last_action = "Settings reset";
+                return Some(DEFAULT_ACCENT_COLOR.to_string());
             }
             SettingsAction::Note(label) => {
                 self.last_action = label;
@@ -298,7 +299,7 @@ impl SettingsSection {
 
 pub(super) fn settings_panel<'a>(state: &'a SettingsPanelState) -> Element<'a, PanelMessage> {
     column![
-        settings_actions(state.last_action),
+        settings_actions(),
         rule::horizontal(1).style(style::split_ruler),
         row![
             settings_nav(state.section),
@@ -769,12 +770,12 @@ fn settings_swatch_row<'a>(selected_index: usize) -> Element<'a, PanelMessage> {
     setting_row("Theme palette", swatches)
 }
 
-fn settings_actions<'a>(last_action: &'static str) -> Element<'a, PanelMessage> {
+fn settings_actions<'a>() -> Element<'a, PanelMessage> {
     row![
         button(text("Reset to defaults").size(SETTINGS_BODY))
             .padding(padding::left(12).right(12).top(7).bottom(7))
             .style(settings_secondary_button)
-            .on_press(PanelMessage::SettingsAction(SettingsAction::Reset)),
+            .on_press(PanelMessage::RequestSettingsReset),
         button(text("Cancel").size(SETTINGS_BODY))
             .padding(padding::left(18).right(18).top(7).bottom(7))
             .style(settings_secondary_button)
@@ -787,11 +788,6 @@ fn settings_actions<'a>(last_action: &'static str) -> Element<'a, PanelMessage> 
             .on_press(PanelMessage::SettingsAction(SettingsAction::Note(
                 "Apply pressed"
             ))),
-        text(format!("Last action: {last_action}"))
-            .size(SETTINGS_SMALL)
-            .style(|theme: &Theme| text::Style {
-                color: Some(theme.extended_palette().background.weak.text),
-            }),
         iced::widget::Space::new().width(Length::Fill),
     ]
     .spacing(8)
