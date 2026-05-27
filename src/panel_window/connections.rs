@@ -355,6 +355,7 @@ impl ConnectionPanelState {
     pub(crate) fn handle_panel_action(&mut self, action: panel::Action) {
         match action {
             panel::Action::PlaceLimitOrder(intent) => self.place_limit_order(intent),
+            panel::Action::PlaceMarketOrder(intent) => self.place_market_order(intent),
             panel::Action::CancelAllOrders(ticker_info) => {
                 self.cancel_all_orders(ticker_info);
             }
@@ -641,6 +642,44 @@ impl ConnectionPanelState {
         let tx = self.probe_tx.clone();
         thread::spawn(move || {
             let result = run_live_limit_order(row_id, order);
+            let _ = tx.send(result);
+        });
+    }
+
+    fn place_market_order(&mut self, intent: panel::MarketOrderIntent) {
+        let Some(row) = self.active_trading_row() else {
+            self.last_action = "Order rejected".to_string();
+            self.push_log("[trading] No active trading connection is ON".to_string());
+            return;
+        };
+
+        if row.exchange != ConnectionExchange::Mexc || row.market != ConnectionMarket::Futures {
+            self.last_action = "Order rejected".to_string();
+            self.push_log(
+                "[trading] Only MEXC Futures live orders are wired right now".to_string(),
+            );
+            return;
+        }
+
+        let CredentialState::Saved { reference, .. } = &row.credentials else {
+            self.last_action = "Order rejected".to_string();
+            self.push_log(
+                "[trading] Active trading connection has no saved credentials".to_string(),
+            );
+            return;
+        };
+
+        let row_id = row.id.clone();
+        let order = LiveMarketOrderSpec::new(reference.clone(), intent);
+        self.last_action = "Market order submitted".to_string();
+        self.push_log(format!(
+            "[trading] Submitting {} {} MARKET {}",
+            order.symbol, order.side_label, order.quantity
+        ));
+
+        let tx = self.probe_tx.clone();
+        thread::spawn(move || {
+            let result = run_live_market_order(row_id, order);
             let _ = tx.send(result);
         });
     }
@@ -1245,6 +1284,38 @@ impl LiveLimitOrderSpec {
     }
 }
 
+#[derive(Debug, Clone)]
+struct LiveMarketOrderSpec {
+    credential_ref: ConnectionCredentialRef,
+    symbol: String,
+    side: FuturesOrderSide,
+    side_label: &'static str,
+    quantity: String,
+}
+
+impl LiveMarketOrderSpec {
+    fn new(credential_ref: ConnectionCredentialRef, intent: panel::MarketOrderIntent) -> Self {
+        let (symbol, _) = intent.ticker_info.ticker.to_full_symbol_and_type();
+        let side = match intent.side {
+            panel::OrderSide::Buy => FuturesOrderSide::OpenLong,
+            panel::OrderSide::Sell => FuturesOrderSide::OpenShort,
+        };
+        let side_label = match intent.side {
+            panel::OrderSide::Buy => "BUY",
+            panel::OrderSide::Sell => "SELL",
+        };
+        let quantity = format!("{:.0}", intent.quantity.max(1.0).round());
+
+        Self {
+            credential_ref,
+            symbol,
+            side,
+            side_label,
+            quantity,
+        }
+    }
+}
+
 fn run_live_limit_order(row_id: String, spec: LiveLimitOrderSpec) -> ConnectionProbeResult {
     match try_run_live_limit_order(spec) {
         Ok((message, Some(snapshot))) => ConnectionProbeResult::trading_state(
@@ -1312,6 +1383,72 @@ fn try_run_live_limit_order(
         format!(
             "{} {} @ {} accepted as {}; open orders visible: {}",
             spec.side_label, spec.quantity, spec.price, order_id, open_orders
+        ),
+        snapshot,
+    ))
+}
+
+fn run_live_market_order(row_id: String, spec: LiveMarketOrderSpec) -> ConnectionProbeResult {
+    match try_run_live_market_order(spec) {
+        Ok((message, Some(snapshot))) => ConnectionProbeResult::trading_state(
+            row_id,
+            Ok(format!("[trading] {message}")),
+            snapshot,
+        ),
+        Ok((message, None)) => ConnectionProbeResult::trading_log(format!("[trading] {message}")),
+        Err(error) => ConnectionProbeResult::trading_state(
+            row_id,
+            Err(format!("Market order failed: {error}")),
+            LiveTradingSnapshot::default(),
+        ),
+    }
+}
+
+fn try_run_live_market_order(
+    spec: LiveMarketOrderSpec,
+) -> Result<(String, Option<LiveTradingSnapshot>), String> {
+    let vault_key = load_or_create_device_vault_key()?;
+    let secret = load_connection_secret(&spec.credential_ref, &vault_key)?.ok_or_else(|| {
+        "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
+    })?;
+    let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
+    let client =
+        MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
+    let external_oid = format!("fs{}", chrono::Utc::now().timestamp_millis());
+    let request = FuturesOrderRequest::market(
+        &spec.symbol,
+        &spec.quantity,
+        spec.side,
+        FuturesOpenType::Cross,
+    )
+    .with_leverage(1)
+    .with_external_oid(external_oid);
+
+    let response = client
+        .futures_place_order(&request)
+        .map_err(|error| error.to_string())?;
+    let order_id = response
+        .data
+        .as_ref()
+        .and_then(value_as_display_string)
+        .unwrap_or_else(|| "unknown order id".to_string());
+    let snapshot = match futures_trading_snapshot(&client) {
+        Ok(snapshot) => Some(snapshot),
+        Err(error) => {
+            return Ok((
+                format!(
+                    "{} MARKET {} accepted as {}; state refresh failed: {}",
+                    spec.side_label, spec.quantity, order_id, error
+                ),
+                None,
+            ));
+        }
+    };
+
+    Ok((
+        format!(
+            "{} MARKET {} accepted as {}",
+            spec.side_label, spec.quantity, order_id
         ),
         snapshot,
     ))

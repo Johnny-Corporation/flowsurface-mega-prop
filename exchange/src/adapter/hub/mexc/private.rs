@@ -711,6 +711,15 @@ impl FuturesOrderRequest {
         }
     }
 
+    pub fn market(
+        symbol: impl Into<String>,
+        vol: impl ToString,
+        side: FuturesOrderSide,
+        open_type: FuturesOpenType,
+    ) -> Self {
+        Self::new(symbol, "0", vol, side, FuturesOrderType::Market, open_type)
+    }
+
     pub fn with_leverage(mut self, leverage: u32) -> Self {
         self.leverage = Some(leverage.max(1));
         self
@@ -1067,6 +1076,24 @@ mod tests {
     #[test]
     fn futures_recv_window_uses_milliseconds() {
         assert_eq!(super::DEFAULT_FUTURES_RECV_WINDOW_MS, 5_000);
+    }
+
+    #[test]
+    fn futures_market_order_body_uses_market_type_and_zero_price() {
+        let request = super::FuturesOrderRequest::market(
+            "BTC_USDT",
+            "2",
+            super::FuturesOrderSide::OpenLong,
+            super::FuturesOpenType::Cross,
+        );
+        let body = request.body();
+
+        assert_eq!(body["symbol"], "BTC_USDT");
+        assert_eq!(body["price"], "0");
+        assert_eq!(body["vol"], "2");
+        assert_eq!(body["side"], 1);
+        assert_eq!(body["type"], 5);
+        assert_eq!(body["openType"], 2);
     }
 
     #[test]

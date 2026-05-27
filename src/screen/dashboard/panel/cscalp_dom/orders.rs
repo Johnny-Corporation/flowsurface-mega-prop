@@ -4,7 +4,9 @@ use super::{
 };
 use crate::{
     audio::SoundType,
-    screen::dashboard::panel::{Action, LimitOrderIntent, OrderClickButton, OrderSide},
+    screen::dashboard::panel::{
+        Action, LimitOrderIntent, MarketOrderIntent, OrderClickButton, OrderSide,
+    },
     style,
     trading_state::{LiveOrderSide, LivePosition},
 };
@@ -29,6 +31,12 @@ pub(super) struct PaperOrder {
     side: PaperOrderSide,
     price: Price,
     contracts: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClickOrderKind {
+    Limit(PaperOrderSide, Price),
+    Market(PaperOrderSide),
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -68,26 +76,11 @@ impl CscalpDom {
 
         let price = self.screen_y_to_price(cursor_y, &grid, height)?;
 
-        let mut action = None;
-        if price >= grid.best_ask {
-            match button {
-                OrderClickButton::Left => {
-                    log::warn!("Crossed-spread market buys are not enabled from CSCALP DOM yet.");
-                }
-                OrderClickButton::Right => {
-                    action = self.handle_limit_order_click(PaperOrderSide::Sell, price);
-                }
-            }
-        } else if price <= grid.best_bid {
-            match button {
-                OrderClickButton::Left => {
-                    action = self.handle_limit_order_click(PaperOrderSide::Buy, price);
-                }
-                OrderClickButton::Right => {
-                    log::warn!("Crossed-spread market sells are not enabled from CSCALP DOM yet.");
-                }
-            }
-        }
+        let action = match click_order_kind(button, price, grid.best_bid, grid.best_ask) {
+            Some(ClickOrderKind::Limit(side, price)) => self.handle_limit_order_click(side, price),
+            Some(ClickOrderKind::Market(side)) => self.handle_market_order_click(side),
+            None => None,
+        };
 
         self.invalidate(Some(Instant::now()));
         action
@@ -354,6 +347,32 @@ impl CscalpDom {
         }))
     }
 
+    fn handle_market_order_click(&mut self, side: PaperOrderSide) -> Option<Action> {
+        if self.config.view_mode {
+            self.execute_market_order(side);
+            return None;
+        }
+
+        Some(Action::PlaceMarketOrder(MarketOrderIntent {
+            ticker_info: self.ticker_info,
+            side: match side {
+                PaperOrderSide::Buy => OrderSide::Buy,
+                PaperOrderSide::Sell => OrderSide::Sell,
+            },
+            quantity: self.config.paper_order_contracts.max(1.0),
+        }))
+    }
+
+    fn execute_market_order(&mut self, side: PaperOrderSide) {
+        let fill_price = match side {
+            PaperOrderSide::Buy => self.best_price(super::Side::Ask),
+            PaperOrderSide::Sell => self.best_price(super::Side::Bid),
+        };
+        if let Some(price) = fill_price {
+            self.apply_paper_fill(side, price, self.config.paper_order_contracts.max(1.0));
+        }
+    }
+
     fn apply_paper_fill(&mut self, side: PaperOrderSide, price: Price, contracts: f32) {
         self.paper_position.apply_fill(side, price, contracts);
         self.play_fill_sound(side);
@@ -560,6 +579,29 @@ impl CscalpDom {
     }
 }
 
+fn click_order_kind(
+    button: OrderClickButton,
+    price: Price,
+    best_bid: Price,
+    best_ask: Price,
+) -> Option<ClickOrderKind> {
+    if price >= best_ask {
+        return match button {
+            OrderClickButton::Left => Some(ClickOrderKind::Market(PaperOrderSide::Buy)),
+            OrderClickButton::Right => Some(ClickOrderKind::Limit(PaperOrderSide::Sell, price)),
+        };
+    }
+
+    if price <= best_bid {
+        return match button {
+            OrderClickButton::Left => Some(ClickOrderKind::Limit(PaperOrderSide::Buy, price)),
+            OrderClickButton::Right => Some(ClickOrderKind::Market(PaperOrderSide::Sell)),
+        };
+    }
+
+    None
+}
+
 impl PaperPosition {
     fn apply_fill(&mut self, side: PaperOrderSide, price: Price, contracts: f32) {
         let contracts = contracts.max(0.0);
@@ -747,5 +789,44 @@ fn solid_mix(base: iced::Color, tint: iced::Color, tint_weight: f32) -> iced::Co
         g: base.g * base_weight + tint.g * tint_weight,
         b: base.b * base_weight + tint.b * tint_weight,
         a: 1.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClickOrderKind, PaperOrderSide, click_order_kind};
+    use crate::screen::dashboard::panel::OrderClickButton;
+    use exchange::unit::Price;
+
+    #[test]
+    fn crossed_spread_clicks_map_to_market_orders() {
+        let bid = Price::from_f32(100.0);
+        let ask = Price::from_f32(101.0);
+
+        assert_eq!(
+            click_order_kind(OrderClickButton::Left, ask, bid, ask),
+            Some(ClickOrderKind::Market(PaperOrderSide::Buy))
+        );
+        assert_eq!(
+            click_order_kind(OrderClickButton::Right, bid, bid, ask),
+            Some(ClickOrderKind::Market(PaperOrderSide::Sell))
+        );
+    }
+
+    #[test]
+    fn passive_clicks_map_to_limit_orders() {
+        let bid = Price::from_f32(100.0);
+        let ask = Price::from_f32(101.0);
+        let buy_price = Price::from_f32(99.5);
+        let sell_price = Price::from_f32(101.5);
+
+        assert_eq!(
+            click_order_kind(OrderClickButton::Left, buy_price, bid, ask),
+            Some(ClickOrderKind::Limit(PaperOrderSide::Buy, buy_price))
+        );
+        assert_eq!(
+            click_order_kind(OrderClickButton::Right, sell_price, bid, ask),
+            Some(ClickOrderKind::Limit(PaperOrderSide::Sell, sell_price))
+        );
     }
 }

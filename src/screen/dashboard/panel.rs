@@ -33,6 +33,7 @@ pub enum Message {
 #[derive(Debug, Clone)]
 pub enum Action {
     PlaceLimitOrder(LimitOrderIntent),
+    PlaceMarketOrder(MarketOrderIntent),
     CancelAllOrders(TickerInfo),
 }
 
@@ -41,6 +42,13 @@ pub struct LimitOrderIntent {
     pub ticker_info: TickerInfo,
     pub side: OrderSide,
     pub price: Price,
+    pub quantity: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct MarketOrderIntent {
+    pub ticker_info: TickerInfo,
+    pub side: OrderSide,
     pub quantity: f32,
 }
 
