@@ -2,13 +2,19 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORKTREE_ID="$(basename "$(dirname "$ROOT_DIR")")"
+export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+WORKTREE_ID="$(basename "$ROOT_DIR" | tr '[:upper:] /:' '[:lower:]---')"
 SESSION_NAME="flowsurface-${WORKTREE_ID}-app"
 LOG_DIR="$ROOT_DIR/logs"
 LOG_FILE="$LOG_DIR/codex-cargo-run.log"
 
 mkdir -p "$LOG_DIR"
 cd "$ROOT_DIR"
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "tmux is required for the run action."
+  exit 1
+fi
 
 cargo build --workspace
 
