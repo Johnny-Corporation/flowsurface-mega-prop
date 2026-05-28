@@ -282,6 +282,45 @@ impl YScale {
     }
 }
 
+pub(super) struct HorizontalSnap {
+    pub rounded_value: f32,
+    pub y_position: f32,
+}
+
+pub(super) fn horizontal_snap(
+    cursor_y: f32,
+    bounds_height: f32,
+    highest: f32,
+    lowest: f32,
+) -> Option<HorizontalSnap> {
+    let range = highest - lowest;
+
+    if range <= f32::EPSILON
+        || bounds_height <= 0.0
+        || !cursor_y.is_finite()
+        || !bounds_height.is_finite()
+        || !highest.is_finite()
+        || !lowest.is_finite()
+    {
+        return None;
+    }
+
+    let ratio = cursor_y / bounds_height;
+    let value = highest - ratio * range;
+    let tick = guesstimate_ticks(range);
+    if tick <= 0.0 || !tick.is_finite() {
+        return None;
+    }
+
+    let rounded_value = round_to_tick(value, tick);
+    let y_position = bounds_height - ((rounded_value - lowest) / range * bounds_height);
+
+    y_position.is_finite().then_some(HorizontalSnap {
+        rounded_value,
+        y_position,
+    })
+}
+
 pub trait Plot<S: Series> {
     fn y_extents(&self, s: &S, range: RangeInclusive<u64>) -> Option<(f32, f32)>;
 
@@ -485,20 +524,18 @@ where
                 // horizontal snap uses label extents
                 let highest = self.max_for_labels;
                 let lowest = self.min_for_labels;
-                let tick = guesstimate_ticks(highest - lowest);
 
-                let ratio = cursor_position.y / bounds.height;
-                let value = highest + ratio * (lowest - highest);
-                let rounded = round_to_tick(value, tick);
-                let snap_ratio = (rounded - highest) / (lowest - highest);
-
-                frame.stroke(
-                    &Path::line(
-                        Point::new(0.0, snap_ratio * bounds.height),
-                        Point::new(bounds.width, snap_ratio * bounds.height),
-                    ),
-                    dashed,
-                );
+                if let Some(snap) =
+                    horizontal_snap(cursor_position.y, bounds.height, highest, lowest)
+                {
+                    frame.stroke(
+                        &Path::line(
+                            Point::new(0.0, snap.y_position),
+                            Point::new(bounds.width, snap.y_position),
+                        ),
+                        dashed,
+                    );
+                }
             } else if self.data_labels_always_visible
                 && let Some((x, y)) = match ctx.basis {
                     Basis::Time(_) => self.series.last_in(earliest..=latest),
@@ -628,5 +665,23 @@ impl PlotTooltip {
             align_x: Alignment::Start.into(),
             ..canvas::Text::default()
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn horizontal_snap_is_absent_for_flat_ranges() {
+        assert!(horizontal_snap(24.0, 100.0, 50.0, 50.0).is_none());
+    }
+
+    #[test]
+    fn horizontal_snap_returns_finite_y_position() {
+        let snap = horizontal_snap(25.0, 100.0, 100.0, 0.0).unwrap();
+
+        assert!(snap.y_position.is_finite());
+        assert_eq!(snap.y_position, 25.0);
     }
 }

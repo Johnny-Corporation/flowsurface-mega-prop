@@ -42,6 +42,59 @@ struct DeOpenInterest {
     pub sum: f32,
 }
 
+const OPEN_INTEREST_MAX_LIMIT: u64 = 500;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpenInterestRequestRange {
+    start: u64,
+    end: u64,
+    limit: u64,
+}
+
+fn clamp_open_interest_range(
+    start: u64,
+    end: u64,
+    now_ms: u64,
+    interval_ms: u64,
+) -> Result<OpenInterestRequestRange, AdapterError> {
+    if interval_ms == 0 {
+        return Err(AdapterError::InvalidRequest(
+            "Open interest period must be greater than zero".to_string(),
+        ));
+    }
+
+    let thirty_days_ago = now_ms.saturating_sub(THIRTY_DAYS_MS);
+    let adjusted_end = end.min(now_ms);
+
+    if adjusted_end < thirty_days_ago {
+        let err_msg = format!(
+            "Requested end time {adjusted_end} is before available data (30 days is the API limit)"
+        );
+        log::error!("{}", err_msg);
+        return Err(AdapterError::InvalidRequest(err_msg));
+    }
+
+    let max_span = interval_ms.saturating_mul(OPEN_INTEREST_MAX_LIMIT);
+    let earliest_by_limit = adjusted_end.saturating_sub(max_span);
+    let adjusted_start = start.max(thirty_days_ago).max(earliest_by_limit);
+
+    if adjusted_start >= adjusted_end {
+        let err_msg = format!(
+            "Invalid open interest range after adjustment: start={adjusted_start}, end={adjusted_end}"
+        );
+        log::error!("{}", err_msg);
+        return Err(AdapterError::InvalidRequest(err_msg));
+    }
+
+    let limit = ((adjusted_end - adjusted_start) / interval_ms).clamp(1, OPEN_INTEREST_MAX_LIMIT);
+
+    Ok(OpenInterestRequestRange {
+        start: adjusted_start,
+        end: adjusted_end,
+        limit,
+    })
+}
+
 #[derive(Deserialize, Debug)]
 struct DeTrade {
     #[serde(rename = "T")]
@@ -500,49 +553,28 @@ pub(super) async fn fetch_historical_oi(
                 AdapterError::ParseError(format!("System clock before UNIX_EPOCH: {err}"))
             })?
             .as_millis() as u64;
-        let thirty_days_ago = now_ms.saturating_sub(THIRTY_DAYS_MS);
+        let interval_ms = period.to_milliseconds();
+        let request_range = clamp_open_interest_range(start, end, now_ms, interval_ms)?;
 
-        let adjusted_end = end.min(now_ms);
-        if end > now_ms {
+        if end > request_range.end {
             log::warn!(
                 "Adjusting end time from {} to {} (current time)",
                 end,
-                now_ms
+                request_range.end
             );
         }
 
-        if adjusted_end < thirty_days_ago {
-            let err_msg = format!(
-                "Requested end time {adjusted_end} is before available data (30 days is the API limit)"
-            );
-            log::error!("{}", err_msg);
-            return Err(AdapterError::InvalidRequest(err_msg));
-        }
-
-        let adjusted_start = if start < thirty_days_ago {
+        if start < request_range.start {
             log::warn!(
-                "Adjusting start time from {} to {} (30 days limit)",
+                "Adjusting start time from {} to {} (Binance open interest API limit)",
                 start,
-                thirty_days_ago
+                request_range.start
             );
-            thirty_days_ago
-        } else {
-            start
-        };
-
-        if adjusted_start >= adjusted_end {
-            let err_msg = format!(
-                "Invalid open interest range after adjustment: start={adjusted_start}, end={adjusted_end}"
-            );
-            log::error!("{}", err_msg);
-            return Err(AdapterError::InvalidRequest(err_msg));
         }
-
-        let interval_ms = period.to_milliseconds();
-        let num_intervals = ((adjusted_end - adjusted_start) / interval_ms).clamp(1, 500);
 
         url.push_str(&format!(
-            "&startTime={adjusted_start}&endTime={adjusted_end}&limit={num_intervals}"
+            "&startTime={}&endTime={}&limit={}",
+            request_range.start, request_range.end, request_range.limit
         ));
     } else {
         url.push_str("&limit=400");
@@ -753,5 +785,36 @@ pub(super) async fn fetch_trades(
             );
             fetch_intraday_trades(hub, ticker_info, from_time).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_interest_range_is_limited_to_binance_result_cap() {
+        let interval_ms = Timeframe::M5.to_milliseconds();
+        let end = 1_779_928_200_000;
+        let now = end + 365_283;
+
+        let range = clamp_open_interest_range(0, end, now, interval_ms).unwrap();
+
+        assert_eq!(range.limit, 500);
+        assert_eq!(range.end, end);
+        assert!(range.end - range.start <= interval_ms * 500);
+    }
+
+    #[test]
+    fn open_interest_range_keeps_short_requests_unchanged() {
+        let interval_ms = Timeframe::M5.to_milliseconds();
+        let end = 1_779_928_200_000;
+        let start = end - interval_ms * 7;
+
+        let range = clamp_open_interest_range(start, end, end, interval_ms).unwrap();
+
+        assert_eq!(range.start, start);
+        assert_eq!(range.end, end);
+        assert_eq!(range.limit, 7);
     }
 }

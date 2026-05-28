@@ -5,10 +5,10 @@ use super::scale::linear;
 use super::{Interaction, Message};
 use crate::chart::{
     Caches, TEXT_SIZE, ViewState,
-    indicator::plot::{AnySeries, ChartCanvas, Plot},
+    indicator::plot::{AnySeries, ChartCanvas, Plot, horizontal_snap},
     scale::{AxisLabel, LabelContent, calc_label_rect},
 };
-use data::util::{abbr_large_numbers, round_to_tick};
+use data::util::abbr_large_numbers;
 
 use iced::{
     Element, Event, Length, Rectangle, Renderer, Theme, mouse,
@@ -98,9 +98,6 @@ impl canvas::Program<Message> for IndicatorLabel<'_> {
         let palette = theme.extended_palette();
 
         let (highest, lowest) = (self.max, self.min);
-        let range = highest - lowest;
-
-        let tick_size = data::util::guesstimate_ticks(range);
 
         let labels = self.label_cache.draw(renderer, bounds.size(), |frame| {
             let mut all_labels = linear::generate_labels(
@@ -119,23 +116,18 @@ impl canvas::Program<Message> for IndicatorLabel<'_> {
                 height: bounds.height,
             };
 
-            if let Some(crosshair_pos) = cursor.position_in(common_bounds) {
-                let rounded_value = round_to_tick(
-                    lowest + (range * (bounds.height - crosshair_pos.y) / bounds.height),
-                    tick_size,
-                );
-
+            if let Some(crosshair_pos) = cursor.position_in(common_bounds)
+                && let Some(snap) = horizontal_snap(crosshair_pos.y, bounds.height, highest, lowest)
+            {
                 let label = LabelContent {
-                    content: abbr_large_numbers(rounded_value),
+                    content: abbr_large_numbers(snap.rounded_value),
                     background_color: Some(palette.secondary.base.color),
                     text_color: palette.secondary.base.text,
                     text_size: TEXT_SIZE,
                 };
 
-                let y_position = bounds.height - ((rounded_value - lowest) / range * bounds.height);
-
                 all_labels.push(AxisLabel::Y {
-                    bounds: calc_label_rect(y_position, 1, TEXT_SIZE, bounds),
+                    bounds: calc_label_rect(snap.y_position, 1, TEXT_SIZE, bounds),
                     value_label: label,
                     timer_label: None,
                 });
