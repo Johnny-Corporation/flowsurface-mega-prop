@@ -4,6 +4,7 @@ use iced::{
     font::Weight,
     widget::{center, column, image, responsive, text},
 };
+use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,6 +20,7 @@ const DISPLAY_SCALE_DIVISOR: f32 = 2.5;
 const STARTUP_PHRASE_COUNT: usize = 2;
 const STARTUP_PHRASE_DURATION: Duration = Duration::from_secs(2);
 const STARTUP_TOTAL_DURATION: Duration = Duration::from_secs(4);
+const STARTUP_PHRASE_HISTORY_FILE: &str = "startup-phrase-history.json";
 
 const STARTUP_PHRASE_POOL: &[&str] = &[
     "Warming up the candlesticks...",
@@ -112,12 +114,19 @@ pub struct StartupPhrases {
 impl StartupPhrases {
     pub fn new() -> Self {
         let mut seed = seed_from_clock();
-        let mut phrases = Vec::with_capacity(STARTUP_PHRASE_COUNT);
+        let mut used_indexes = load_used_phrase_indexes();
+        let selected_indexes = select_phrase_indexes(
+            &mut seed,
+            &mut used_indexes,
+            STARTUP_PHRASE_COUNT,
+            STARTUP_PHRASE_POOL.len(),
+        );
+        save_used_phrase_indexes(&used_indexes);
 
-        for _ in 0..STARTUP_PHRASE_COUNT {
-            let phrase = pick_phrase(&mut seed, &phrases);
-            phrases.push(phrase);
-        }
+        let phrases = selected_indexes
+            .into_iter()
+            .filter_map(|index| STARTUP_PHRASE_POOL.get(index).copied())
+            .collect();
 
         Self { phrases }
     }
@@ -274,15 +283,87 @@ fn status_text_style(theme: &iced::Theme) -> iced::widget::text::Style {
     }
 }
 
-fn pick_phrase(seed: &mut u64, selected: &[&'static str]) -> &'static str {
-    for _ in 0..8 {
-        let phrase = STARTUP_PHRASE_POOL[next_index(seed, STARTUP_PHRASE_POOL.len())];
-        if !selected.contains(&phrase) {
-            return phrase;
+#[derive(Debug, Deserialize, Serialize)]
+struct StartupPhraseHistory {
+    used_indexes: Vec<usize>,
+}
+
+fn select_phrase_indexes(
+    seed: &mut u64,
+    used_indexes: &mut Vec<usize>,
+    count: usize,
+    pool_len: usize,
+) -> Vec<usize> {
+    let mut selected = Vec::with_capacity(count);
+
+    if pool_len == 0 {
+        return selected;
+    }
+
+    used_indexes.retain(|index| *index < pool_len);
+    used_indexes.sort_unstable();
+    used_indexes.dedup();
+
+    for _ in 0..count {
+        if used_indexes.len() >= pool_len {
+            used_indexes.clear();
+        }
+
+        let Some(index) = pick_unused_phrase_index(seed, used_indexes, &selected, pool_len) else {
+            used_indexes.clear();
+            continue;
+        };
+
+        selected.push(index);
+        used_indexes.push(index);
+    }
+
+    selected
+}
+
+fn pick_unused_phrase_index(
+    seed: &mut u64,
+    used_indexes: &[usize],
+    selected: &[usize],
+    pool_len: usize,
+) -> Option<usize> {
+    for _ in 0..16 {
+        let index = next_index(seed, pool_len);
+        if !used_indexes.contains(&index) && !selected.contains(&index) {
+            return Some(index);
         }
     }
 
-    STARTUP_PHRASE_POOL[next_index(seed, STARTUP_PHRASE_POOL.len())]
+    (0..pool_len).find(|index| !used_indexes.contains(index) && !selected.contains(index))
+}
+
+fn load_used_phrase_indexes() -> Vec<usize> {
+    let path = data::data_path(Some(STARTUP_PHRASE_HISTORY_FILE));
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+
+    match serde_json::from_str::<StartupPhraseHistory>(&contents) {
+        Ok(history) => history.used_indexes,
+        Err(error) => {
+            log::warn!("Failed to read startup phrase history: {error}");
+            Vec::new()
+        }
+    }
+}
+
+fn save_used_phrase_indexes(used_indexes: &[usize]) {
+    let history = StartupPhraseHistory {
+        used_indexes: used_indexes.to_vec(),
+    };
+
+    let Ok(json) = serde_json::to_string_pretty(&history) else {
+        return;
+    };
+
+    if let Err(error) = data::write_json_to_file(&json, STARTUP_PHRASE_HISTORY_FILE) {
+        log::warn!("Failed to save startup phrase history: {error}");
+    }
 }
 
 fn next_index(seed: &mut u64, len: usize) -> usize {
@@ -299,4 +380,21 @@ fn seed_from_clock() -> u64 {
 fn next_randomish(seed: &mut u64) -> u64 {
     *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
     *seed >> 32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_only_unused_phrases_until_cycle_is_exhausted() {
+        let mut seed = 7;
+        let mut used = vec![0, 1, 2, 3];
+
+        let selected = select_phrase_indexes(&mut seed, &mut used, 2, 5);
+
+        assert_eq!(selected[0], 4);
+        assert_ne!(selected[1], 4);
+        assert_eq!(used, vec![selected[1]]);
+    }
 }
