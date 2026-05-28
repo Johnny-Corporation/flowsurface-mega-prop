@@ -770,20 +770,7 @@ fn setting_row_with_info<'a>(
     state: &'a SettingsPanelState,
 ) -> Element<'a, PanelMessage> {
     let active = state.info_hints.is_active(info);
-    let row = setting_row_content(setting_label_with_info(label, info, active), control);
-
-    if !active {
-        return row;
-    }
-
-    column![
-        row,
-        container(info_hint::window(info.title(), info.body()))
-            .width(Length::Fill)
-            .padding(padding::left(14).right(14))
-    ]
-    .spacing(6)
-    .into()
+    setting_row_content(setting_label_with_info(label, info, active), control)
 }
 
 fn setting_label_with_info<'a>(
@@ -793,9 +780,11 @@ fn setting_label_with_info<'a>(
 ) -> Element<'a, PanelMessage> {
     row![
         text(label).size(SETTINGS_BODY),
-        info_hint::icon_button(
+        info_hint::button(
             active,
-            PanelMessage::SettingsAction(SettingsAction::ToggleInfo(info))
+            PanelMessage::SettingsAction(SettingsAction::ToggleInfo(info)),
+            info.title(),
+            info.body()
         ),
     ]
     .spacing(7)
