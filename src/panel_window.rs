@@ -11,6 +11,7 @@ use iced::{
 
 mod connections;
 mod settings;
+mod settings_info;
 mod trades;
 
 pub(crate) use connections::ConnectionPanelState;

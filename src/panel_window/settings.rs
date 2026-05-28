@@ -1,4 +1,7 @@
-use crate::style::{self, Icon};
+use crate::{
+    style::{self, Icon},
+    widget::info_hint,
+};
 
 use iced::{
     Alignment, Border, Element, Length, Theme, padding,
@@ -6,6 +9,7 @@ use iced::{
 };
 
 use super::PanelMessage;
+use super::settings_info::SettingsInfo;
 
 const SETTINGS_SMALL: f32 = style::text_size::SMALL + 1.0;
 const SETTINGS_BODY: f32 = style::text_size::BODY + 2.0;
@@ -56,6 +60,7 @@ pub(crate) struct SettingsPanelState {
     hotkeys_enabled: bool,
     direct_connections: bool,
     risk_guard: bool,
+    info_hints: info_hint::State<SettingsInfo>,
     last_action: &'static str,
 }
 
@@ -89,6 +94,7 @@ impl SettingsPanelState {
             hotkeys_enabled: true,
             direct_connections: true,
             risk_guard: true,
+            info_hints: info_hint::State::new(),
             last_action: "Ready",
         }
     }
@@ -97,7 +103,12 @@ impl SettingsPanelState {
         match action {
             SettingsAction::SelectSection(section) => {
                 self.section = section;
+                self.info_hints.close();
                 self.last_action = "Section changed";
+            }
+            SettingsAction::ToggleInfo(info) => {
+                let opened = self.info_hints.toggle(info);
+                self.last_action = if opened { "Info opened" } else { "Info closed" };
             }
             SettingsAction::SelectLanguage(index) => {
                 self.language_index = index;
@@ -213,6 +224,7 @@ fn accent_color_index(hex: &str) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsAction {
     SelectSection(SettingsSection),
+    ToggleInfo(SettingsInfo),
     SelectLanguage(usize),
     SelectSidebar(usize),
     SelectTimezone(usize),
@@ -401,10 +413,12 @@ fn settings_general_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Pa
             state.language_index,
             SettingsAction::SelectLanguage
         ),
-        settings_toggle(
+        settings_toggle_with_info(
             "Start on system launch",
             state.start_on_launch,
-            SettingsAction::ToggleStartOnLaunch
+            SettingsAction::ToggleStartOnLaunch,
+            SettingsInfo::StartOnLaunch,
+            state
         ),
         settings_toggle(
             "Minimize to tray",
@@ -467,10 +481,12 @@ fn settings_chart_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Pane
 
 fn settings_trading_content<'a>(state: &'a SettingsPanelState) -> Element<'a, PanelMessage> {
     column![
-        settings_toggle(
+        settings_toggle_with_info(
             "Confirm order placement",
             state.confirm_orders,
-            SettingsAction::ToggleOrderConfirm
+            SettingsAction::ToggleOrderConfirm,
+            SettingsInfo::OrderConfirmation,
+            state
         ),
         settings_value("Default order size", "Configured per connection"),
         settings_value("Execution mode", "Manual discretionary trading"),
@@ -549,10 +565,12 @@ fn settings_data_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Panel
         settings_value("Open data folder", "Application Support / flowsurface"),
         settings_value("Network editor", "Open network panel"),
         settings_value("Proxy mode", "Direct connection"),
-        settings_toggle(
+        settings_toggle_with_info(
             "Use direct exchange connections",
             state.direct_connections,
-            SettingsAction::ToggleDirectConnections
+            SettingsAction::ToggleDirectConnections,
+            SettingsInfo::DirectConnections,
+            state
         ),
         settings_toggle(
             "Fetch trades (Binance)",
@@ -567,10 +585,12 @@ fn settings_data_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Panel
 
 fn settings_risk_content<'a>(state: &'a SettingsPanelState) -> Element<'a, PanelMessage> {
     column![
-        settings_toggle(
+        settings_toggle_with_info(
             "Enable local risk guard",
             state.risk_guard,
-            SettingsAction::ToggleRiskGuard
+            SettingsAction::ToggleRiskGuard,
+            SettingsInfo::RiskGuard,
+            state
         ),
         settings_value("Daily loss warning", "Not configured"),
         settings_value("Max order size", "Not configured"),
@@ -684,6 +704,24 @@ fn settings_toggle<'a>(
     )
 }
 
+fn settings_toggle_with_info<'a>(
+    label: &'static str,
+    checked: bool,
+    action: SettingsAction,
+    info: SettingsInfo,
+    state: &'a SettingsPanelState,
+) -> Element<'a, PanelMessage> {
+    setting_row_with_info(
+        label,
+        button(toggle_switch(checked))
+            .padding(0)
+            .style(style::button::text_link_secondary)
+            .on_press(PanelMessage::SettingsAction(action)),
+        info,
+        state,
+    )
+}
+
 fn toggle_switch<'a>(checked: bool) -> Element<'a, PanelMessage> {
     let knob = container("")
         .width(Length::Fixed(22.0))
@@ -722,9 +760,56 @@ fn setting_row<'a>(
     label: &'static str,
     control: impl Into<Element<'a, PanelMessage>>,
 ) -> Element<'a, PanelMessage> {
+    setting_row_content(text(label).size(SETTINGS_BODY).into(), control)
+}
+
+fn setting_row_with_info<'a>(
+    label: &'static str,
+    control: impl Into<Element<'a, PanelMessage>>,
+    info: SettingsInfo,
+    state: &'a SettingsPanelState,
+) -> Element<'a, PanelMessage> {
+    let active = state.info_hints.is_active(info);
+    let row = setting_row_content(setting_label_with_info(label, info, active), control);
+
+    if !active {
+        return row;
+    }
+
+    column![
+        row,
+        container(info_hint::window(info.title(), info.body()))
+            .width(Length::Fill)
+            .padding(padding::left(14).right(14))
+    ]
+    .spacing(6)
+    .into()
+}
+
+fn setting_label_with_info<'a>(
+    label: &'static str,
+    info: SettingsInfo,
+    active: bool,
+) -> Element<'a, PanelMessage> {
+    row![
+        text(label).size(SETTINGS_BODY),
+        info_hint::icon_button(
+            active,
+            PanelMessage::SettingsAction(SettingsAction::ToggleInfo(info))
+        ),
+    ]
+    .spacing(7)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn setting_row_content<'a>(
+    label: Element<'a, PanelMessage>,
+    control: impl Into<Element<'a, PanelMessage>>,
+) -> Element<'a, PanelMessage> {
     container(
         row![
-            text(label).size(SETTINGS_BODY),
+            label,
             iced::widget::Space::new().width(Length::Fill),
             control.into(),
         ]
