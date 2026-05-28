@@ -1,0 +1,141 @@
+\section{Historical Data Limits, Live Logging, and Research Roadmap}
+
+\subsection{What the Historical Russian Archive Can and Cannot Support}
+
+The repository contains a large archive of historical Russian \texttt{.OrdLog.qsh} files.
+That is useful, but it is not a gold-standard research dataset.
+
+\subsubsection{What it can support}
+\begin{itemize}
+  \item book-shape studies;
+  \item visible-liquidity reaction studies;
+  \item spread and depth regime statistics;
+  \item compression and range-state features based on top-of-book and local depth;
+  \item first-pass order-book-only backtests of simple level reactions.
+\end{itemize}
+
+\subsubsection{What it cannot fully support}
+\begin{itemize}
+  \item clean tape-based aggression studies;
+  \item robust iceberg confirmation;
+  \item execution-quality analysis;
+  \item hidden-liquidity inference with confidence;
+  \item full breakout fuel analysis based on prints and stop runs.
+\end{itemize}
+
+\subsubsection{Why caution is necessary}
+\begin{itemize}
+  \item The data is old.
+  \item Many books are sparse or nearly empty.
+  \item Quality is uneven across instruments and days.
+  \item It reflects a different market era and possibly different microstructure ecology.
+\end{itemize}
+
+Therefore, any backtest result from this archive should be treated as a rough structural hint, not validation in the strong sense.
+
+\subsection{Why Live Logging Is Mandatory}
+
+Because the historical archive is limited, the repository must build a parallel live-research loop.
+This is not optional.
+Without live data collection, the project would be formalizing ideas faster than it can verify them.
+
+The live loop should support:
+\begin{itemize}
+  \item raw event capture;
+  \item normalized event streams;
+  \item replay on saved sessions;
+  \item feature generation;
+  \item detector evaluation;
+  \item and later paper trading and live execution telemetry.
+\end{itemize}
+
+\subsection{Why Both Bybit and T-Invest Matter}
+
+\subsubsection{Bybit}
+
+Bybit is the easiest venue for immediate continuous logging and live experimentation.
+It provides:
+\begin{itemize}
+  \item active public order-book and trade streams;
+  \item relatively easy iteration;
+  \item demo private execution connectivity for future testing;
+  \item and a practical environment for building the ingestion and replay pipeline.
+\end{itemize}
+
+\subsubsection{T-Invest / Russian Market}
+
+T-Invest matters because the knowledge base is heavily grounded in Russian prop-style order-book reading.
+Even if the initial live loop is less convenient due to session constraints, instrument resolution, and API details, it remains necessary if the repository is going to study the original trading domain rather than drift into a crypto-only system.
+
+\subsection{Repository Direction Implied by the Knowledge Base}
+
+The document and the codebase should evolve in the following order:
+\begin{enumerate}
+  \item formalize the setups and their ambiguity;
+  \item capture live data cleanly;
+  \item replay and inspect both live and historical sessions;
+  \item test simple structural hypotheses first;
+  \item implement baseline rule-based detectors;
+  \item compare live observations against historical assumptions;
+  \item only after that consider adaptive ranking or ML overlays.
+\end{enumerate}
+
+\subsection{Current Repository Anchors}
+
+At the current repository stage, the architecture should stay legible and responsibility-driven:
+\begin{itemize}
+  \item \texttt{knowledge base/}: source books, transcript material, and the formalized research document;
+  \item \texttt{orderbook\_viewer/}: QSH order-book browsing, visualization, and broker-comparison tools for historical book inspection;
+  \item \texttt{market\_data/}: active Bybit and T-Invest live capture, normalized event writing, and replay helpers for new research-grade data;
+  \item \texttt{data\_capture/}: timestamped live session outputs with raw and normalized streams;
+  \item \texttt{legacy/}: archived runtime drafts that are preserved for reference but are not the active path.
+\end{itemize}
+
+This separation matters because the project should not blur:
+\begin{itemize}
+  \item historical book inspection,
+  \item live data ingestion,
+  \item research formalization,
+  \item and later detector or execution logic.
+\end{itemize}
+
+\subsection{Immediate Research Questions Worth Testing First}
+
+The strongest simple questions suggested by the materials are:
+\begin{itemize}
+  \item Does large visible same-side liquidity near the touch point correlate with short-term bounce probability?
+  \item Does visible density removal or consumption after compression correlate with continuation?
+  \item Does immediate return into range after a breach reliably identify poor breakout follow-through?
+  \item Are there coarse time-of-day effects on bounce quality versus breakout quality?
+  \item Does same-day setup performance appear stable enough to justify intraday adaptation?
+\end{itemize}
+
+\subsection{Proposed Platform Layers}
+
+\begin{longtable}{p{0.18\linewidth}p{0.72\linewidth}}
+\toprule
+\textbf{Layer} & \textbf{Purpose} \\
+\midrule
+Ingestion & Venue-specific connectors for Bybit and T-Invest, preserving raw payloads and writing normalized events. \\
+Storage & Session manifests, raw capture, normalized streams, and replay-friendly layout. \\
+Replay & Deterministic iteration over saved sessions and historical QSH order-book snapshots. \\
+Features & Book geometry, spread, imbalance, range state, time-of-day, and later tape or leader-follower features. \\
+Detectors & Explicit rule-based setup logic such as density bounce, compression breakout, and failed breakout. \\
+Analytics & Summary statistics, example extraction, detector hit-rate review, and day-level regime analysis. \\
+Execution / paper layer & Later module for signal taking, skip logic, and execution telemetry. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Today-Specific Adaptation as a Research Priority}
+
+One particularly strong future direction, directly supported by the source logic, is intraday adaptation.
+The system should eventually estimate things such as:
+\begin{itemize}
+  \item whether breakouts are following through today;
+  \item whether visible levels are being respected today;
+  \item whether the instrument is too empty for certain setups;
+  \item whether leader-follower logic is behaving reliably today;
+  \item whether execution conditions are stable enough to participate.
+\end{itemize}
+
+This should be treated as an architecture requirement now, even if only a simple baseline version is implemented initially.

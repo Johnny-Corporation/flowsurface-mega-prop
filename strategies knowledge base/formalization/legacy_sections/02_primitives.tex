@@ -1,0 +1,88 @@
+\section{Microstructure Primitives and the Trading Worldview}
+
+\subsection{DOM as the primary lens}
+
+Across the corpus, the DOM is treated as the closest practical window into current supply and demand. The transcript corpus repeatedly frames the DOM as the place where the ``inside'' of the chart becomes visible: visible orders, visible spread, visible concentrations of limit liquidity, visible voids, and visible repositioning by large participants.
+
+\paragraph{Visible liquidity.} The first-order objects are standing limit orders. In the trader language of the corpus, the most important visible limit concentrations are \emph{densities}. A density can act as a barrier, a magnet, or both. Price is attracted to visible liquidity because that is where resting interaction can happen; price is blocked by visible liquidity because actual execution is required to pass through it.
+
+\paragraph{Spread.} The spread is not treated as a background statistic. It directly affects execution quality, especially when using market orders, and it helps distinguish safe from dangerous trading conditions. A narrow spread suggests a better environment for aggressive entry or exit. A wide spread increases slippage and can invalidate an otherwise attractive setup.
+
+\paragraph{Empty book versus loaded book.} The corpus repeatedly distinguishes between a loaded book and an empty book. An empty book is dangerous in two opposite ways:
+
+\begin{itemize}
+\item on a breakout, it can permit rapid acceleration if the move is real,
+\item on a failed move, it can create violent adverse slippage because there is nothing nearby to trade against.
+\end{itemize}
+
+\subsection{Tape and prints}
+
+The tape is treated as the dynamic complement to the static order book. If the DOM is the frozen picture of visible intention, the tape is the stream of actual impact.
+
+\paragraph{What the tape adds.} The tape answers questions that the DOM cannot answer alone:
+
+\begin{itemize}
+\item Is the visible liquidity actually being hit?
+\item Are prints frequent or sparse?
+\item Are trade sizes growing or staying small?
+\item Is aggression one-sided or mixed?
+\item Is a large displayed level ``melting'' or merely sitting there untouched?
+\end{itemize}
+
+\paragraph{Why this matters.} A density without tape pressure is just visible size. A density under sustained aggressive prints is a test. A density that keeps replenishing while prints continue becomes a candidate for hidden liquidity or absorption.
+
+\subsection{Clusters, footprints, and executed history}
+
+The corpus treats clusters as historical evidence of where actual interaction happened. They are not primary triggers, but they are extremely useful context.
+
+\paragraph{Role of clusters.} Clusters help answer:
+
+\begin{itemize}
+\item where large executed volume accumulated in the recent past,
+\item whether the current visible liquidity lines up with past participation,
+\item whether a current move is entering a prior high-volume zone or leaving one,
+\item whether a level is supported only by current display or also by historical participation.
+\end{itemize}
+
+\subsection{Charts as context, not command}
+
+The transcript and book material strongly reject the idea that standard indicator-heavy chart trading should drive scalping decisions. This does \emph{not} mean charts are irrelevant. Instead, charts are used to locate:
+
+\begin{itemize}
+\item higher-timeframe levels,
+\item previous highs and lows,
+\item range boundaries,
+\item gaps,
+\item prior compressions,
+\item news impulse zones,
+\item obvious stop locations.
+\end{itemize}
+
+In other words, the chart names the battlefield; the DOM and tape decide whether a trade is currently actionable.
+
+\subsection{Participant taxonomy implied by the corpus}
+
+Even though the source material is not formal microstructure theory, it implies a practical participant taxonomy:
+
+\begin{itemize}
+\item \textbf{passive visible liquidity:} large displayed limit orders,
+\item \textbf{passive hidden liquidity:} iceberg-like or replenishing behavior,
+\item \textbf{aggressive flow:} prints that attack visible levels,
+\item \textbf{robotic execution:} mechanical repeated behavior in the book,
+\item \textbf{crowd passengers:} traders entering on the same obvious breakout or bounce,
+\item \textbf{stop clusters:} latent fuel behind obvious technical levels.
+\end{itemize}
+
+\subsection{Why the same pattern can invert}
+
+One of the most important principles in the corpus is that visible shape alone does not determine direction. A large offer can mean:
+
+\begin{itemize}
+\item genuine resistance if buyers are weak,
+\item a springboard for breakout if buyers are strong and stops sit behind it,
+\item fake displayed liquidity if it keeps pulling and reappearing elsewhere,
+\item hidden absorption if it gets heavily hit but never disappears.
+\end{itemize}
+
+This is why the document later treats setup detection as \emph{state plus sequence}, not just a screenshot pattern.
+

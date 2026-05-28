@@ -1,0 +1,160 @@
+\section{Translation Into Algorithmic and Research Language}
+
+\subsection{Data Requirements by Information Layer}
+
+To test the discretionary ideas faithfully, the platform ultimately needs more than snapshots.
+
+\begin{longtable}{p{0.24\linewidth}p{0.30\linewidth}p{0.38\linewidth}}
+\toprule
+\textbf{Data source} & \textbf{Needed for} & \textbf{Comments} \\
+\midrule
+Order-book depth updates & Visible densities, imbalance, support behind a level, quote pull / push, local empty space, spread dynamics & Already central and available for both live connectors; historical Russian archive has only this layer. \\
+Trades / prints & Aggression, absorption, throughput at a level, iceberg inference, initiative pace & Critical for many setups; absent from the old QSH historical archive used here. \\
+Execution events & Fill quality, slippage, queue behavior, market versus limit studies, paper/live research & Needed later for real execution evaluation, not just signal study. \\
+Instrument metadata & Tick size, lot size, venue, session schedule, trading status & Necessary for robust normalization and cross-venue comparability. \\
+Cross-instrument feeds & Leader-follower logic, day context, external reference confirmation & Important but can be added after the single-instrument loop is reliable. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Event Model the Repository Should Support}
+
+The discretionary logic naturally maps to an event-driven architecture.
+Useful normalized event types include:
+\begin{itemize}
+  \item order-book snapshot or delta;
+  \item public trade print;
+  \item market status;
+  \item last price;
+  \item execution report;
+  \item session open / close / maintenance markers;
+  \item and subscription or transport diagnostics for research reproducibility.
+\end{itemize}
+
+This is important because the system needs to support four modes with minimal rework:
+\begin{itemize}
+  \item live logging;
+  \item historical replay;
+  \item feature generation;
+  \item and strategy or detector evaluation.
+\end{itemize}
+
+\subsection{Feature Families}
+
+The following feature families are implied by the knowledge base.
+
+\subsubsection{Order-Book Geometry}
+\begin{itemize}
+  \item spread;
+  \item top-of-book imbalance;
+  \item depth by distance from mid;
+  \item largest resting level by side and distance;
+  \item density concentration around candidate levels;
+  \item persistence of visible size;
+  \item and quote cancellation / replenishment behavior.
+\end{itemize}
+
+\subsubsection{Local Price-State Features}
+\begin{itemize}
+  \item distance to recent high or low;
+  \item short-horizon compression;
+  \item number of tests of a level;
+  \item extension from short-term fair area;
+  \item and post-trigger acceptance or rejection distance.
+\end{itemize}
+
+\subsubsection{Tape and Flow Features}
+\begin{itemize}
+  \item aggressive volume by side;
+  \item print rate;
+  \item burstiness;
+  \item volume-through-level;
+  \item and directional imbalance during trigger windows.
+\end{itemize}
+
+\subsubsection{Session and Regime Features}
+\begin{itemize}
+  \item time of day;
+  \item realized volatility so far today;
+  \item current average spread and depth regime;
+  \item current success rate of breakout-like versus bounce-like events;
+  \item news windows;
+  \item and whether the instrument is a leader or follower today.
+\end{itemize}
+
+\subsection{Per-Setup Algorithmic Translation}
+
+\begin{longtable}{p{0.18\linewidth}p{0.24\linewidth}p{0.22\linewidth}p{0.28\linewidth}}
+\toprule
+\textbf{Setup} & \textbf{Candidate signals} & \textbf{Minimum data} & \textbf{Main difficulty} \\
+\midrule
+Density bounce & Large same-side level near price, local test, no penetration, bounce away by threshold & Order book, best bid/ask, optional trades & Distinguishing real defense from spoofing or random large quotes. \\
+Breakout after compression & Tight pre-break range, repeated tests, level consumed, empty space, continuation after breach & Order book plus ideally trades & Defining the exact acceptance window and avoiding false breakouts. \\
+False breakout & Breach of level followed by rapid return into range & Order book, price-state features, ideally trades & Telling normal retest apart from actual failure. \\
+Iceberg defense & Volume-through-price greater than displayed liquidity, refreshed visible size, stable location & Order book plus trades & Hidden-liquidity inference is weak without prints. \\
+Absorption & Aggression remains high but price progress is small & Trades plus order book & Same signature can precede reversal or delayed continuation. \\
+Robot behavior & Repetitive update cadence, equal-size stepping, persistent one-sided machine-like posting & High-frequency order-book updates & Pattern stability is regime-dependent and non-stationary. \\
+Spring reversal & One-way extension into meaningful anchor then fast counter-move & Order book, price-state features, optional trades & Many stretched moves continue further; anchor quality is decisive. \\
+Leader-follower & Short-lag direction / imbalance relation between instruments & Multi-instrument synchronized feeds & Timestamp alignment and changing causal relations. \\
+\bottomrule
+\end{longtable}
+
+\subsection{State-Machine View}
+
+Many discretionary patterns can be translated into a state machine.
+For example, a breakout candidate can be modeled as:
+\begin{enumerate}
+  \item \textbf{Context state}: instrument is active enough and near a meaningful level;
+  \item \textbf{Build-up state}: repeated testing or compression toward the level;
+  \item \textbf{Trigger state}: level is consumed or crossed;
+  \item \textbf{Validation state}: post-trigger acceptance and flow support;
+  \item \textbf{Outcome state}: continuation, stall, or failed breakout reversal.
+\end{enumerate}
+
+The same architecture can be used for bounce logic:
+\begin{enumerate}
+  \item context;
+  \item approach;
+  \item defense observation;
+  \item rejection confirmation;
+  \item rotation or failure.
+\end{enumerate}
+
+This is likely better than trying to force the entire human trading process into one monolithic formula.
+
+\subsection{What Is Still Hard to Encode}
+
+Several concepts remain stubbornly fuzzy:
+\begin{itemize}
+  \item ``clean'' versus ``dirty'' order book behavior;
+  \item real versus fake density without strong print data;
+  \item ``robot is still working'' versus ``robot is finished'';
+  \item level quality based on tacit prior experience with an instrument;
+  \item and day-specific intuition such as ``today this paper is trading properly''.
+\end{itemize}
+
+These are exactly the places where ML \emph{may} help later, but only after:
+\begin{itemize}
+  \item event definitions are stable;
+  \item logging is rich enough;
+  \item and simple rule-based baselines already exist.
+\end{itemize}
+
+\subsection{Where ML Could Help Later, and Where It Should Not Start}
+
+The correct later use of ML in this project is not to discover the entire strategy from poor data.
+It is to improve decisions around already-defined microstructure events.
+Examples:
+\begin{itemize}
+  \item classify whether a candidate event is more likely bounce, breakout, or fakeout;
+  \item rank trade quality;
+  \item decide whether to take or skip;
+  \item adapt thresholds to the current instrument-day regime;
+  \item estimate follow-through quality after a trigger.
+\end{itemize}
+
+What ML should \emph{not} do at the current stage:
+\begin{itemize}
+  \item replace logging and replay work;
+  \item pretend the sparse historical archive is enough ground truth;
+  \item or bypass the need to understand the setups structurally.
+\end{itemize}

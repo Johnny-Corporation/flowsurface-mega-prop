@@ -1,0 +1,185 @@
+\section{Core Setup Catalogue}
+
+\subsection{Bounce from large visible liquidity / density}
+
+\paragraph{What the setup is.} A bounce trade attempts to enter against a visible opposing block of liquidity that is expected to hold price, at least temporarily. In the corpus, bounce trades are described as the simplest and cleanest trades because they usually offer the shortest and clearest stop.
+
+\paragraph{Why it may work.} The edge hypothesis is structural. A large displayed level can represent genuine interest from a participant willing to transact meaningful size at that price. If aggressive flow is not sufficient to remove the level, price can recoil away from it, often sharply because short-horizon traders were leaning into the test.
+
+\paragraph{Best context.}
+\begin{itemize}
+\item a clear nearby level on the chart,
+\item a market that has not already exhausted most of the move,
+\item a visible density supported by secondary nearby liquidity,
+\item a spread and book shape that permit a tight stop,
+\item no strong cross-market contradiction.
+\end{itemize}
+
+\paragraph{When to enter.} The source material strongly prefers entry \emph{at} or just before the key level, not after the bounce is already obvious. The trade should be entered close enough to the defending liquidity that the stop is almost immediate if the level fails.
+
+\paragraph{When not to enter.}
+\begin{itemize}
+\item after a long move has already consumed most of the expected rebound,
+\item when the defending density stands alone with empty space behind it,
+\item when tape aggression is overwhelming the level,
+\item when the spread is too wide to define acceptable damage,
+\item when the local move has already become a passenger-heavy fade.
+\end{itemize}
+
+\paragraph{What to watch in the order book.}
+\begin{itemize}
+\item size and shape of the main density,
+\item secondary liquidity behind it,
+\item whether the level is static or constantly pulling,
+\item whether the defending side thickens as price approaches,
+\item whether the opposite side of the book is empty enough for rebound travel.
+\end{itemize}
+
+\paragraph{What to watch in tape and price.}
+\begin{itemize}
+\item whether aggressive prints slow down near the level,
+\item whether repeated hits fail to make progress,
+\item whether the first rebound prints appear faster than the final attack prints,
+\item whether price rejects the level immediately or sits too long at the edge.
+\end{itemize}
+
+\paragraph{Typical development.} A good bounce often shows approach, test, hesitation, brief imbalance, then a quick recoil. A bad bounce shows repeated heavy attacks, sticky price, poor rebound, and growing risk of breakthrough.
+
+\paragraph{Invalidation and fake versions.} The most important invalidation is simple: if the defending liquidity is consumed or becomes obviously ineffective, the thesis is broken. A common fake version is a visible level that attracts traders but is either removed or too small relative to incoming aggressive flow.
+
+\paragraph{Stop, exits, and partials.} Stops belong directly behind the defending liquidity. The source corpus repeatedly warns that if the stop is not nearby, the trade stops being a clean bounce and becomes a sloppy gamble. Partial exits belong at the first guaranteed obstacle rather than at fantasy targets. The books and transcripts both emphasize taking the first reliable portion and only then deciding whether to hold the remainder.
+
+\paragraph{Failure modes.}
+\begin{itemize}
+\item the level was fake,
+\item the level was real but already partially consumed before entry,
+\item the broader market pushed through,
+\item too many other traders took the same fade and then rushed out,
+\item the remaining upside was too small to justify the attempt.
+\end{itemize}
+
+\paragraph{Explicit versus fuzzy parts.} The explicit part is the need for visible defending liquidity and a short stop. The fuzzy part is how much size is ``enough'' and how much attack pressure is ``too much''; both are instrument-specific and day-specific.
+
+\researchnote{Algorithmically, this setup needs: level size percentile, distance to best bid/ask, refill behavior, nearby backup liquidity, short-horizon tape imbalance, and immediate travel after first touch.}
+
+\subsection{Breakout through density or chart level}
+
+\paragraph{What the setup is.} A breakout trade attempts to join a forceful move through an important level or dense resting liquidity, ideally when stops and fresh momentum can accelerate the move.
+
+\paragraph{Why it may work.} The corpus treats breakout profitability as dependent on fuel. Visible density is only one component; the real fuel often comes from trapped traders, clustered stops behind the level, and new aggressive participants joining the move. Without fuel, a breakout is just a poke into emptiness.
+
+\paragraph{Best context.}
+\begin{itemize}
+\item a strong and obvious level on a meaningful timeframe,
+\item an instrument that is actually moving that day,
+\item visible or inferable stop concentration behind the level,
+\item relative emptiness beyond the level,
+\item immediate post-break acceleration rather than slow drifting.
+\end{itemize}
+
+\paragraph{When to enter.} The source material favors entry on the final removal of the last meaningful resistance: either on the obvious breakup of the holding participant, or at the first sharp impulse once the level gives way. Entry must be fast because the trade is strongest right when the market proves it can move.
+
+\paragraph{When not to enter.}
+\begin{itemize}
+\item if the instrument is generally dead and range-bound,
+\item if the level is unclear or only weakly observed,
+\item if large opposing densities immediately sit behind the breakout,
+\item if price pokes but prints do not accelerate,
+\item if the move depends on hoping rather than on visible ignition.
+\end{itemize}
+
+\paragraph{What to watch in DOM and tape.}
+\begin{itemize}
+\item whether the final blocking liquidity is genuinely disappearing,
+\item whether the book behind the level is thin enough for travel,
+\item whether prints surge as the level is breached,
+\item whether same-direction participants join immediately,
+\item whether a reverse squeeze begins instead.
+\end{itemize}
+
+\paragraph{Development pattern.} A healthy breakout normally has pre-break compression or repeated testing, then removal of the holding level, then sudden motion. The transcripts emphasize that if the move does not go \emph{immediately}, the trader must become suspicious.
+
+\paragraph{Fake breakouts.} The setup naturally mutates into the next setup category: false breakout or failed continuation. A weak breakout is one where the level is touched, briefly crossed, but no strong stop-driven or momentum-driven burst follows.
+
+\paragraph{Stops and exits.} Breakout stops are intrinsically harder than bounce stops because the book behind the trader is often emptier. The corpus explicitly warns that beginners should prefer bounces until they are able to cut failed breakouts instantly. Exit logic depends heavily on the first opposing density, observed follow-through, and whether the book remains open in the breakout direction.
+
+\paragraph{Explicit versus fuzzy parts.} Explicit: the move needs a real level, a moving instrument, and immediate impulse. Fuzzy: how much pre-break buildup is enough, and exactly how to distinguish healthy acceleration from one last stop-run.
+
+\researchnote{Algorithmically, breakout detection should combine repeated tests, compression near level, depletion of blocking liquidity, post-break print acceleration, and forward book emptiness.}
+
+\subsection{False breakout / failed continuation}
+
+\paragraph{What the setup is.} A false breakout occurs when price pushes through an obvious level or visible density but cannot sustain the move and quickly returns. In practical trader language, the market ``picks up the stops'' but fails to continue.
+
+\paragraph{Why it may work.} The edge comes from asymmetry in positioning. If many traders entered on the breakout, a quick failure forces them to exit. That reverse flow can itself become the short-horizon trade.
+
+\paragraph{Best context.}
+\begin{itemize}
+\item obvious breakout level that many traders can see,
+\item evidence that breakout participants likely joined,
+\item limited continuation immediately after the breach,
+\item renewed contrary pressure in tape or book.
+\end{itemize}
+
+\paragraph{Key confirmation.} The most important confirmation is \emph{lack of healthy continuation}. The corpus repeatedly stresses that a real breakout should move immediately. If it does not, the trader should assume danger. That same logic makes the failed continuation tradable in the opposite direction.
+
+\paragraph{What to watch.}
+\begin{itemize}
+\item no burst after the breach,
+\item contrary densities or refill appearing quickly,
+\item aggressive prints drying up in the breakout direction,
+\item price slipping back inside the range,
+\item evidence that breakout passengers are trapped.
+\end{itemize}
+
+\paragraph{Stop and exit logic.} The stop belongs beyond the failed zone, not far away. The first target is usually the interior of the prior range, not an ambitious reversal to the other end of the day.
+
+\paragraph{Fuzzy element.} The fuzzy part is judging whether the lack of continuation is meaningful or merely a short pause before the real move resumes.
+
+\researchnote{This setup can be modeled as a breakout state followed by a short confirmation window. If post-break travel, print intensity, and book migration fail to meet threshold, transition the state into ``failed breakout'' rather than ``continuation''.}
+
+\subsection{Iceberg-like behavior}
+
+\paragraph{What the setup is.} An iceberg-like setup relies on the inference that more liquidity exists at a level than is visibly displayed. In the corpus, the practical clue is replenishment or repeated execution at a level without corresponding disappearance of support or resistance.
+
+\paragraph{Why it may work.} Hidden size matters because it changes the true strength of the level. A level that looks modest can in fact represent a much larger participant quietly transacting size without fully advertising it.
+
+\paragraph{Recognition logic.}
+\begin{itemize}
+\item the displayed size is repeatedly hit,
+\item executed volume through the level becomes large relative to visible size,
+\item the level keeps reappearing or staying alive,
+\item the move around it becomes structurally constrained.
+\end{itemize}
+
+\paragraph{Trading interpretations.} An iceberg can support a bounce, delay a breakout, or define a local battlefield where a spring-like or squeeze-like move becomes likely once the hidden size finally exhausts. Therefore the iceberg is often not a standalone setup but a \emph{modifier} of bounce, breakout, or failure logic.
+
+\paragraph{Failure modes.}
+\begin{itemize}
+\item false inference from normal queue refresh,
+\item the hidden participant is finishing rather than starting,
+\item another stronger participant overwhelms the iceberg,
+\item the trader overestimates hidden size and enters too early.
+\end{itemize}
+
+\researchnote{Useful measurable proxies are executed volume at level versus displayed size, refill frequency, lifetime of the price level, and price response asymmetry before and after large hits.}
+
+\subsection{Absorption and hidden liquidity}
+
+\paragraph{What the setup is.} Absorption is closely related to iceberg logic but conceptually broader. The essential idea is that substantial aggression hits one side, yet price does not progress in proportion to the aggression. Something is taking the flow.
+
+\paragraph{Why it may work.} If the market cannot travel despite heavy aggressive execution, then either hidden passive interest is large or opposing pressure is stronger than it appears. This creates opportunity for reversal or for a later explosive move once the absorbing side stops transacting.
+
+\paragraph{Observation checklist.}
+\begin{itemize}
+\item one-sided prints,
+\item poor price progress,
+\item repeated defense of the same area,
+\item visible level not collapsing despite continued hits,
+\item eventual recoil once the attack exhausts itself.
+\end{itemize}
+
+\paragraph{Interpretation danger.} Absorption is one of the most dangerous concepts to overuse. Some ``absorption'' is simply delay before the real breakout. The trader needs to distinguish \emph{stalling before continuation} from \emph{stalling before reversal}.
+
+\paragraph{Practical rule from the corpus.} Wait for actual consequence. Do not assume that heavy prints alone imply reversal. The trade becomes much cleaner once the market begins to reject the attacked area rather than merely sitting inside it.
+

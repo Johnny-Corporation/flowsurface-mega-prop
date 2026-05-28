@@ -1,0 +1,172 @@
+\section{Risk Management and Execution}
+
+\subsection{Risk Management Is the Constraint, Not the Decoration}
+
+The risk-management book is clear about a principle that should remain structurally visible in the repo:
+\begin{quote}
+Trading should be adapted to risk management, not risk management adapted to the trader's impulse of the day.
+\end{quote}
+
+That principle matters even more in microstructure trading because:
+\begin{itemize}
+  \item decisions happen fast;
+  \item many opportunities appear in clusters;
+  \item execution friction can hide real risk;
+  \item and the psychological temptation to overtrade is unusually strong.
+\end{itemize}
+
+\subsection{Per-Trade Risk and Per-Day Risk}
+
+The materials suggest a layered loss budget:
+\begin{itemize}
+  \item define a daily acceptable loss based on real emotional and financial tolerance;
+  \item derive per-trade risk from expected trading frequency;
+  \item refuse trades whose natural stop does not fit that budget;
+  \item stop the session once the daily limit is hit.
+\end{itemize}
+
+This is not presented as optional discipline.
+It is the base operating system of the trader.
+
+\subsection{Why Daily Stop Rules Matter So Much Here}
+
+Intraday microstructure trading generates many local opportunities and many opportunities to rationalize.
+The source material explicitly warns about revenge trading, loosening rules after a loss, and increasing size just because small planned profits feel emotionally unsatisfying.
+
+That means the repository's eventual paper/live testing environment should include hard session controls such as:
+\begin{itemize}
+  \item daily realized loss limit;
+  \item daily number-of-trades guardrail;
+  \item cool-down after a string of failed setups;
+  \item and possibly setup-specific disable flags once performance degrades intraday.
+\end{itemize}
+
+\subsection{Stop Logic}
+
+In the discretionary material, a stop is not a random distance.
+It is a statement about why the trade is wrong.
+
+Examples:
+\begin{itemize}
+  \item bounce trade: the defending participant is gone or overwhelmed;
+  \item breakout trade: the market failed to accept beyond the trigger;
+  \item iceberg trade: hidden defense did not exist or was exhausted;
+  \item robot trade: the robot stopped working or got absorbed;
+  \item spring reversal: the opposing anchor did not produce the expected response.
+\end{itemize}
+
+Research implication: stop placement should remain tied to event logic, not only to volatility normalization.
+
+\subsection{Take-Profit, Partials, and Adds}
+
+The materials favor practical exit management over heroic forecasting.
+Several themes repeat:
+\begin{itemize}
+  \item take partial profit at the first reliable objective;
+  \item let the remainder continue only if the move still behaves well;
+  \item use adds selectively and only within the original risk framework;
+  \item do not add just because the initial entry feels emotionally uncomfortable.
+\end{itemize}
+
+That suggests future execution research should separate:
+\begin{itemize}
+  \item entry quality,
+  \item management quality,
+  \item and final exit quality.
+\end{itemize}
+
+\subsection{Execution Tradeoffs: Market Versus Limit}
+
+\begin{longtable}{p{0.18\linewidth}p{0.36\linewidth}p{0.38\linewidth}}
+\toprule
+\textbf{Order type} & \textbf{Advantages} & \textbf{Risks and tradeoffs} \\
+\midrule
+Market order & Priority of execution, simplicity during fast moves, useful when timing is more important than a tiny price improvement & Slippage, unfavorable fills during volatility, and potential to pay the spread right when liquidity is poor. \\
+Limit order & Better price control, potential maker economics, useful when leaning on a level or joining a defended participant & Non-fill risk, queue risk, adverse selection, and false confidence from a price that looks attractive but never actually fills. \\
+\bottomrule
+\end{longtable}
+
+In this trading style, the execution decision is part of the strategy, not merely an implementation detail.
+
+\subsection{Queue Position and Fill Uncertainty}
+
+The source material does not formalize queue math, but the logic is implicit.
+If many traders are leaning on the same visible density, queue priority matters.
+If the trader expects to use limit orders near defended levels, the eventual live system should track at least:
+\begin{itemize}
+  \item whether the order was passive or aggressive;
+  \item whether it received a full, partial, or no fill;
+  \item how far price traveled without filling;
+  \item and whether execution style degraded or improved realized expectancy.
+\end{itemize}
+
+\subsection{Low-Liquidity Traps}
+
+Thin books create a nasty illusion:
+\begin{itemize}
+  \item stops look small on paper;
+  \item visible densities look large;
+  \item but fills become uncertain and slippage becomes nonlinear.
+\end{itemize}
+
+This is one reason the source materials emphasize that ``large'' is instrument-specific and day-specific.
+Research code should therefore treat relative size and local liquidity context as more important than raw visible volume alone.
+
+\subsection{Why Discretionary Traders Overtrade}
+
+The materials imply several reasons:
+\begin{itemize}
+  \item too many visually tempting local patterns;
+  \item boredom during slower periods;
+  \item frustration after missed moves;
+  \item desire to recover losses quickly;
+  \item emotional discomfort with small planned profits;
+  \item and confusion between action and edge.
+\end{itemize}
+
+Automation can help here, not by removing judgment entirely, but by enforcing:
+\begin{itemize}
+  \item session-level limits;
+  \item setup definitions;
+  \item entry gating;
+  \item and structured review.
+\end{itemize}
+
+\subsection{Crypto Versus Russian Market Execution Differences}
+
+\subsubsection{Crypto}
+
+Crypto offers:
+\begin{itemize}
+  \item longer trading hours;
+  \item high public visibility of order books and trades;
+  \item fast experimentation and easier continuous logging;
+  \item but also exchange-specific quirks, variable liquidity quality, and event-driven jumps.
+\end{itemize}
+
+\subsubsection{Russian Market / T-Invest / MOEX}
+
+Russian-market execution carries different constraints:
+\begin{itemize}
+  \item session structure matters more explicitly;
+  \item broker and infrastructure path matter more;
+  \item some instruments may be heavily influenced by local participant behavior;
+  \item and the repository's historical archive is particularly limited because it mainly reflects order-book data without complete trade flow.
+\end{itemize}
+
+\subsection{Operational Risk in Prop-Style Environments}
+
+The MOEX prop book adds another layer:
+\begin{itemize}
+  \item commission burden matters materially;
+  \item infrastructure quality matters;
+  \item colocation matters for serious intraday operations;
+  \item integrated risk management is a business necessity, not only a trader preference.
+\end{itemize}
+
+For the repository direction, this means architecture choices should already anticipate:
+\begin{itemize}
+  \item execution telemetry;
+  \item per-session and per-strategy controls;
+  \item and later integration between signal generation and hard risk guards.
+\end{itemize}

@@ -1,0 +1,67 @@
+\section{Scope, Corpus, and Interpretation Rules}
+
+\subsection{What this report is and what it is not}
+
+This report is a formalization of a discretionary intraday trading knowledge base centered on market microstructure. The core worldview of the corpus is that short-horizon trading decisions should be made primarily from \emph{current} order-book structure, current prints, and current behavior of large participants, while charts provide context and historical framing rather than the main signal.
+
+This report is \emph{not} a claim that every setup described here is timeless, universal, or ready for automation exactly as-is. A recurring message in the transcript corpus is that each trade is somewhat unique, that context changes the meaning of the same pattern, and that yesterday's working setup can stop working today. Therefore the document deliberately separates:
+
+\begin{itemize}
+\item what the source corpus states directly,
+\item what is a reasonable engineering translation of those statements,
+\item what remains fuzzy, subjective, or regime-dependent,
+\item what requires empirical confirmation in live or replay data.
+\end{itemize}
+
+\subsection{Source groups and their roles}
+
+The corpus in the repository naturally splits into four groups.
+
+\begin{enumerate}
+\item \textbf{Alexey Lipovoy transcript corpus.} This is the most valuable source for actual setup logic. It contains the strongest discretionary detail on densities, icebergs, robots, bounces, breakouts, springs, news, setup stacking, exits, and trade review.
+\item \textbf{``Professional Scalping''.} This book is more introductory and pedagogical. It explains the role of DOM, prints, clusters, spread, slippage, and the general logic of trading from visible liquidity and immediate order flow.
+\item \textbf{``Risk Management in Trading''.} This book is generic, but it contributes important structure around per-trade risk, daily loss, stopping rules, trade journaling, position sizing, and the insistence that losses are normal and must be capped.
+\item \textbf{``Prop Trading on MOEX''.} This book contributes infrastructure logic rather than entry logic. It clarifies why prop trading systems emphasize direct exchange connectivity, deep DOM, integrated risk management, colocation, and operational discipline.
+\end{enumerate}
+
+\subsection{Relative strength of the sources}
+
+The transcript corpus contains the richest edge statements, but those statements are expressed in trader language rather than in quantitative language. The books are often cleaner, but they are also more generic and sometimes feel educational or promotional. Therefore the source weighting used in this report is:
+
+\begin{itemize}
+\item \textbf{primary authority for setups:} the Lipovoy transcripts,
+\item \textbf{primary authority for general microstructure descriptions:} the scalping book plus the transcripts,
+\item \textbf{primary authority for risk and session control:} the risk-management book plus repeated transcript remarks,
+\item \textbf{primary authority for operational architecture:} the prop-trading book.
+\end{itemize}
+
+\subsection{Global interpretation rules extracted from the corpus}
+
+Several meta-rules appear again and again. They are important because they govern how every specific setup should be interpreted.
+
+\begin{itemize}
+\item A single reason is not enough. Trades should be built from multiple ``bases'' or ``reasons'' that line up.
+\item The same visible pattern can mean opposite things in different context.
+\item The order book alone is not enough; visible liquidity can mislead.
+\item Tape and executed volume reveal whether visible liquidity is actually being attacked, absorbed, or ignored.
+\item Charts matter as context, not as primary trigger.
+\item Risk control is part of the trade thesis, not an afterthought.
+\item The opening part of the session is diagnostic: it reveals what type of patterns are working \emph{today}.
+\item A trader must continuously adapt. Static rule memorization is insufficient.
+\end{itemize}
+
+\subsection{Repository-level implications}
+
+The knowledge base implies that the project must evolve into a platform able to:
+
+\begin{itemize}
+\item capture raw DOM updates and prints,
+\item normalize them into replayable events,
+\item reconstruct state and participant interaction around key levels,
+\item attach setup hypotheses to observed event sequences,
+\item compare historical and live behavior,
+\item support day-specific calibration rather than one fixed global model.
+\end{itemize}
+
+That implication strongly shapes the engineering decisions made in the repository update accompanying this document.
+

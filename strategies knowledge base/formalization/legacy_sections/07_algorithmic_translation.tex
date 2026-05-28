@@ -1,0 +1,146 @@
+\section{Translation into Algorithmic Research Language}
+
+\subsection{General principle}
+
+The project should not jump directly from discretionary language to machine learning. The correct sequence is:
+
+\begin{enumerate}
+\item event logging,
+\item state reconstruction,
+\item explicit feature definition,
+\item simple rule-based detectors,
+\item replay and live validation,
+\item only then selective ML overlays.
+\end{enumerate}
+
+\subsection{Event families the repository must support}
+
+\begin{longtable}{p{0.22\textwidth}p{0.25\textwidth}p{0.41\textwidth}}
+\toprule
+\textbf{Event family} & \textbf{Needed now} & \textbf{Why it matters} \\
+\midrule
+Order-book updates & yes & visible density, spread, queue geometry, depletion, refill, emptiness beyond level \\
+Trade prints & yes & aggression, activity, executed pressure, absorption clues, ignition after break \\
+Execution reports & later but schema-ready & live fill quality, slippage, queue realism, paper-versus-live comparison \\
+Market status / session metadata & yes & open, close, halt, section changes, special regimes such as constrained price movement \\
+Cross-instrument alignment & yes & leader-follower conditioning and day-context filters \\
+\bottomrule
+\end{longtable}
+
+\subsection{Candidate state machines}
+
+Most setups in the corpus translate more naturally into state machines than into static snapshots.
+
+\paragraph{Bounce state machine.}
+\begin{enumerate}
+\item identify significant visible level,
+\item observe approach,
+\item measure aggressive attack intensity,
+\item confirm hold or hidden replenishment,
+\item enter on first validated rejection,
+\item exit on first reliable obstacle or thesis failure.
+\end{enumerate}
+
+\paragraph{Breakout state machine.}
+\begin{enumerate}
+\item identify strong level,
+\item detect repeated tests or compression,
+\item confirm depletion of blocking liquidity,
+\item confirm immediate post-break acceleration,
+\item classify as continuation or failure within a short confirmation window.
+\end{enumerate}
+
+\paragraph{Robot state machine.}
+\begin{enumerate}
+\item detect repeated same-shape reposting,
+\item estimate robot strength and freshness,
+\item measure whether crowd is joining,
+\item trade with the robot while the support remains active,
+\item exit at first sign of robot stop or crowd overload.
+\end{enumerate}
+
+\subsection{Features suggested by the corpus}
+
+\begin{itemize}
+\item density size percentile within instrument-day,
+\item distance from best bid/ask to nearest major density,
+\item ratio of displayed size to executed volume at level,
+\item refill count and refill cadence,
+\item tape intensity in rolling short windows,
+\item buy-versus-sell print imbalance,
+\item forward book emptiness after a candidate breakout,
+\item repeated test count of a level,
+\item compression width before level attack,
+\item realized travel after first touch,
+\item immediate retrace after breakout,
+\item first-hour performance of each setup family on the current day,
+\item cross-instrument lead-lag metrics.
+\end{itemize}
+
+\subsection{What remains hard to encode}
+
+Important parts of the corpus are still fuzzy:
+
+\begin{itemize}
+\item ``clean'' versus ``crooked'' feel,
+\item recognition of when a level has already been overused,
+\item subtle participant identity inference,
+\item judgment that a move is ``already too late'',
+\item understanding when a setup is crowded.
+\end{itemize}
+
+\researchnote{These are ideal candidates for later ML ranking or probability calibration \emph{after} explicit event sequences already exist. The first ML job should not be signal discovery from raw noise; it should be quality filtering for already-defined hypotheses.}
+
+\subsection{Historical data limitations}
+
+The repository's Russian historical dataset must be treated with caution:
+
+\begin{itemize}
+\item it is old,
+\item it contains order book only,
+\item it lacks prints and execution records,
+\item many books are sparse or nearly empty,
+\item reconstructed conclusions may be structurally misleading.
+\end{itemize}
+
+Therefore historical research on that data should focus on \emph{simple structural relationships}, for example:
+
+\begin{itemize}
+\item visible density versus short-horizon bounce probability,
+\item density pull and immediate continuation,
+\item repeated test count versus break probability,
+\item compression near level versus post-break travel.
+\end{itemize}
+
+More nuanced discretionary claims about tape aggression, hidden liquidity, or crowding require fresh live capture.
+
+\subsection{Live research roadmap implied by the corpus}
+
+\begin{enumerate}
+\item run continuous Bybit capture for public DOM and trades,
+\item run T-Invest capture when the Russian market is open,
+\item normalize and replay both feeds in the same internal event vocabulary,
+\item annotate candidate setup events,
+\item compare live observations against the formalized discretionary claims,
+\item keep the first-hours adaptation statistics per instrument and per day,
+\item only then consider ranking models or classifiers.
+\end{enumerate}
+
+\subsection{Repository architecture direction}
+
+The proper architecture for this project is:
+
+\begin{enumerate}
+\item logging layer,
+\item normalized event model,
+\item replay engine,
+\item feature layer,
+\item rule-based setup detector layer,
+\item analytics and journaling layer,
+\item paper-trading layer,
+\item live execution layer,
+\item later ML overlay layer.
+\end{enumerate}
+
+This sequence preserves interpretability and makes it possible to tell whether a setup is failing because the idea is bad, because the implementation is wrong, or because the execution layer is distorting the result.
+

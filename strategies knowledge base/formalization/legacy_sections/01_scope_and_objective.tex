@@ -1,0 +1,32 @@
+\section{Scope and Objective}
+
+\subsection{What this document is trying to do}
+
+The repository is not building a naive ``trade from one indicator'' bot. The intended end state is a research and trading framework that studies how professional intraday traders use \Important{visible liquidity}, \Important{hidden liquidity}, \Important{tape aggression}, \Important{context}, and \Important{risk discipline} to decide when a pattern is worth trading and when it is not. The materials in the repository are discretionary and educational, not machine-ready. Therefore the first job is formalization: to translate the trading ideas into explicit statements about what is being observed, what is being inferred, what is likely edge versus narrative, and what can later be tested in data.
+
+This document treats the source materials as a layered knowledge base rather than a single coherent system. The books provide broader framing about scalping, prop infrastructure, and risk management. The transcript series is richer in discretionary pattern language: densities, icebergs, robots, springs, breakouts, false moves, news reactions, and trade review. The practical task is to unify those into one research-oriented reference.
+
+\subsection{Primary repository direction encoded here}
+
+The document is written to support the following repository direction:
+
+\begin{itemize}[leftmargin=1.5em]
+\item Work from order book / DOM / level 2, tape / prints, and execution feedback together rather than from order book snapshots alone.
+\item Detect patterns explicitly first, before attempting machine learning.
+\item Treat the old Russian historical order book data as auxiliary and weak, not as a gold-standard training set.
+\item Build toward logging, normalization, replay, feature extraction, setup detection, analytics, paper trading, and later live execution.
+\item Include \Important{day-specific adaptation}: the system should learn what appears to be working \emph{today} for \emph{this instrument}, instead of assuming setup quality is constant across sessions.
+\end{itemize}
+
+\subsection{Interpretive stance}
+
+The source material speaks in the language of experienced traders. That language contains both hard observations and soft judgment. A recurring pattern throughout the material is that the same visible structure can mean opposite things in different contexts. For example, a large density can mean support, passive absorption, a fake wall, an invitation to a breakout, or bait laid by a robot. Therefore the correct formalization is not ``pattern X always means Y,'' but rather:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item identify what is objectively visible,
+\item identify what the trader is hypothesizing about other participants,
+\item identify what contextual evidence upgrades or downgrades that hypothesis,
+\item specify the invalidation condition and the trade management consequences.
+\end{enumerate}
+
+That is the structure used throughout the rest of this document.

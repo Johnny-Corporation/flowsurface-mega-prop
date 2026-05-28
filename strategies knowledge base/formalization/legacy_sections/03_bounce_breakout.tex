@@ -1,0 +1,191 @@
+\section{Core Setups I: Bounce, Breakout, and Failed Continuation}
+
+\subsection{Bounce from visible liquidity or clustered passive interest}
+
+\subsubsection{What the setup is}
+
+The bounce trade is the clearest and most explicitly favored setup in the transcript set. The
+basic form is simple: price approaches visible passive liquidity or a localized cluster of
+passive participants, fails to trade through it cleanly, and reverses enough to deliver a
+favorable short-term reward relative to a very local stop.
+
+The materials treat bounce setups as the most educational and often the most attractive early
+career trades because they are naturally anchored to something concrete. The trader is not
+guessing in empty space. The trader is reacting to a specific local obstacle: one density,
+multiple aligned densities, an iceberg, or a visible participant whose presence tightly defines
+where the idea is wrong.
+
+\subsubsection{Why it is believed to work}
+
+The edge hypothesis is not that every large order creates a reversal. The edge hypothesis is
+that a sufficiently meaningful passive participant can temporarily overpower aggressive flow,
+especially when that participant appears at a location that already makes sense on the chart or
+after a one-sided local move into the level. If the passive side is stronger than immediate
+market pressure, price must either pause or reverse.
+
+The transcript logic also adds a second layer: even when the passive participant is not large
+in absolute terms, it can still matter if the market is stretched or the book is unusually
+thin. The spring setup is an extreme example of this principle, but the same logic applies in
+ordinary bounce trades as well.
+
+\subsubsection{What to watch}
+
+\paragraph{In the order book.}
+Look for large visible size, multiple nearby densities, refreshing size, or an iceberg-like
+refresh pattern. The most attractive cases are those where the stop can be placed just beyond
+the defending participant rather than in open space.
+
+\paragraph{In the tape.}
+Watch whether aggressive prints hit the level and fail to move price. That suggests absorption.
+If aggressive prints arrive and the level immediately thins, disappears, or is crossed without
+friction, the bounce thesis weakens sharply.
+
+\paragraph{In price behavior.}
+A clean bounce usually has one of two shapes: either price approaches the level and stalls
+before crossing, or it briefly pokes through, finds no follow-through, and snaps back. The
+materials are clear that a short fake penetration does not automatically invalidate the idea.
+What matters is whether there is immediate continuation through the defending participant.
+
+\subsubsection{When not to enter}
+
+Do not treat density alone as sufficient. Avoid bounce entries when the density is far from any
+meaningful structural location, when the tape is overwhelmingly one-directional against the
+level, when the displayed size is being pulled around constantly, or when the instrument is so
+empty that local depth is not trustworthy. Also avoid confusing \emph{a large number on screen}
+with \emph{a participant who is actually defending that level}.
+
+\subsubsection{Stop, exit, and failure logic}
+
+The main attraction of the bounce is the short stop. The stop is typically placed just beyond
+the defending participant, the second supporting density, or the point where the level should
+have held but clearly did not. Partial exits are typically justified into the first reaction
+away from the level, while runners can be left for the next nearby structural area. The
+failure mode is straightforward: if the limiting participant is gone or decisively consumed,
+remaining in the trade becomes narrative attachment rather than disciplined execution.
+
+\subsubsection{Clean versus unclean examples}
+
+Clean examples have a visible reason, a readable stop, supporting context, and either
+absorption or at least a lack of continuation through the level. Unclean examples are those
+where the trader wants a bounce because the move ``feels extended'' but cannot point to the
+actual participant or structure that should stop price.
+
+\subsubsection{Algorithmic translation}
+
+Possible observable features include:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item displayed size at the target price as a multiple of rolling median queue size,
+  \item distance from best bid / ask to the defending price,
+  \item net aggressive volume into the level over the last N seconds,
+  \item short-term price displacement after first contact,
+  \item whether displayed size stays, refreshes, or disappears after first impact,
+  \item contextual flags such as gap open, strong trend day, or proximity to prior chart level.
+\end{itemize}
+
+What remains fuzzy is the trader's subjective evaluation of whether the participant ``looks
+real'' and whether the overall market feels easy or heavy. Those judgments may later require
+either richer hand-engineered context or learned filters.
+
+\subsection{Breakout through density or structural level}
+
+\subsubsection{What the setup is}
+
+The breakout setup is described as materially harder than the bounce. Price leans into a level
+or density, pressure builds, the level gives way, and the trader attempts to join continuation
+through the break. In the transcript worldview this is a high-skill trade because the trader is
+often entering into a partially empty book with less obvious support behind the position.
+
+\subsubsection{Why it is believed to work}
+
+A valid breakout is expected to work when passive liquidity is exhausted or pulled and the
+level's failure triggers additional buying or selling pressure from stops, late participants,
+and momentum traders. The edge hypothesis is therefore fuel-driven continuation, not merely a
+geometric line cross.
+
+\subsubsection{What to watch}
+
+\paragraph{In the order book.}
+Compression toward the level, repeated tests, thinning liquidity on the far side, or evidence
+that the defending size is smaller or weaker than it first appeared.
+
+\paragraph{In the tape.}
+Urgent prints into the level, a burst of marketable flow as price crosses, and immediate
+follow-through instead of hesitation. The tape matters more here than in a plain bounce because
+breakout confirmation is about acceleration.
+
+\paragraph{In price behavior.}
+The break should not just occur; it should continue. A good breakout often shows fast
+acceptance above or below the level. If price crosses and then instantly hesitates in a dead
+book, the trader must become suspicious immediately.
+
+\subsubsection{Why the setup is dangerous}
+
+The transcripts are unusually direct on this point: most breakout trades do not have a clean
+stop sitting right behind them. If the trader is wrong, the position can be ``smeared'' by an
+empty book. This is why breakout trading is framed as a later-skill setup requiring immediate
+loss acceptance, fast reaction, and emotional discipline. A trader who cannot scratch quickly
+should not be leaning on this setup heavily.
+
+\subsubsection{Invalidation and exit logic}
+
+The invalidation is behavioral, not just geometric. If the level breaks but there are no stops,
+no follow-through, and no continuing urgency, the breakout thesis degrades almost instantly.
+The trader is expected to exit fast rather than hope. Partial profit-taking makes sense into the
+first acceleration burst, but only if the move is already working. Breakout management is not
+about giving endless room to be right eventually; it is about being paid quickly when the read
+is correct.
+
+\subsubsection{Algorithmic translation}
+
+Possible components include:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item number of recent tests of the same level,
+  \item compression metrics such as shallower pullbacks or decreasing time away from the level,
+  \item aggressive flow burst at and just after the break,
+  \item change in displayed far-side liquidity after the level gives way,
+  \item first-second post-break excursion, retrace size, and acceptance duration.
+\end{itemize}
+
+The hard part is separating genuine continuation from noise around obvious levels. The tapes
+make that possible in principle, but only if live capture preserves timing and sequencing
+accurately.
+
+\subsection{False breakout and failed continuation}
+
+\subsubsection{What the setup is}
+
+The false breakout is the mirror image of the breakout. A level appears to give way, the crowd
+commits, but continuation fails and price returns back through the trigger area. In the logic
+of the materials, this is one of the most informative events because it reveals that apparent
+strength was not real strength.
+
+\subsubsection{Why it is believed to work}
+
+If a level attracts breakout participation and still cannot hold, someone stronger is likely on
+the other side. Failed continuation also means the move has just trapped the most emotionally
+committed participants. Their exits can become the fuel for the reversal.
+
+\subsubsection{How to observe it}
+
+Watch for a breach without sustained follow-through, quick return into the prior range,
+disappearing urgency on the tape, or evidence that the move into the break was mostly a stop
+run rather than genuine acceptance. In practice, this setup often shares the same ingredients as
+breakout analysis, but interpreted after the move proves itself false.
+
+\subsubsection{Algorithmic translation}
+
+Measure:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item time spent beyond the broken level,
+  \item maximum excursion beyond the level before re-entry,
+  \item aggressive flow during the break versus during the reversal,
+  \item recovery back through the trigger zone,
+  \item whether the previous liquidity that was supposed to disappear actually reappears.
+\end{itemize}
+
+This setup is an especially good candidate for later ML filtering because ``healthy breakout''
+versus ``failed breakout'' often depends on short-lived interactions among depth, trade flow,
+and context rather than a single threshold.

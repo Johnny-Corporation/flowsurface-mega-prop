@@ -1,0 +1,85 @@
+\section{Scope, Evidence, and Working Assumptions}
+
+\subsection{Purpose of this document}
+
+The repository is not being treated as a toy order book bot project. The working target is a
+serious discretionary-to-systematic research framework for intraday trading based on the same
+information channels used by professional short-term prop traders: visible order book depth,
+tape / prints, execution feedback, market context, and day-specific behavior. The immediate
+goal of this document is therefore not to claim a finished strategy. The immediate goal is to
+convert a diffuse knowledge base into a structured specification that can later be tested,
+challenged, and encoded.
+
+The materials mix beginner-oriented books, prop-infrastructure texts, and much more
+practical lesson transcripts centered on reading the DOM. Because of that, the formalization
+must separate three layers:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \term{Explicit claims}: statements that appear clearly and repeatedly in the materials.
+  \item \term{Operational heuristics}: practical rules implied by repeated examples, even when not
+        stated as formal laws.
+  \item \term{Fuzzy discretionary content}: concepts that experienced traders clearly use, but which
+        remain context-dependent and only partially specified.
+\end{itemize}
+
+\subsection{Sources covered}
+
+This document is based on all relevant material present in the repository at the time of
+writing.
+
+\begin{longtable}{p{0.23\linewidth} p{0.51\linewidth} p{0.18\linewidth}}
+\toprule
+\textbf{Source group} & \textbf{What it contributes} & \textbf{Evidence weight} \\
+\midrule
+\endhead
+Professional Scalping book & General scalping workflow, DOM and tape terminology, density bounce / breakout logic, cluster / PoC extensions, robot trading, and broad execution guidance. & Medium \\
+Risk Management in Trading book & Deposit sizing, daily loss logic, per-trade limits, stop discipline, psychological traps, and journaling / review discipline. & Medium \\
+Prop Trading on Moscow Exchange book & Prop infrastructure, risk-manager role, brokerage / exchange mechanics, stable access to market, server and operational controls. & Medium \\
+Alexey Lipovoy lesson transcripts & Detailed discretionary setup logic from practice: densities, icebergs, robots, bounce, breakout, spring trades, plank trades, news reaction, market preparation, and self-analysis. & High \\
+Existing repo data and viewer code & Concrete reminder that the project already contains old order-book-only Russian historical data and practical viewer tools, but still lacks a complete live capture stack for trades and executions. & High \\
+\bottomrule
+\end{longtable}
+
+Two transcript files in the repository are empty in local storage at the time of writing:
+``volatility harvesting'' and ``psychology.'' That does not mean those topics are absent from
+the knowledge base overall; it means the local evidence for them is indirect and must be
+reconstructed from the other materials.
+
+\subsection{How to read confidence in the rest of the document}
+
+Confidence in this document should be interpreted in a research sense, not in a trading
+marketing sense.
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \term{High confidence} means the idea appears repeatedly across the transcripts and is framed
+        in a stable way.
+  \item \term{Medium confidence} means the idea is clearly present but either broader than the raw
+        evidence or partly inferred from examples.
+  \item \term{Low confidence} means the idea is real enough to track, but still too fuzzy, too
+        market-specific, or too weakly evidenced to treat as encoded truth.
+\end{itemize}
+
+\subsection{Project-level assumptions embedded here}
+
+Several assumptions are not ``book knowledge'' in the narrow sense, but they are necessary to
+make the repository coherent:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item The long-term framework must use \term{order book + tape / prints + executions + context}, not
+        order book snapshots alone.
+  \item Historical Russian order-book-only data is useful for weak replay and directional sanity
+        checks, but it is not enough to justify aggressive ML claims or fully trust backtest
+        profitability.
+  \item The correct progression is: formalize claims, test simple relationships, implement rule-based
+        pattern detectors, then consider more adaptive filters and later ML overlays.
+  \item Same-day calibration is a first-class research theme: the market should be observed in the
+        opening phase to estimate what types of behavior are working \emph{today} for \emph{this}
+        instrument before capital is deployed more aggressively.
+\end{itemize}
+
+\subsection{What this document is not}
+
+This document is not a promise that every described setup still works unchanged in current
+crypto or current Russian markets. It is not a set of guaranteed entry rules. It is not a
+substitute for live observation. It is a structured bridge between discretionary training
+materials and future empirical research.

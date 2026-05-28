@@ -1,0 +1,44 @@
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage{microtype}
+\usepackage{tabularx}
+\usepackage{titlesec}
+\usepackage[table]{xcolor}
+
+\definecolor{TitleNavy}{HTML}{1F3A5F}
+\definecolor{AccentTeal}{HTML}{0F766E}
+\definecolor{SoftGray}{HTML}{F3F4F6}
+\definecolor{BorderGray}{HTML}{D1D5DB}
+\definecolor{WarnAmber}{HTML}{92400E}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=TitleNavy,
+  urlcolor=AccentTeal,
+  citecolor=TitleNavy,
+  pdftitle={Formalization of the Discretionary Microstructure Knowledge Base},
+  pdfauthor={Codex for Johnny},
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{Microstructure Knowledge Formalization}
+\fancyfoot[C]{\thepage}
+\setlength{\headheight}{14pt}
+
+\setlist[itemize]{topsep=4pt,itemsep=3pt,leftmargin=1.5em}
+\setlist[enumerate]{topsep=4pt,itemsep=3pt,leftmargin=1.7em}
+
+\titleformat{\section}{\Large\bfseries\color{TitleNavy}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries\color{AccentTeal}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.6em}{}
+
+\newcommand{\setupfield}[2]{\paragraph{#1}#2\par}
+\newcommand{\sourceentry}[2]{\textbf{#1}: #2\par}
+\newcommand{\important}[1]{\textbf{\color{WarnAmber}#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}

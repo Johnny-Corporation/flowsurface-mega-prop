@@ -1,0 +1,112 @@
+\section{Contextual and Specialized Setups}
+
+\subsection{Spring trades: stretched impulse mean reversion}
+
+The ``spring'' setup describes a market that moves too far too fast in one direction. The key
+idea is not simply overbought / oversold language. The key idea is that a one-directional
+impulse through a thin book can stretch the local market so much that even small opposing
+passive interest becomes meaningful.
+
+The clean version is: one strong impulse, little pullback, obvious stretching, then visible
+resistance appears near the extreme. The trader does not need enormous opposing size because
+the stretch itself supplies the vulnerability. In the transcript example, a small cluster of
+passive orders becomes enough because the market is already ``wound up.''
+
+\paragraph{Algorithmic translation.}
+Measure one-way displacement over short windows, lack of intermediate retracements, local book
+emptiness, and first opposing liquidity near the extreme. This setup is really a context-
+dependent bounce: weak passive resistance can become strong \emph{because} the path to it was so
+imbalanced.
+
+\subsection{Plank or limit-state trades}
+
+The plank lesson is explicit about danger. When a market reaches its daily limit state, price
+behavior becomes non-linear. Expansion timing is uncertain. When the limit expands, price often
+shoots in the direction of the plank first, but the environment is described as ``inadequate''
+or structurally abnormal. That is a warning, not an invitation.
+
+This setup belongs in the catalog because it matters operationally, but it should be treated as
+a specialist regime. A future research engine should classify limit-state behavior as a regime
+change with separate rules rather than as a standard continuation or fade setup.
+
+\paragraph{Algorithmic translation.}
+Detect proximity to exchange-imposed daily limit boundaries, time spent pinned, repeated queue
+stacking near the boundary, and first post-expansion impulse. Confidence should remain low until
+the platform has actual live data on enough such episodes.
+
+\subsection{News reaction setups}
+
+The news lesson gives one of the most useful research principles in the entire knowledge base:
+the trader does not try to interpret whether the news is ``good'' or ``bad'' in an abstract
+sense. The trader watches how the market reacts. News is treated as a warning that a strong move
+may appear. The actual trade still comes from order flow.
+
+This has several implications:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item News is a \term{context activator}, not a complete trading signal.
+  \item Reaction quality matters more than headline semantics.
+  \item Different instruments can express the same news through different leader channels.
+  \item The right question is not ``what should happen?'' but ``what are participants doing now?''
+\end{itemize}
+
+\paragraph{Algorithmic translation.}
+Use scheduled-news calendars as binary context flags, then evaluate post-event volatility burst,
+depth thinning, trade intensity, and the first accepted direction. Event studies around fixed
+news windows are more realistic than trying to infer narrative sentiment from the source
+material alone.
+
+\subsection{Guide-instrument, spot-futures, and leader-follower logic}
+
+One transcript makes a strong claim that several related instruments can trade as one logical
+instrument. The clearest example is spot, tomorrow settlement, and futures in currency markets.
+If a meaningful iceberg or density appears in the leader, the followers may stall until it is
+resolved. This is a concrete form of leader-follower logic rather than a vague correlation
+claim.
+
+For research purposes, this means cross-instrument event linking is essential. A density event
+in one venue or settlement type can explain the delayed behavior of a related contract. This is
+especially relevant for the Russian market, where related contracts and settlement variants can
+interact tightly.
+
+\paragraph{Algorithmic translation.}
+Record synchronized books and trades for related instruments. Detect whether an event in the
+leader precedes stalling, breakout, or bounce in the follower. Measure lag, consistency, and
+whether the relationship is stable only at certain times of day.
+
+\subsection{PoC, cluster, and level-based extensions}
+
+The Professional Scalping book adds a broader family of setups around historical volume
+clusters and Point of Control. The key conceptual phrase is excellent: PoC can be treated as
+``densities from the past.'' This generalizes the DOM idea. Some liquidity is visible \emph{now};
+other relevant interest is inferred from where the market previously did the most business.
+
+That gives a hierarchy of levels:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item obvious chart levels,
+  \item current visible DOM density,
+  \item historical cluster or PoC concentration,
+  \item smart-money style zones inferred from large-participant behavior.
+\end{itemize}
+
+The practical lesson is not that every PoC should be traded. The practical lesson is that
+current order-book events gain meaning when they happen at a historically important price.
+
+\subsection{Smart Money framing}
+
+The book's Smart Money framing is conceptually useful but operationally fuzzy. It argues that
+large institutions and major prop participants move markets and that the trader's job is to read
+their intentions. This overlaps with iceberg logic, robot logic, and leader-follower logic. In
+practice, Smart Money should be interpreted as a \term{meta-description} of several smaller
+observable mechanisms rather than as one direct trigger.
+
+\subsection{Spread capture and volatility harvesting}
+
+Even though the dedicated local transcript file is empty, the broader materials imply a class of
+trades focused less on major directional bets and more on short-lived microstructure dislocation:
+wide spread, local inefficiency, temporary imbalance, and rapid normalization. This is likely
+what later automation could exploit best in liquid markets, especially in crypto.
+
+However, this remains weakly specified in the current repository. It should therefore be treated
+as a future research branch rather than a fully formalized setup today.

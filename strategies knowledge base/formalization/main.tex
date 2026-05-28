@@ -1,0 +1,50 @@
+\documentclass[11pt]{article}
+
+\input{macros}
+
+\begin{document}
+\pagenumbering{arabic}
+
+\begingroup
+\thispagestyle{plain}
+\begin{center}
+{\LARGE\bfseries Formalization of the Discretionary Market Microstructure Knowledge Base\par}
+\vspace{0.5em}
+{\large Crypto and Russian Intraday / MFT-Style Research Framework\par}
+\vspace{0.75em}
+{\normalsize Repository knowledge-base synthesis prepared for Johnny\par}
+\vspace{0.5em}
+{\small Sources: Russian scalping, prop-trading, and risk-management books plus transcript-derived video material\par}
+\end{center}
+
+\vspace{0.5em}
+\noindent
+\colorbox{SoftGray}{
+\parbox{\dimexpr\linewidth-2\fboxsep}{
+\textbf{Document intent.}
+This report translates the repository's discretionary trading materials into explicit research language \emph{and} into an operational trading playbook.
+It does not claim that every source idea is correct, current, or robust.
+Its purpose is to preserve the human logic, expose ambiguity, show how a trader would actually search for and qualify each setup in real time, and map each idea into testable components for logging, replay, feature engineering, rule-based detection, and later ML overlays.
+}}
+
+\vspace{0.8em}
+{\small
+\setcounter{tocdepth}{2}
+\tableofcontents
+}
+\endgroup
+
+\clearpage
+\input{sections/01_scope_and_sources}
+\input{sections/02_foundations}
+\input{sections/03_setups}
+\input{sections/04_combination_and_context}
+\input{sections/05_risk_and_execution}
+\input{sections/06_algorithmic_translation}
+\input{sections/07_data_and_roadmap}
+\input{sections/08_open_questions}
+
+\appendix
+\input{sections/appendix_sources}
+
+\end{document}

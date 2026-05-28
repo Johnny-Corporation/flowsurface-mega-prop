@@ -1,0 +1,52 @@
+\section{Sources and Caveats}
+
+\subsection{Source inventory}
+
+Table~\ref{tab:source_inventory} summarizes the main source groups used for this formalization.
+
+\begin{longtable}{L{0.23\textwidth}L{0.16\textwidth}L{0.52\textwidth}}
+\caption{Repository knowledge-base sources used in this document}\label{tab:source_inventory}\\
+\toprule
+Source group & Approx.\ size & Contribution to this formalization \\
+\midrule
+\endfirsthead
+\toprule
+Source group & Approx.\ size & Contribution to this formalization \\
+\midrule
+\endhead
+Book: ``Professional Scalping'' & 83 pages & General scaffolding: what scalping is, how DOM / tape / clusters are used, strategy families such as density bounce, density breakout, POC-based logic, Smart Money framing, and robot observation. \\
+Book: ``Risk Management in Trading'' & 59 pages & Daily-loss logic, per-trade risk budgeting, stop and take-profit discipline, psychology of tilt and overtrading, and how intraday risk differs from longer-horizon risk. \\
+Book: ``Prop Trading on Moscow Exchange'' & 52 pages & Prop infrastructure, risk-manager logic, deep DOM usage, collocation and execution environment, and the business-side framing that supports strict trader controls. \\
+Transcript series by Alexey Lipovoy & 20 lessons; 18 non-empty files & The richest repository of discretionary pattern language and trader heuristics: densities, icebergs, robots, bounce, breakout, springs, planki, news reactions, decision logic, and trade review. \\
+Historical Russian market files in QSH mirror & Large but uneven & Practical replay/backtest substrate for order-book-only experimentation. The data is incomplete, old, sparse, and frequently unsuitable for strong inference. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Important caveats about completeness}
+
+Two transcript files that should have been useful are empty in the repository snapshot used here:
+
+\begin{itemize}[leftmargin=1.5em]
+\item ``17. Volatility Harvesting''
+\item ``20. Psychology''
+\end{itemize}
+
+That means the document can only infer those topics indirectly from neighboring lessons, the books, and recurring references elsewhere. Whenever such inference is used, it is called out explicitly rather than presented as if the repository had contained a complete source.
+
+\subsection{Translation caveat}
+
+The original material is predominantly in Russian. This document is written in English and aims to preserve meaning rather than literal phrasing. In practical terms, that means the document prefers expressions such as ``visible density,'' ``hidden liquidity,'' ``false breakout,'' ``robot behavior,'' and ``spring'' because those phrases are the most natural English equivalents of the underlying trading concepts.
+
+\subsection{Data caveat}
+
+The repository already contains a large amount of old Russian historical order book material mirrored from QSH files. This data is \Important{not} a clean institutional-grade dataset. Its limitations matter:
+
+\begin{itemize}[leftmargin=1.5em]
+\item many order books are sparse or nearly empty;
+\item the history is old and may describe market microstructure that no longer behaves the same way;
+\item the usable subset often contains order book information without a reliable synchronized tape;
+\item apparent relationships found in that data can be artifacts of sparse liquidity rather than durable edge;
+\item the data is much more suitable for replay, rough sanity checks, and feature prototyping than for definitive backtest proof.
+\end{itemize}
+
+Accordingly, the document treats historical backtests from these files as \Important{directional evidence}, while emphasizing the need for live data logging on Bybit and T-Invest to build a stronger research base.
