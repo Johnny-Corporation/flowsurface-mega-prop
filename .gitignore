@@ -3,5 +3,6 @@
 /.vscode
 *.log
 /logs/
+/docs/
 AGENTS.md
 /.codex/
