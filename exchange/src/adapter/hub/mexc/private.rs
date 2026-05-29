@@ -46,6 +46,10 @@ impl MexcCredentials {
     pub fn access_key(&self) -> &str {
         &self.access_key
     }
+
+    pub fn futures_ws_signature(&self, timestamp_ms: u64) -> String {
+        sign_futures_payload(&self.access_key, timestamp_ms, "", &self.secret_key)
+    }
 }
 
 impl fmt::Debug for MexcCredentials {

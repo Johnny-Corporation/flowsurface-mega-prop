@@ -23,6 +23,10 @@ pub use hub::mexc::private::{
     SpotOrderRequest, SpotOrderSide, SpotOrderType, available_balances_from_futures_assets,
     available_balances_from_spot_account,
 };
+pub use hub::mexc::private_ws::{
+    MexcPrivateOrderUpdate, MexcPrivatePositionUpdate, MexcPrivateWsEvent,
+    run_mexc_private_ws_blocking,
+};
 pub use proxy::Proxy;
 
 /// Buffer trades and flush in this interval

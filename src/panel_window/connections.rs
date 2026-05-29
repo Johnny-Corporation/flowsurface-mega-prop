@@ -10,8 +10,9 @@ use data::config::connection_credentials::{
 };
 use exchange::adapter::{
     Exchange, FuturesOpenType, FuturesOrderRequest, FuturesOrderSide, FuturesOrderType,
-    MexcBlockingPrivateClient, MexcCredentials, MexcFuturesResponse,
-    available_balances_from_futures_assets, available_balances_from_spot_account,
+    MexcBlockingPrivateClient, MexcCredentials, MexcFuturesResponse, MexcPrivateOrderUpdate,
+    MexcPrivatePositionUpdate, MexcPrivateWsEvent, available_balances_from_futures_assets,
+    available_balances_from_spot_account, run_mexc_private_ws_blocking,
 };
 use iced::{
     Alignment, Element, Length, Theme, padding,
@@ -22,7 +23,8 @@ use serde_json::Value;
 use std::{
     cmp::Reverse,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -61,6 +63,7 @@ const MEXC_SPOT_PUBLIC_PING_URL: &str = "https://api.mexc.com/api/v3/time";
 const MEXC_FUTURES_PUBLIC_PING_URL: &str = "https://api.mexc.com/api/v1/contract/detail";
 const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(6);
 const TRADING_STATE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const LIVE_POSITION_EPSILON: f32 = 0.000001;
 static LIVE_ORDER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -76,6 +79,8 @@ pub(crate) struct ConnectionPanelState {
     probe_rx: Receiver<ConnectionProbeResult>,
     next_trading_state_refresh: Option<Instant>,
     trading_state_refresh_in_flight: bool,
+    private_ws: Option<PrivateWsHandle>,
+    private_ws_connected: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +98,12 @@ pub(crate) struct ConnectionAccountBalance {
     pub source: String,
     pub asset: String,
     pub available: String,
+}
+
+#[derive(Debug)]
+struct PrivateWsHandle {
+    row_id: String,
+    stop: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +173,8 @@ impl Default for ConnectionPanelState {
             probe_rx,
             next_trading_state_refresh: None,
             trading_state_refresh_in_flight: false,
+            private_ws: None,
+            private_ws_connected: false,
         }
     }
 }
@@ -172,6 +185,7 @@ impl ConnectionPanelState {
             self.apply_probe_result(result);
         }
 
+        self.ensure_private_ws();
         self.refresh_trading_state_if_due(now);
     }
 
@@ -424,6 +438,7 @@ impl ConnectionPanelState {
         let label = row.label();
 
         if row.enabled {
+            let row_id = row.id.clone();
             row.enabled = false;
             row.test_state = ConnectionTestState::Idle;
             row.balances.clear();
@@ -432,6 +447,7 @@ impl ConnectionPanelState {
             row.positions.clear();
             self.last_action = "Toggle".to_string();
             self.push_log(format!("[connections] {label} disabled"));
+            self.stop_private_ws_for(&row_id);
             self.persist_rows();
             return;
         }
@@ -602,7 +618,7 @@ impl ConnectionPanelState {
                 positions: Vec::new(),
                 state_only: false,
                 log_only: None,
-                optimistic_order_id: None,
+                private_ws_event: None,
             });
             return;
         };
@@ -638,20 +654,15 @@ impl ConnectionPanelState {
 
         let row_id = row.id.clone();
         let order = LiveLimitOrderSpec::new(reference.clone(), intent);
-        let optimistic_order = order.optimistic_open_order();
-        let optimistic_order_id = optimistic_order.order_id.clone();
         self.last_action = "Order submitted".to_string();
         self.push_log(format!(
             "[trading] Submitting {} {} {} @ {}",
             order.symbol, order.side_label, order.quantity, order.price
         ));
-        self.upsert_live_open_order(&row_id, optimistic_order);
 
         let tx = self.probe_tx.clone();
-        let result_row_id = row_id.clone();
         thread::spawn(move || {
-            let result = run_live_limit_order(result_row_id, order)
-                .with_optimistic_order_id(optimistic_order_id);
+            let result = run_live_limit_order(row_id, order);
             let _ = tx.send(result);
         });
     }
@@ -734,28 +745,164 @@ impl ConnectionPanelState {
             .find(|row| row.is_connected() && row.mode == ConnectionMode::Trade)
     }
 
-    fn upsert_live_open_order(&mut self, row_id: &str, order: LiveOpenOrder) {
-        let Some(row) = self.rows.iter_mut().find(|row| row.id == row_id) else {
+    fn ensure_private_ws(&mut self) {
+        let desired = self.active_trading_row().and_then(|row| {
+            if row.exchange != ConnectionExchange::Mexc || row.market != ConnectionMarket::Futures {
+                return None;
+            }
+
+            let CredentialState::Saved { reference, .. } = &row.credentials else {
+                return None;
+            };
+
+            Some((row.id.clone(), reference.clone()))
+        });
+
+        let Some((row_id, reference)) = desired else {
+            self.stop_private_ws();
             return;
         };
 
-        if let Some(existing) = row
-            .open_orders
-            .iter_mut()
-            .find(|existing| existing.order_id == order.order_id)
+        if self
+            .private_ws
+            .as_ref()
+            .is_some_and(|ws| ws.row_id == row_id)
         {
-            *existing = order;
-        } else {
-            row.open_orders.push(order);
+            return;
+        }
+
+        self.stop_private_ws();
+        self.start_private_ws(row_id, reference);
+    }
+
+    fn start_private_ws(&mut self, row_id: String, reference: ConnectionCredentialRef) {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_thread = Arc::clone(&stop);
+        let tx = self.probe_tx.clone();
+        let event_row_id = row_id.clone();
+
+        thread::spawn(move || {
+            let vault_key = match load_or_create_device_vault_key() {
+                Ok(vault_key) => vault_key,
+                Err(error) => {
+                    let _ = tx.send(ConnectionProbeResult::private_ws(
+                        event_row_id.clone(),
+                        MexcPrivateWsEvent::Error(format!(
+                            "Private WebSocket credential vault failed: {error}"
+                        )),
+                    ));
+                    return;
+                }
+            };
+            let secret = match load_connection_secret(&reference, &vault_key) {
+                Ok(Some(secret)) => secret,
+                Ok(None) => {
+                    let _ = tx.send(ConnectionProbeResult::private_ws(
+                        event_row_id.clone(),
+                        MexcPrivateWsEvent::Error(
+                            "Private WebSocket credentials were not found".to_string(),
+                        ),
+                    ));
+                    return;
+                }
+                Err(error) => {
+                    let _ = tx.send(ConnectionProbeResult::private_ws(
+                        event_row_id.clone(),
+                        MexcPrivateWsEvent::Error(format!(
+                            "Private WebSocket credentials failed: {error}"
+                        )),
+                    ));
+                    return;
+                }
+            };
+            let credentials = match MexcCredentials::new(secret.access_key(), secret.secret_key()) {
+                Ok(credentials) => credentials,
+                Err(error) => {
+                    let _ = tx.send(ConnectionProbeResult::private_ws(
+                        event_row_id.clone(),
+                        MexcPrivateWsEvent::Error(format!(
+                            "Private WebSocket credentials are invalid: {error}"
+                        )),
+                    ));
+                    return;
+                }
+            };
+
+            run_mexc_private_ws_blocking(credentials, None, stop_for_thread, move |event| {
+                let _ = tx.send(ConnectionProbeResult::private_ws(
+                    event_row_id.clone(),
+                    event,
+                ));
+            });
+        });
+
+        self.private_ws = Some(PrivateWsHandle { row_id, stop });
+        self.private_ws_connected = false;
+        self.push_log("[trading] MEXC private WebSocket starting".to_string());
+    }
+
+    fn stop_private_ws_for(&mut self, row_id: &str) {
+        if self
+            .private_ws
+            .as_ref()
+            .is_some_and(|ws| ws.row_id == row_id)
+        {
+            self.stop_private_ws();
         }
     }
 
-    fn remove_live_open_order(&mut self, row_id: &str, order_id: &str) {
-        let Some(row) = self.rows.iter_mut().find(|row| row.id == row_id) else {
-            return;
-        };
+    fn stop_private_ws(&mut self) {
+        if let Some(ws) = self.private_ws.take() {
+            ws.stop.store(true, Ordering::Relaxed);
+        }
+        self.private_ws_connected = false;
+    }
 
-        row.open_orders.retain(|order| order.order_id != order_id);
+    fn apply_private_ws_event(&mut self, row_id: &str, event: MexcPrivateWsEvent) {
+        if self
+            .private_ws
+            .as_ref()
+            .is_none_or(|ws| ws.row_id != row_id)
+        {
+            return;
+        }
+
+        match event {
+            MexcPrivateWsEvent::Connected => {
+                self.last_action = "Private stream".to_string();
+            }
+            MexcPrivateWsEvent::LoggedIn => {
+                self.private_ws_connected = true;
+                self.next_trading_state_refresh = None;
+                self.last_action = "Private stream".to_string();
+                self.push_log("[trading] MEXC private WebSocket authenticated".to_string());
+            }
+            MexcPrivateWsEvent::Disconnected(reason) => {
+                self.private_ws_connected = false;
+                self.last_action = "Private stream disconnected".to_string();
+                self.push_log(format!(
+                    "[trading] MEXC private WebSocket disconnected: {reason}"
+                ));
+            }
+            MexcPrivateWsEvent::Error(error) => {
+                self.last_action = "Private stream error".to_string();
+                self.push_log(format!("[trading] MEXC private WebSocket error: {error}"));
+            }
+            MexcPrivateWsEvent::Order(update) => {
+                if let Some(row) = self.rows.iter_mut().find(|row| row.id == row_id)
+                    && apply_private_order_update(&mut row.open_orders, &update)
+                {
+                    self.last_action = "Private order".to_string();
+                }
+            }
+            MexcPrivateWsEvent::Position(update) => {
+                if let Some(row) = self.rows.iter_mut().find(|row| row.id == row_id)
+                    && apply_private_position_update(&mut row.positions, &update)
+                {
+                    self.last_action = "Private position".to_string();
+                }
+            }
+        }
     }
 
     fn refresh_trading_state_if_due(&mut self, now: Instant) {
@@ -779,6 +926,16 @@ impl ConnectionPanelState {
         };
 
         if self
+            .private_ws
+            .as_ref()
+            .is_some_and(|ws| ws.row_id == row_id)
+            && self.private_ws_connected
+        {
+            self.next_trading_state_refresh = None;
+            return;
+        }
+
+        if self
             .next_trading_state_refresh
             .is_some_and(|next| now < next)
         {
@@ -795,6 +952,11 @@ impl ConnectionPanelState {
     }
 
     fn apply_probe_result(&mut self, result: ConnectionProbeResult) {
+        if let Some(event) = result.private_ws_event {
+            self.apply_private_ws_event(&result.row_id, event);
+            return;
+        }
+
         if let Some(message) = result.log_only {
             self.last_action = "Trading".to_string();
             self.push_log(message);
@@ -808,22 +970,10 @@ impl ConnectionPanelState {
                     let is_poll_update = message.contains("State refreshed");
                     let mut should_log = !is_poll_update;
                     if let Some(row) = self.rows.iter_mut().find(|row| row.id == result.row_id) {
-                        let mut open_orders = result.open_orders;
-                        if let Some(order_id) = result.optimistic_order_id.as_deref()
-                            && !open_orders.iter().any(|order| order.order_id == order_id)
-                            && let Some(optimistic_order) = row
-                                .open_orders
-                                .iter()
-                                .find(|order| order.order_id == order_id)
-                                .cloned()
-                        {
-                            open_orders.push(optimistic_order);
-                        }
-
-                        let changed =
-                            row.open_orders != open_orders || row.positions != result.positions;
+                        let changed = row.open_orders != result.open_orders
+                            || row.positions != result.positions;
                         should_log |= changed;
-                        row.open_orders = open_orders;
+                        row.open_orders = result.open_orders;
                         row.positions = result.positions;
                     }
                     self.last_action = "Trading state".to_string();
@@ -832,9 +982,6 @@ impl ConnectionPanelState {
                     }
                 }
                 Err(error) => {
-                    if let Some(order_id) = result.optimistic_order_id.as_deref() {
-                        self.remove_live_open_order(&result.row_id, order_id);
-                    }
                     self.last_action = "Trading state failed".to_string();
                     self.push_log(format!("[trading] {error}"));
                 }
@@ -1225,21 +1372,35 @@ struct ConnectionProbeResult {
     positions: Vec<LivePosition>,
     state_only: bool,
     log_only: Option<String>,
-    optimistic_order_id: Option<String>,
+    private_ws_event: Option<MexcPrivateWsEvent>,
 }
 
 impl ConnectionProbeResult {
-    fn trading_log(message: String) -> Self {
+    fn trading_log(row_id: String, message: String) -> Self {
         Self {
-            row_id: String::new(),
+            row_id,
+            outcome: Ok(format!("[trading] {message}")),
+            balances: Vec::new(),
+            trades: Vec::new(),
+            open_orders: Vec::new(),
+            positions: Vec::new(),
+            state_only: false,
+            log_only: Some(format!("[trading] {message}")),
+            private_ws_event: None,
+        }
+    }
+
+    fn private_ws(row_id: String, event: MexcPrivateWsEvent) -> Self {
+        Self {
+            row_id,
             outcome: Ok(String::new()),
             balances: Vec::new(),
             trades: Vec::new(),
             open_orders: Vec::new(),
             positions: Vec::new(),
             state_only: false,
-            log_only: Some(message),
-            optimistic_order_id: None,
+            log_only: None,
+            private_ws_event: Some(event),
         }
     }
 
@@ -1257,13 +1418,8 @@ impl ConnectionProbeResult {
             positions: snapshot.positions,
             state_only: true,
             log_only: None,
-            optimistic_order_id: None,
+            private_ws_event: None,
         }
-    }
-
-    fn with_optimistic_order_id(mut self, order_id: String) -> Self {
-        self.optimistic_order_id = Some(order_id);
-        self
     }
 }
 
@@ -1283,7 +1439,7 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
             positions: success.positions,
             state_only: false,
             log_only: None,
-            optimistic_order_id: None,
+            private_ws_event: None,
         },
         Err(error) => ConnectionProbeResult {
             row_id: spec.row_id,
@@ -1294,7 +1450,7 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
             positions: Vec::new(),
             state_only: false,
             log_only: None,
-            optimistic_order_id: None,
+            private_ws_event: None,
         },
     }
 }
@@ -1313,6 +1469,78 @@ fn live_order_external_oid() -> String {
     format!("fs{}{:03}", chrono::Utc::now().timestamp_millis(), sequence)
 }
 
+fn apply_private_order_update(
+    open_orders: &mut Vec<LiveOpenOrder>,
+    update: &MexcPrivateOrderUpdate,
+) -> bool {
+    let before = open_orders.clone();
+
+    if let Some(order) = live_open_order_from_private_update(update) {
+        if let Some(existing) = open_orders
+            .iter_mut()
+            .find(|existing| existing.order_id == order.order_id)
+        {
+            *existing = order;
+        } else {
+            open_orders.push(order);
+        }
+    } else {
+        open_orders.retain(|order| order.order_id != update.order_id);
+    }
+
+    *open_orders != before
+}
+
+fn live_open_order_from_private_update(update: &MexcPrivateOrderUpdate) -> Option<LiveOpenOrder> {
+    if !matches!(update.state, 1 | 2) {
+        return None;
+    }
+
+    let contracts = update.remain_vol.unwrap_or(update.vol);
+    if contracts <= LIVE_POSITION_EPSILON {
+        return None;
+    }
+
+    Some(LiveOpenOrder {
+        symbol: update.symbol.clone(),
+        side: match update.side {
+            1 | 2 => LiveOrderSide::Buy,
+            3 | 4 => LiveOrderSide::Sell,
+            _ => return None,
+        },
+        price: exchange::unit::Price::from_f32(update.price),
+        contracts,
+        order_id: update.order_id.clone(),
+    })
+}
+
+fn apply_private_position_update(
+    positions: &mut Vec<LivePosition>,
+    update: &MexcPrivatePositionUpdate,
+) -> bool {
+    let before = positions.clone();
+    let side_sign = match update.position_type {
+        1 => 1.0,
+        2 => -1.0,
+        _ => return false,
+    };
+
+    positions.retain(|position| {
+        position.symbol != update.symbol || position.contracts.signum() != side_sign
+    });
+
+    if !matches!(update.state, Some(3)) && update.hold_vol > LIVE_POSITION_EPSILON {
+        positions.push(LivePosition {
+            symbol: update.symbol.clone(),
+            contracts: side_sign * update.hold_vol,
+            avg_entry: update.hold_avg_price.or(update.open_avg_price),
+            realized_pnl: update.realised,
+        });
+    }
+
+    *positions != before
+}
+
 #[derive(Debug, Clone)]
 struct LiveLimitOrderSpec {
     credential_ref: ConnectionCredentialRef,
@@ -1320,9 +1548,7 @@ struct LiveLimitOrderSpec {
     side: FuturesOrderSide,
     side_label: &'static str,
     price: String,
-    marker_price: exchange::unit::Price,
     quantity: String,
-    quantity_contracts: f32,
     external_oid: String,
 }
 
@@ -1347,27 +1573,8 @@ impl LiveLimitOrderSpec {
             side,
             side_label,
             price,
-            marker_price: intent.price,
             quantity,
-            quantity_contracts,
             external_oid: live_order_external_oid(),
-        }
-    }
-
-    fn optimistic_open_order(&self) -> LiveOpenOrder {
-        LiveOpenOrder {
-            symbol: self.symbol.clone(),
-            side: self.live_order_side(),
-            price: self.marker_price,
-            contracts: self.quantity_contracts,
-            order_id: self.external_oid.clone(),
-        }
-    }
-
-    fn live_order_side(&self) -> LiveOrderSide {
-        match self.side {
-            FuturesOrderSide::OpenLong | FuturesOrderSide::CloseShort => LiveOrderSide::Buy,
-            FuturesOrderSide::OpenShort | FuturesOrderSide::CloseLong => LiveOrderSide::Sell,
         }
     }
 }
@@ -1406,12 +1613,7 @@ impl LiveMarketOrderSpec {
 
 fn run_live_limit_order(row_id: String, spec: LiveLimitOrderSpec) -> ConnectionProbeResult {
     match try_run_live_limit_order(spec) {
-        Ok((message, Some(snapshot))) => ConnectionProbeResult::trading_state(
-            row_id,
-            Ok(format!("[trading] {message}")),
-            snapshot,
-        ),
-        Ok((message, None)) => ConnectionProbeResult::trading_log(format!("[trading] {message}")),
+        Ok(message) => ConnectionProbeResult::trading_log(row_id, message),
         Err(error) => ConnectionProbeResult::trading_state(
             row_id,
             Err(format!("Order failed: {error}")),
@@ -1420,9 +1622,7 @@ fn run_live_limit_order(row_id: String, spec: LiveLimitOrderSpec) -> ConnectionP
     }
 }
 
-fn try_run_live_limit_order(
-    spec: LiveLimitOrderSpec,
-) -> Result<(String, Option<LiveTradingSnapshot>), String> {
+fn try_run_live_limit_order(spec: LiveLimitOrderSpec) -> Result<String, String> {
     let vault_key = load_or_create_device_vault_key()?;
     let secret = load_connection_secret(&spec.credential_ref, &vault_key)?.ok_or_else(|| {
         "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
@@ -1449,40 +1649,16 @@ fn try_run_live_limit_order(
         .as_ref()
         .and_then(value_as_display_string)
         .unwrap_or_else(|| "unknown order id".to_string());
-    let snapshot = match futures_trading_snapshot(&client) {
-        Ok(snapshot) => Some(snapshot),
-        Err(error) => {
-            return Ok((
-                format!(
-                    "{} {} @ {} accepted as {}; state refresh failed: {}",
-                    spec.side_label, spec.quantity, spec.price, order_id, error
-                ),
-                None,
-            ));
-        }
-    };
-    let open_orders = snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.for_symbol(&spec.symbol).open_orders.len())
-        .unwrap_or_default();
 
-    Ok((
-        format!(
-            "{} {} @ {} accepted as {}; open orders visible: {}",
-            spec.side_label, spec.quantity, spec.price, order_id, open_orders
-        ),
-        snapshot,
+    Ok(format!(
+        "{} {} @ {} accepted as {}; waiting for private stream state",
+        spec.side_label, spec.quantity, spec.price, order_id
     ))
 }
 
 fn run_live_market_order(row_id: String, spec: LiveMarketOrderSpec) -> ConnectionProbeResult {
     match try_run_live_market_order(spec) {
-        Ok((message, Some(snapshot))) => ConnectionProbeResult::trading_state(
-            row_id,
-            Ok(format!("[trading] {message}")),
-            snapshot,
-        ),
-        Ok((message, None)) => ConnectionProbeResult::trading_log(format!("[trading] {message}")),
+        Ok(message) => ConnectionProbeResult::trading_log(row_id, message),
         Err(error) => ConnectionProbeResult::trading_state(
             row_id,
             Err(format!("Market order failed: {error}")),
@@ -1491,9 +1667,7 @@ fn run_live_market_order(row_id: String, spec: LiveMarketOrderSpec) -> Connectio
     }
 }
 
-fn try_run_live_market_order(
-    spec: LiveMarketOrderSpec,
-) -> Result<(String, Option<LiveTradingSnapshot>), String> {
+fn try_run_live_market_order(spec: LiveMarketOrderSpec) -> Result<String, String> {
     let vault_key = load_or_create_device_vault_key()?;
     let secret = load_connection_secret(&spec.credential_ref, &vault_key)?.ok_or_else(|| {
         "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
@@ -1519,25 +1693,10 @@ fn try_run_live_market_order(
         .as_ref()
         .and_then(value_as_display_string)
         .unwrap_or_else(|| "unknown order id".to_string());
-    let snapshot = match futures_trading_snapshot(&client) {
-        Ok(snapshot) => Some(snapshot),
-        Err(error) => {
-            return Ok((
-                format!(
-                    "{} MARKET {} accepted as {}; state refresh failed: {}",
-                    spec.side_label, spec.quantity, order_id, error
-                ),
-                None,
-            ));
-        }
-    };
 
-    Ok((
-        format!(
-            "{} MARKET {} accepted as {}",
-            spec.side_label, spec.quantity, order_id
-        ),
-        snapshot,
+    Ok(format!(
+        "{} MARKET {} accepted as {}; waiting for private stream state",
+        spec.side_label, spec.quantity, order_id
     ))
 }
 
@@ -1547,12 +1706,7 @@ fn run_cancel_all_orders(
     symbol: &str,
 ) -> ConnectionProbeResult {
     match try_cancel_all_orders(reference, symbol) {
-        Ok((message, Some(snapshot))) => ConnectionProbeResult::trading_state(
-            row_id,
-            Ok(format!("[trading] {message}")),
-            snapshot,
-        ),
-        Ok((message, None)) => ConnectionProbeResult::trading_log(format!("[trading] {message}")),
+        Ok(message) => ConnectionProbeResult::trading_log(row_id, message),
         Err(error) => ConnectionProbeResult::trading_state(
             row_id,
             Err(format!("Cancel all failed: {error}")),
@@ -1564,7 +1718,7 @@ fn run_cancel_all_orders(
 fn try_cancel_all_orders(
     reference: ConnectionCredentialRef,
     symbol: &str,
-) -> Result<(String, Option<LiveTradingSnapshot>), String> {
+) -> Result<String, String> {
     let vault_key = load_or_create_device_vault_key()?;
     let secret = load_connection_secret(&reference, &vault_key)?.ok_or_else(|| {
         "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
@@ -1575,25 +1729,10 @@ fn try_cancel_all_orders(
     let response = client
         .futures_cancel_all_orders(symbol)
         .map_err(|error| error.to_string())?;
-    let snapshot = match futures_trading_snapshot(&client) {
-        Ok(snapshot) => Some(snapshot),
-        Err(error) => {
-            return Ok((
-                format!(
-                    "Cancel all accepted for {symbol}; success={} code={}; state refresh failed: {}",
-                    response.success, response.code, error
-                ),
-                None,
-            ));
-        }
-    };
 
-    Ok((
-        format!(
-            "Cancel all accepted for {symbol}; success={} code={}",
-            response.success, response.code
-        ),
-        snapshot,
+    Ok(format!(
+        "Cancel all accepted for {symbol}; success={} code={}; waiting for private stream state",
+        response.success, response.code
     ))
 }
 
@@ -2569,10 +2708,12 @@ fn icon_button<'a>(
 mod tests {
     use super::{
         ConnectionExchange, ConnectionMarket, ConnectionMode, ConnectionRow, MexcFuturesResponse,
-        PersistedConnectionRow, PersistedConnections, futures_history_records, futures_open_orders,
+        PersistedConnectionRow, PersistedConnections, apply_private_order_update,
+        apply_private_position_update, futures_history_records, futures_open_orders,
         futures_open_positions, last_enabled_connection_id,
     };
-    use crate::trading_state::LiveOrderSide;
+    use crate::trading_state::{LiveOrderSide, LivePosition};
+    use exchange::adapter::MexcPrivateOrderUpdate;
 
     #[test]
     fn futures_history_records_extracts_core_order_fields() {
@@ -2648,6 +2789,107 @@ mod tests {
         assert!((orders[0].price.to_f32_lossy() - 65000.5).abs() < 0.01);
         assert_eq!(orders[1].side, LiveOrderSide::Sell);
         assert_eq!(orders[1].contracts, 3.0);
+    }
+
+    #[test]
+    fn private_order_update_upserts_and_removes_confirmed_exchange_orders() {
+        let mut orders = Vec::new();
+
+        let changed = apply_private_order_update(
+            &mut orders,
+            &MexcPrivateOrderUpdate {
+                symbol: "BTC_USDT".to_string(),
+                side: 1,
+                state: 2,
+                price: 65000.5,
+                vol: 2.0,
+                remain_vol: Some(2.0),
+                order_id: "order-1".to_string(),
+            },
+        );
+
+        assert!(changed);
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].side, LiveOrderSide::Buy);
+        assert_eq!(orders[0].contracts, 2.0);
+
+        let changed = apply_private_order_update(
+            &mut orders,
+            &MexcPrivateOrderUpdate {
+                symbol: "BTC_USDT".to_string(),
+                side: 1,
+                state: 2,
+                price: 65000.5,
+                vol: 2.0,
+                remain_vol: Some(1.0),
+                order_id: "order-1".to_string(),
+            },
+        );
+
+        assert!(changed);
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].contracts, 1.0);
+
+        let changed = apply_private_order_update(
+            &mut orders,
+            &MexcPrivateOrderUpdate {
+                symbol: "BTC_USDT".to_string(),
+                side: 1,
+                state: 4,
+                price: 65000.5,
+                vol: 2.0,
+                remain_vol: Some(0.0),
+                order_id: "order-1".to_string(),
+            },
+        );
+
+        assert!(changed);
+        assert!(orders.is_empty());
+    }
+
+    #[test]
+    fn private_position_update_replaces_matching_side_without_touching_opposite_side() {
+        let mut positions = vec![LivePosition {
+            symbol: "BTC_USDT".to_string(),
+            contracts: -3.0,
+            avg_entry: Some(66000.0),
+            realized_pnl: 0.0,
+        }];
+
+        let changed = apply_private_position_update(
+            &mut positions,
+            &exchange::adapter::MexcPrivatePositionUpdate {
+                symbol: "BTC_USDT".to_string(),
+                position_type: 1,
+                state: Some(1),
+                hold_vol: 2.0,
+                hold_avg_price: Some(64000.0),
+                open_avg_price: None,
+                realised: 1.5,
+            },
+        );
+
+        assert!(changed);
+        assert_eq!(positions.len(), 2);
+        assert!(positions.iter().any(|position| position.contracts == -3.0));
+        assert!(positions.iter().any(|position| position.contracts == 2.0));
+
+        let changed = apply_private_position_update(
+            &mut positions,
+            &exchange::adapter::MexcPrivatePositionUpdate {
+                symbol: "BTC_USDT".to_string(),
+                position_type: 1,
+                state: Some(3),
+                hold_vol: 0.0,
+                hold_avg_price: None,
+                open_avg_price: None,
+                realised: 2.0,
+            },
+        );
+
+        assert!(changed);
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].contracts, -3.0);
     }
 
     #[test]
