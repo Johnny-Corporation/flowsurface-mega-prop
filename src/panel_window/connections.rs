@@ -21,7 +21,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     cmp::Reverse,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -58,6 +61,7 @@ const MEXC_SPOT_PUBLIC_PING_URL: &str = "https://api.mexc.com/api/v3/time";
 const MEXC_FUTURES_PUBLIC_PING_URL: &str = "https://api.mexc.com/api/v1/contract/detail";
 const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(6);
 const TRADING_STATE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+static LIVE_ORDER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
 pub(crate) struct ConnectionPanelState {
@@ -598,6 +602,7 @@ impl ConnectionPanelState {
                 positions: Vec::new(),
                 state_only: false,
                 log_only: None,
+                optimistic_order_id: None,
             });
             return;
         };
@@ -633,15 +638,20 @@ impl ConnectionPanelState {
 
         let row_id = row.id.clone();
         let order = LiveLimitOrderSpec::new(reference.clone(), intent);
+        let optimistic_order = order.optimistic_open_order();
+        let optimistic_order_id = optimistic_order.order_id.clone();
         self.last_action = "Order submitted".to_string();
         self.push_log(format!(
             "[trading] Submitting {} {} {} @ {}",
             order.symbol, order.side_label, order.quantity, order.price
         ));
+        self.upsert_live_open_order(&row_id, optimistic_order);
 
         let tx = self.probe_tx.clone();
+        let result_row_id = row_id.clone();
         thread::spawn(move || {
-            let result = run_live_limit_order(row_id, order);
+            let result = run_live_limit_order(result_row_id, order)
+                .with_optimistic_order_id(optimistic_order_id);
             let _ = tx.send(result);
         });
     }
@@ -724,6 +734,30 @@ impl ConnectionPanelState {
             .find(|row| row.is_connected() && row.mode == ConnectionMode::Trade)
     }
 
+    fn upsert_live_open_order(&mut self, row_id: &str, order: LiveOpenOrder) {
+        let Some(row) = self.rows.iter_mut().find(|row| row.id == row_id) else {
+            return;
+        };
+
+        if let Some(existing) = row
+            .open_orders
+            .iter_mut()
+            .find(|existing| existing.order_id == order.order_id)
+        {
+            *existing = order;
+        } else {
+            row.open_orders.push(order);
+        }
+    }
+
+    fn remove_live_open_order(&mut self, row_id: &str, order_id: &str) {
+        let Some(row) = self.rows.iter_mut().find(|row| row.id == row_id) else {
+            return;
+        };
+
+        row.open_orders.retain(|order| order.order_id != order_id);
+    }
+
     fn refresh_trading_state_if_due(&mut self, now: Instant) {
         if self.trading_state_refresh_in_flight {
             return;
@@ -774,10 +808,22 @@ impl ConnectionPanelState {
                     let is_poll_update = message.contains("State refreshed");
                     let mut should_log = !is_poll_update;
                     if let Some(row) = self.rows.iter_mut().find(|row| row.id == result.row_id) {
-                        let changed = row.open_orders != result.open_orders
-                            || row.positions != result.positions;
+                        let mut open_orders = result.open_orders;
+                        if let Some(order_id) = result.optimistic_order_id.as_deref()
+                            && !open_orders.iter().any(|order| order.order_id == order_id)
+                            && let Some(optimistic_order) = row
+                                .open_orders
+                                .iter()
+                                .find(|order| order.order_id == order_id)
+                                .cloned()
+                        {
+                            open_orders.push(optimistic_order);
+                        }
+
+                        let changed =
+                            row.open_orders != open_orders || row.positions != result.positions;
                         should_log |= changed;
-                        row.open_orders = result.open_orders;
+                        row.open_orders = open_orders;
                         row.positions = result.positions;
                     }
                     self.last_action = "Trading state".to_string();
@@ -786,6 +832,9 @@ impl ConnectionPanelState {
                     }
                 }
                 Err(error) => {
+                    if let Some(order_id) = result.optimistic_order_id.as_deref() {
+                        self.remove_live_open_order(&result.row_id, order_id);
+                    }
                     self.last_action = "Trading state failed".to_string();
                     self.push_log(format!("[trading] {error}"));
                 }
@@ -1176,6 +1225,7 @@ struct ConnectionProbeResult {
     positions: Vec<LivePosition>,
     state_only: bool,
     log_only: Option<String>,
+    optimistic_order_id: Option<String>,
 }
 
 impl ConnectionProbeResult {
@@ -1189,6 +1239,7 @@ impl ConnectionProbeResult {
             positions: Vec::new(),
             state_only: false,
             log_only: Some(message),
+            optimistic_order_id: None,
         }
     }
 
@@ -1206,7 +1257,13 @@ impl ConnectionProbeResult {
             positions: snapshot.positions,
             state_only: true,
             log_only: None,
+            optimistic_order_id: None,
         }
+    }
+
+    fn with_optimistic_order_id(mut self, order_id: String) -> Self {
+        self.optimistic_order_id = Some(order_id);
+        self
     }
 }
 
@@ -1226,6 +1283,7 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
             positions: success.positions,
             state_only: false,
             log_only: None,
+            optimistic_order_id: None,
         },
         Err(error) => ConnectionProbeResult {
             row_id: spec.row_id,
@@ -1236,6 +1294,7 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
             positions: Vec::new(),
             state_only: false,
             log_only: None,
+            optimistic_order_id: None,
         },
     }
 }
@@ -1249,6 +1308,11 @@ struct ProbeSuccess {
     positions: Vec<LivePosition>,
 }
 
+fn live_order_external_oid() -> String {
+    let sequence = LIVE_ORDER_SEQUENCE.fetch_add(1, Ordering::Relaxed) % 1_000;
+    format!("fs{}{:03}", chrono::Utc::now().timestamp_millis(), sequence)
+}
+
 #[derive(Debug, Clone)]
 struct LiveLimitOrderSpec {
     credential_ref: ConnectionCredentialRef,
@@ -1256,7 +1320,10 @@ struct LiveLimitOrderSpec {
     side: FuturesOrderSide,
     side_label: &'static str,
     price: String,
+    marker_price: exchange::unit::Price,
     quantity: String,
+    quantity_contracts: f32,
+    external_oid: String,
 }
 
 impl LiveLimitOrderSpec {
@@ -1271,7 +1338,8 @@ impl LiveLimitOrderSpec {
             panel::OrderSide::Sell => "SELL",
         };
         let price = intent.price.to_string(intent.ticker_info.min_ticksize);
-        let quantity = format!("{:.0}", intent.quantity.max(1.0).round());
+        let quantity_contracts = intent.quantity.max(1.0).round();
+        let quantity = format!("{quantity_contracts:.0}");
 
         Self {
             credential_ref,
@@ -1279,7 +1347,27 @@ impl LiveLimitOrderSpec {
             side,
             side_label,
             price,
+            marker_price: intent.price,
             quantity,
+            quantity_contracts,
+            external_oid: live_order_external_oid(),
+        }
+    }
+
+    fn optimistic_open_order(&self) -> LiveOpenOrder {
+        LiveOpenOrder {
+            symbol: self.symbol.clone(),
+            side: self.live_order_side(),
+            price: self.marker_price,
+            contracts: self.quantity_contracts,
+            order_id: self.external_oid.clone(),
+        }
+    }
+
+    fn live_order_side(&self) -> LiveOrderSide {
+        match self.side {
+            FuturesOrderSide::OpenLong | FuturesOrderSide::CloseShort => LiveOrderSide::Buy,
+            FuturesOrderSide::OpenShort | FuturesOrderSide::CloseLong => LiveOrderSide::Sell,
         }
     }
 }
@@ -1342,7 +1430,6 @@ fn try_run_live_limit_order(
     let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
     let client =
         MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
-    let external_oid = format!("fs{}", chrono::Utc::now().timestamp_millis());
     let request = FuturesOrderRequest::new(
         &spec.symbol,
         &spec.price,
@@ -1352,7 +1439,7 @@ fn try_run_live_limit_order(
         FuturesOpenType::Cross,
     )
     .with_leverage(1)
-    .with_external_oid(external_oid);
+    .with_external_oid(spec.external_oid.clone());
 
     let response = client
         .futures_place_order(&request)
@@ -1414,7 +1501,7 @@ fn try_run_live_market_order(
     let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
     let client =
         MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
-    let external_oid = format!("fs{}", chrono::Utc::now().timestamp_millis());
+    let external_oid = live_order_external_oid();
     let request = FuturesOrderRequest::market(
         &spec.symbol,
         &spec.quantity,
