@@ -13,7 +13,7 @@ use exchange::{TickerInfo, UnixMs, depth::Depth};
 use iced::widget::canvas::{self, Text};
 use iced::{Alignment, Event, Point, Rectangle, Renderer, Size, Theme, keyboard, mouse};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Instant;
 
 mod clusters;
@@ -136,6 +136,49 @@ impl CscalpDom {
         let (symbol, _) = self.ticker_info.ticker.to_full_symbol_and_type();
         let snapshot = snapshot.for_symbol(&symbol);
         if self.live_trading != snapshot {
+            let previous_order_ids = self
+                .live_trading
+                .open_orders
+                .iter()
+                .map(|order| order.order_id.as_str())
+                .collect::<HashSet<_>>();
+            let next_order_ids = snapshot
+                .open_orders
+                .iter()
+                .map(|order| order.order_id.as_str())
+                .collect::<HashSet<_>>();
+
+            for order in snapshot
+                .open_orders
+                .iter()
+                .filter(|order| !previous_order_ids.contains(order.order_id.as_str()))
+            {
+                log::info!(
+                    "DOM_LIVE_ORDER_MARKER_READY symbol={} order_id={} side={:?} price={} contracts={}",
+                    order.symbol,
+                    order.order_id,
+                    order.side,
+                    order.price.to_f32_lossy(),
+                    order.contracts
+                );
+            }
+
+            for order in self
+                .live_trading
+                .open_orders
+                .iter()
+                .filter(|order| !next_order_ids.contains(order.order_id.as_str()))
+            {
+                log::info!(
+                    "DOM_LIVE_ORDER_MARKER_REMOVED symbol={} order_id={} side={:?} price={} contracts={}",
+                    order.symbol,
+                    order.order_id,
+                    order.side,
+                    order.price.to_f32_lossy(),
+                    order.contracts
+                );
+            }
+
             self.live_trading = snapshot;
             self.invalidate(Some(Instant::now()));
         }

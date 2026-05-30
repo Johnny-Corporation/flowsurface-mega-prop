@@ -674,6 +674,15 @@ impl ConnectionPanelState {
         let row_id = row.id.clone();
         let cached_client = self.cached_mexc_futures_client_for(&row_id);
         let order = LiveLimitOrderSpec::new(reference.clone(), intent);
+        log::info!(
+            "DOM_ORDER_CLICK kind=limit route={} external_oid={} symbol={} side={} price={} qty={}",
+            mexc_futures_route_label(cached_client.as_ref()),
+            order.external_oid,
+            order.symbol,
+            order.side_label,
+            order.price,
+            order.quantity
+        );
         self.last_action = "Order submitted".to_string();
         self.push_log(format!(
             "[trading] Submitting {} {} {} @ {}",
@@ -713,6 +722,13 @@ impl ConnectionPanelState {
         let row_id = row.id.clone();
         let cached_client = self.cached_mexc_futures_client_for(&row_id);
         let order = LiveMarketOrderSpec::new(reference.clone(), intent);
+        log::info!(
+            "DOM_ORDER_CLICK kind=market route={} symbol={} side={} qty={}",
+            mexc_futures_route_label(cached_client.as_ref()),
+            order.symbol,
+            order.side_label,
+            order.quantity
+        );
         self.last_action = "Market order submitted".to_string();
         self.push_log(format!(
             "[trading] Submitting {} {} MARKET {}",
@@ -751,6 +767,10 @@ impl ConnectionPanelState {
         let (symbol, _) = ticker_info.ticker.to_full_symbol_and_type();
         let reference = reference.clone();
         let cached_client = self.cached_mexc_futures_client_for(&row_id);
+        log::info!(
+            "DOM_CANCEL_ALL_REQUEST route={} symbol={symbol}",
+            mexc_futures_route_label(cached_client.as_ref())
+        );
         self.last_action = "Cancel all submitted".to_string();
         self.push_log(format!("[trading] Cancel all submitted for {symbol}"));
 
@@ -925,10 +945,23 @@ impl ConnectionPanelState {
                 self.push_log(format!("[trading] MEXC private WebSocket error: {error}"));
             }
             MexcPrivateWsEvent::Order(update) => {
-                if let Some(row) = self.rows.iter_mut().find(|row| row.id == row_id)
-                    && apply_private_order_update(&mut row.open_orders, &update)
-                {
-                    self.last_action = "Private order".to_string();
+                if let Some(row) = self.rows.iter_mut().find(|row| row.id == row_id) {
+                    let changed = apply_private_order_update(&mut row.open_orders, &update);
+                    log::info!(
+                        "MEXC_PRIVATE_ORDER_UPDATE row_id={} order_id={} symbol={} side={} state={} price={} vol={} remain_vol={:?} changed={}",
+                        row_id,
+                        update.order_id,
+                        update.symbol,
+                        update.side,
+                        update.state,
+                        update.price,
+                        update.vol,
+                        update.remain_vol,
+                        changed
+                    );
+                    if changed {
+                        self.last_action = "Private order".to_string();
+                    }
                 }
             }
             MexcPrivateWsEvent::Position(update) => {
@@ -1684,6 +1717,8 @@ fn try_run_live_limit_order(
     cached_client: Option<MexcBlockingPrivateClient>,
 ) -> Result<String, String> {
     let client = mexc_futures_client_for_live_request(&spec.credential_ref, cached_client)?;
+    let route = client.futures_order_route_label();
+    let endpoint = client.futures_order_endpoint();
     let request = FuturesOrderRequest::new(
         &spec.symbol,
         &spec.price,
@@ -1695,18 +1730,52 @@ fn try_run_live_limit_order(
     .with_leverage(1)
     .with_external_oid(spec.external_oid.clone());
 
-    let response = client
-        .futures_place_order(&request)
-        .map_err(|error| error.to_string())?;
+    log::info!(
+        "MEXC_ORDER_REST_START kind=limit route={} endpoint={} external_oid={} symbol={} side={} price={} qty={}",
+        route,
+        endpoint,
+        spec.external_oid,
+        spec.symbol,
+        spec.side_label,
+        spec.price,
+        spec.quantity
+    );
+    let started_at = Instant::now();
+    let response = match client.futures_place_order(&request) {
+        Ok(response) => response,
+        Err(error) => {
+            log::info!(
+                "MEXC_ORDER_REST_ERROR kind=limit route={} endpoint={} elapsed_ms={} external_oid={} symbol={} error={}",
+                route,
+                endpoint,
+                started_at.elapsed().as_millis(),
+                spec.external_oid,
+                spec.symbol,
+                error
+            );
+            return Err(error.to_string());
+        }
+    };
     let order_id = response
         .data
         .as_ref()
-        .and_then(value_as_display_string)
+        .and_then(mexc_futures_order_id)
         .unwrap_or_else(|| "unknown order id".to_string());
+    log::info!(
+        "MEXC_ORDER_REST_DONE kind=limit route={} endpoint={} elapsed_ms={} external_oid={} symbol={} order_id={} success={} code={}",
+        route,
+        endpoint,
+        started_at.elapsed().as_millis(),
+        spec.external_oid,
+        spec.symbol,
+        order_id,
+        response.success,
+        response.code
+    );
 
     Ok(format!(
-        "{} {} @ {} accepted as {}; waiting for private stream state",
-        spec.side_label, spec.quantity, spec.price, order_id
+        "{} {} @ {} accepted as {} via {}; waiting for private stream state",
+        spec.side_label, spec.quantity, spec.price, order_id, route
     ))
 }
 
@@ -1730,6 +1799,8 @@ fn try_run_live_market_order(
     cached_client: Option<MexcBlockingPrivateClient>,
 ) -> Result<String, String> {
     let client = mexc_futures_client_for_live_request(&spec.credential_ref, cached_client)?;
+    let route = client.futures_order_route_label();
+    let endpoint = client.futures_order_endpoint();
     let external_oid = live_order_external_oid();
     let request = FuturesOrderRequest::market(
         &spec.symbol,
@@ -1738,20 +1809,53 @@ fn try_run_live_market_order(
         FuturesOpenType::Cross,
     )
     .with_leverage(1)
-    .with_external_oid(external_oid);
+    .with_external_oid(external_oid.clone());
 
-    let response = client
-        .futures_place_order(&request)
-        .map_err(|error| error.to_string())?;
+    log::info!(
+        "MEXC_ORDER_REST_START kind=market route={} endpoint={} external_oid={} symbol={} side={} qty={}",
+        route,
+        endpoint,
+        external_oid,
+        spec.symbol,
+        spec.side_label,
+        spec.quantity
+    );
+    let started_at = Instant::now();
+    let response = match client.futures_place_order(&request) {
+        Ok(response) => response,
+        Err(error) => {
+            log::info!(
+                "MEXC_ORDER_REST_ERROR kind=market route={} endpoint={} elapsed_ms={} external_oid={} symbol={} error={}",
+                route,
+                endpoint,
+                started_at.elapsed().as_millis(),
+                external_oid,
+                spec.symbol,
+                error
+            );
+            return Err(error.to_string());
+        }
+    };
     let order_id = response
         .data
         .as_ref()
-        .and_then(value_as_display_string)
+        .and_then(mexc_futures_order_id)
         .unwrap_or_else(|| "unknown order id".to_string());
+    log::info!(
+        "MEXC_ORDER_REST_DONE kind=market route={} endpoint={} elapsed_ms={} external_oid={} symbol={} order_id={} success={} code={}",
+        route,
+        endpoint,
+        started_at.elapsed().as_millis(),
+        external_oid,
+        spec.symbol,
+        order_id,
+        response.success,
+        response.code
+    );
 
     Ok(format!(
-        "{} MARKET {} accepted as {}; waiting for private stream state",
-        spec.side_label, spec.quantity, order_id
+        "{} MARKET {} accepted as {} via {}; waiting for private stream state",
+        spec.side_label, spec.quantity, order_id, route
     ))
 }
 
@@ -1777,9 +1881,30 @@ fn try_cancel_all_orders(
     symbol: &str,
 ) -> Result<String, String> {
     let client = mexc_futures_client_for_live_request(&reference, cached_client)?;
-    let response = client
-        .futures_cancel_all_orders(symbol)
-        .map_err(|error| error.to_string())?;
+    let route = client.futures_order_route_label();
+    log::info!("MEXC_CANCEL_ALL_REST_START route={} symbol={symbol}", route);
+    let started_at = Instant::now();
+    let response = match client.futures_cancel_all_orders(symbol) {
+        Ok(response) => response,
+        Err(error) => {
+            log::info!(
+                "MEXC_CANCEL_ALL_REST_ERROR route={} elapsed_ms={} symbol={} error={}",
+                route,
+                started_at.elapsed().as_millis(),
+                symbol,
+                error
+            );
+            return Err(error.to_string());
+        }
+    };
+    log::info!(
+        "MEXC_CANCEL_ALL_REST_DONE route={} elapsed_ms={} symbol={} success={} code={}",
+        route,
+        started_at.elapsed().as_millis(),
+        symbol,
+        response.success,
+        response.code
+    );
 
     Ok(format!(
         "Cancel all accepted for {symbol}; success={} code={}; waiting for private stream state",
@@ -1801,6 +1926,20 @@ fn mexc_futures_client_for_live_request(
     })?;
     let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
     MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())
+}
+
+fn mexc_futures_route_label(client: Option<&MexcBlockingPrivateClient>) -> &'static str {
+    client
+        .map(MexcBlockingPrivateClient::futures_order_route_label)
+        .unwrap_or("cache-miss")
+}
+
+fn mexc_futures_order_id(data: &Value) -> Option<String> {
+    value_as_display_string(data).or_else(|| {
+        ["orderId", "order_id", "id"]
+            .into_iter()
+            .find_map(|field| data.get(field).and_then(value_as_display_string))
+    })
 }
 
 fn run_trading_state_refresh(
@@ -2860,6 +2999,19 @@ mod tests {
         assert!((orders[0].price.to_f32_lossy() - 65000.5).abs() < 0.01);
         assert_eq!(orders[1].side, LiveOrderSide::Sell);
         assert_eq!(orders[1].contracts, 3.0);
+    }
+
+    #[test]
+    fn mexc_futures_order_id_extracts_create_response_object() {
+        let data = serde_json::json!({
+            "orderId": "91381234567890",
+            "ts": 1_714_000_000_000_i64
+        });
+
+        assert_eq!(
+            super::mexc_futures_order_id(&data).as_deref(),
+            Some("91381234567890")
+        );
     }
 
     #[test]

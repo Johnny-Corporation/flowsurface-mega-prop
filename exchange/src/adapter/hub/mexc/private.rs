@@ -17,6 +17,8 @@ const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_RECV_WINDOW_MS: u64 = 5_000;
 const DEFAULT_FUTURES_RECV_WINDOW_MS: u64 = 5_000;
+const MEXC_FUTURES_ORDER_CREATE_PATH: &str = "/v1/private/order/create";
+const MEXC_FUTURES_ORDER_CREATE_LABEL: &str = "create";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -227,11 +229,19 @@ impl MexcPrivateClient {
     ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
         self.send_futures_signed(
             Method::POST,
-            "/v1/private/order/submit",
+            MEXC_FUTURES_ORDER_CREATE_PATH,
             Vec::new(),
             Some(request.body()),
         )
         .await
+    }
+
+    pub fn futures_order_route_label(&self) -> &'static str {
+        MEXC_FUTURES_ORDER_CREATE_LABEL
+    }
+
+    pub fn futures_order_endpoint(&self) -> &'static str {
+        MEXC_FUTURES_ORDER_CREATE_PATH
     }
 
     pub async fn futures_cancel_order(
@@ -446,10 +456,18 @@ impl MexcBlockingPrivateClient {
     ) -> Result<MexcFuturesResponse<Value>, AdapterError> {
         self.send_futures_signed(
             Method::POST,
-            "/v1/private/order/submit",
+            MEXC_FUTURES_ORDER_CREATE_PATH,
             Vec::new(),
             Some(request.body()),
         )
+    }
+
+    pub fn futures_order_route_label(&self) -> &'static str {
+        MEXC_FUTURES_ORDER_CREATE_LABEL
+    }
+
+    pub fn futures_order_endpoint(&self) -> &'static str {
+        MEXC_FUTURES_ORDER_CREATE_PATH
     }
 
     pub fn futures_cancel_order(
@@ -1105,6 +1123,15 @@ mod tests {
         let url = super::futures_request_url("/v1/private/account/assets", "");
 
         assert_eq!(url, "https://api.mexc.com/api/v1/private/account/assets");
+    }
+
+    #[test]
+    fn futures_order_route_uses_current_create_endpoint() {
+        assert_eq!(
+            super::MEXC_FUTURES_ORDER_CREATE_PATH,
+            "/v1/private/order/create"
+        );
+        assert_eq!(super::MEXC_FUTURES_ORDER_CREATE_LABEL, "create");
     }
 
     #[test]
