@@ -48,6 +48,10 @@ fn main() {
         logger::report_stderr(&format!("Failed to initialize logger: {err}"));
     }
 
+    if let Err(err) = data::config::connection_credentials::rotate_device_vault_key() {
+        log::warn!("Connection credential vault key rotation skipped: {err}");
+    }
+
     std::thread::spawn(data::cleanup_old_market_data);
 
     let daemon = iced::daemon(Flowsurface::new, Flowsurface::update, Flowsurface::view)
@@ -73,6 +77,7 @@ fn main() {
 }
 
 const STARTUP_ANIMATION_READY_FRAMES: u8 = 2;
+const CONNECTION_TICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
 
 struct Flowsurface {
     main_window: Option<window::Window>,
@@ -108,6 +113,7 @@ enum Message {
         event: dashboard::Message,
     },
     Tick(std::time::Instant),
+    ConnectionTick(std::time::Instant),
     WindowEvent(window::Event),
     ExitRequested(HashMap<window::Id, WindowSpec>),
     RestartRequested(Option<HashMap<window::Id, WindowSpec>>),
@@ -261,6 +267,18 @@ impl Flowsurface {
                         layout_id: None,
                         event: msg,
                     });
+            }
+            Message::ConnectionTick(now) => {
+                self.connection_state.tick(now);
+                let live_trading_snapshot = self.connection_state.live_trading_snapshot();
+
+                let Some(main_window) = self.main_window else {
+                    return Task::none();
+                };
+
+                let main_window_id = main_window.id;
+                self.active_dashboard_mut()
+                    .set_live_trading_snapshot(main_window_id, &live_trading_snapshot);
             }
             Message::WindowEvent(event) => match event {
                 window::Event::CloseRequested(window) => {
@@ -912,6 +930,8 @@ impl Flowsurface {
     fn subscription(&self) -> Subscription<Message> {
         let window_events = window::events().map(Message::WindowEvent);
         let tick = iced::window::frames().map(Message::Tick);
+        let connection_tick =
+            iced::time::every(CONNECTION_TICK_INTERVAL).map(Message::ConnectionTick);
         let hotkeys = keyboard::listen().filter_map(|event| {
             let keyboard::Event::KeyPressed { key, .. } = event else {
                 return None;
@@ -922,7 +942,7 @@ impl Flowsurface {
             }
         });
 
-        let mut subscriptions = vec![window_events, tick, hotkeys];
+        let mut subscriptions = vec![window_events, tick, connection_tick, hotkeys];
 
         if self.main_window.is_some() {
             subscriptions.push(self.sidebar.subscription().map(Message::Sidebar));

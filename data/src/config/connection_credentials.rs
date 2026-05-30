@@ -135,14 +135,23 @@ pub fn load_or_create_device_vault_key() -> Result<String, String> {
     }
 
     let key = generate_device_vault_key()?;
-    let json = serde_json::to_string_pretty(&DeviceVaultKey {
-        version: CREDENTIAL_VAULT_VERSION,
-        key: key.clone(),
-    })
-    .map_err(|error| format!("Failed to serialize local device vault key: {error}"))?;
-    crate::write_json_to_file(&json, DEVICE_VAULT_KEY_FILE)
-        .map_err(|error| format!("Failed to write local device vault key: {error}"))?;
+    write_device_vault_key(&key)?;
     Ok(key)
+}
+
+pub fn rotate_device_vault_key() -> Result<(), String> {
+    let current_key = load_or_create_device_vault_key()?;
+    let vault = load_vault()?;
+    let new_key = generate_device_vault_key()?;
+    let rotated_vault = reencrypt_vault(&vault, &current_key, &new_key)?;
+
+    write_vault(&rotated_vault)?;
+    if let Err(error) = write_device_vault_key(&new_key) {
+        let _ = write_vault(&vault);
+        return Err(error);
+    }
+
+    Ok(())
 }
 
 fn load_device_vault_key() -> Result<Option<DeviceVaultKey>, String> {
@@ -172,6 +181,16 @@ fn generate_device_vault_key() -> Result<String, String> {
     ring::rand::SecureRandom::fill(&rng, &mut key)
         .map_err(|_| "Failed to generate local device vault key".to_string())?;
     Ok(hex_encode(&key))
+}
+
+fn write_device_vault_key(key: &str) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(&DeviceVaultKey {
+        version: CREDENTIAL_VAULT_VERSION,
+        key: key.to_string(),
+    })
+    .map_err(|error| format!("Failed to serialize local device vault key: {error}"))?;
+    write_json_atomically(DEVICE_VAULT_KEY_FILE, &json)
+        .map_err(|error| format!("Failed to write local device vault key: {error}"))
 }
 
 fn normalize_connection_id(raw: &str) -> String {
@@ -286,8 +305,47 @@ fn load_vault() -> Result<CredentialVault, String> {
 fn write_vault(vault: &CredentialVault) -> Result<(), String> {
     let json = serde_json::to_string_pretty(vault)
         .map_err(|error| format!("Failed to serialize local credential vault: {error}"))?;
-    crate::write_json_to_file(&json, CREDENTIAL_VAULT_FILE)
+    write_json_atomically(CREDENTIAL_VAULT_FILE, &json)
         .map_err(|error| format!("Failed to write local credential vault: {error}"))
+}
+
+fn reencrypt_vault(
+    vault: &CredentialVault,
+    current_key: &str,
+    new_key: &str,
+) -> Result<CredentialVault, String> {
+    let current_key = normalize_vault_key(current_key)?;
+    let new_key = normalize_vault_key(new_key)?;
+    let mut rotated = CredentialVault {
+        version: vault.version,
+        entries: BTreeMap::new(),
+    };
+
+    for (account, entry) in &vault.entries {
+        let payload = decrypt_payload(account, entry, &current_key)?;
+        rotated.entries.insert(
+            account.clone(),
+            encrypt_payload(account, &payload, &new_key, entry.access_key_hint.clone())?,
+        );
+    }
+
+    Ok(rotated)
+}
+
+fn write_json_atomically(file_name: &str, json: &str) -> std::io::Result<()> {
+    let path = crate::data_path(Some(file_name));
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid credential path")
+    })?;
+    std::fs::create_dir_all(parent)?;
+
+    let tmp_path = path.with_extension("tmp");
+    {
+        let mut file = std::fs::File::create(&tmp_path)?;
+        std::io::Write::write_all(&mut file, json.as_bytes())?;
+        file.sync_all()?;
+    }
+    std::fs::rename(tmp_path, path)
 }
 
 fn encrypt_payload(
@@ -413,7 +471,10 @@ fn hex_nibble(byte: u8) -> Result<u8, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionCredentialRef, ConnectionSecret, decrypt_payload, encrypt_payload};
+    use super::{
+        ConnectionCredentialRef, ConnectionSecret, CredentialVault, decrypt_payload,
+        encrypt_payload, reencrypt_vault,
+    };
 
     #[test]
     fn credential_ref_builds_stable_keyring_account() {
@@ -453,5 +514,27 @@ mod tests {
 
         assert_eq!(decrypted, payload);
         assert!(decrypt_payload(account, &entry, "wrong-device-key").is_err());
+    }
+
+    #[test]
+    fn reencrypt_vault_changes_ciphertext_and_requires_new_device_key() {
+        let account = "connection:mexc-futures-trade";
+        let payload = br#"{"access_key":"access-key-123","secret_key":"secret-key-456"}"#;
+        let mut vault = CredentialVault::default();
+        vault.entries.insert(
+            account.to_string(),
+            encrypt_payload(account, payload, "old-device-key", "****-123".to_string()).unwrap(),
+        );
+
+        let rotated = reencrypt_vault(&vault, "old-device-key", "new-device-key").unwrap();
+        let original_entry = vault.entries.get(account).unwrap();
+        let rotated_entry = rotated.entries.get(account).unwrap();
+
+        assert_ne!(rotated_entry.ciphertext_hex, original_entry.ciphertext_hex);
+        assert!(decrypt_payload(account, rotated_entry, "old-device-key").is_err());
+        assert_eq!(
+            decrypt_payload(account, rotated_entry, "new-device-key").unwrap(),
+            payload
+        );
     }
 }

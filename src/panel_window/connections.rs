@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     cmp::Reverse,
+    fmt,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -81,6 +82,7 @@ pub(crate) struct ConnectionPanelState {
     trading_state_refresh_in_flight: bool,
     private_ws: Option<PrivateWsHandle>,
     private_ws_connected: bool,
+    mexc_futures_client: Option<CachedMexcFuturesClient>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +106,21 @@ pub(crate) struct ConnectionAccountBalance {
 struct PrivateWsHandle {
     row_id: String,
     stop: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+struct CachedMexcFuturesClient {
+    row_id: String,
+    client: MexcBlockingPrivateClient,
+}
+
+impl fmt::Debug for CachedMexcFuturesClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CachedMexcFuturesClient")
+            .field("row_id", &self.row_id)
+            .field("client", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +192,7 @@ impl Default for ConnectionPanelState {
             trading_state_refresh_in_flight: false,
             private_ws: None,
             private_ws_connected: false,
+            mexc_futures_client: None,
         }
     }
 }
@@ -619,6 +637,7 @@ impl ConnectionPanelState {
                 state_only: false,
                 log_only: None,
                 private_ws_event: None,
+                mexc_futures_client: None,
             });
             return;
         };
@@ -653,6 +672,7 @@ impl ConnectionPanelState {
         };
 
         let row_id = row.id.clone();
+        let cached_client = self.cached_mexc_futures_client_for(&row_id);
         let order = LiveLimitOrderSpec::new(reference.clone(), intent);
         self.last_action = "Order submitted".to_string();
         self.push_log(format!(
@@ -662,7 +682,7 @@ impl ConnectionPanelState {
 
         let tx = self.probe_tx.clone();
         thread::spawn(move || {
-            let result = run_live_limit_order(row_id, order);
+            let result = run_live_limit_order(row_id, order, cached_client);
             let _ = tx.send(result);
         });
     }
@@ -691,6 +711,7 @@ impl ConnectionPanelState {
         };
 
         let row_id = row.id.clone();
+        let cached_client = self.cached_mexc_futures_client_for(&row_id);
         let order = LiveMarketOrderSpec::new(reference.clone(), intent);
         self.last_action = "Market order submitted".to_string();
         self.push_log(format!(
@@ -700,7 +721,7 @@ impl ConnectionPanelState {
 
         let tx = self.probe_tx.clone();
         thread::spawn(move || {
-            let result = run_live_market_order(row_id, order);
+            let result = run_live_market_order(row_id, order, cached_client);
             let _ = tx.send(result);
         });
     }
@@ -729,12 +750,13 @@ impl ConnectionPanelState {
         let row_id = row.id.clone();
         let (symbol, _) = ticker_info.ticker.to_full_symbol_and_type();
         let reference = reference.clone();
+        let cached_client = self.cached_mexc_futures_client_for(&row_id);
         self.last_action = "Cancel all submitted".to_string();
         self.push_log(format!("[trading] Cancel all submitted for {symbol}"));
 
         let tx = self.probe_tx.clone();
         thread::spawn(move || {
-            let result = run_cancel_all_orders(row_id, reference, &symbol);
+            let result = run_cancel_all_orders(row_id, reference, cached_client, &symbol);
             let _ = tx.send(result);
         });
     }
@@ -743,6 +765,13 @@ impl ConnectionPanelState {
         self.rows
             .iter()
             .find(|row| row.is_connected() && row.mode == ConnectionMode::Trade)
+    }
+
+    fn cached_mexc_futures_client_for(&self, row_id: &str) -> Option<MexcBlockingPrivateClient> {
+        self.mexc_futures_client
+            .as_ref()
+            .filter(|cached| cached.row_id == row_id)
+            .map(|cached| cached.client.clone())
     }
 
     fn ensure_private_ws(&mut self) {
@@ -853,6 +882,13 @@ impl ConnectionPanelState {
 
     fn stop_private_ws(&mut self) {
         if let Some(ws) = self.private_ws.take() {
+            if self
+                .mexc_futures_client
+                .as_ref()
+                .is_some_and(|cached| cached.row_id == ws.row_id)
+            {
+                self.mexc_futures_client = None;
+            }
             ws.stop.store(true, Ordering::Relaxed);
         }
         self.private_ws_connected = false;
@@ -996,23 +1032,35 @@ impl ConnectionPanelState {
         let log_message = match result.outcome {
             Ok(message) => {
                 let label = row.label();
+                let row_id = row.id.clone();
                 row.enabled = true;
                 row.test_state = ConnectionTestState::Success(message.clone());
                 row.balances = result.balances;
                 row.trades = result.trades;
                 row.open_orders = result.open_orders;
                 row.positions = result.positions;
-                self.last_connection_id = Some(row.id.clone());
+                self.last_connection_id = Some(row_id.clone());
+                if let Some(client) = result.mexc_futures_client {
+                    self.mexc_futures_client = Some(CachedMexcFuturesClient { row_id, client });
+                }
                 format!("[connections] {label} connected")
             }
             Err(error) => {
                 let label = row.label();
+                let row_id = row.id.clone();
                 row.enabled = false;
                 row.test_state = ConnectionTestState::Error(error.clone());
                 row.balances.clear();
                 row.trades.clear();
                 row.open_orders.clear();
                 row.positions.clear();
+                if self
+                    .mexc_futures_client
+                    .as_ref()
+                    .is_some_and(|cached| cached.row_id == row_id)
+                {
+                    self.mexc_futures_client = None;
+                }
                 format!("[connections] {label} failed: {error}")
             }
         };
@@ -1362,7 +1410,6 @@ impl ConnectionProbeSpec {
     }
 }
 
-#[derive(Debug, Clone)]
 struct ConnectionProbeResult {
     row_id: String,
     outcome: Result<String, String>,
@@ -1373,6 +1420,7 @@ struct ConnectionProbeResult {
     state_only: bool,
     log_only: Option<String>,
     private_ws_event: Option<MexcPrivateWsEvent>,
+    mexc_futures_client: Option<MexcBlockingPrivateClient>,
 }
 
 impl ConnectionProbeResult {
@@ -1387,6 +1435,7 @@ impl ConnectionProbeResult {
             state_only: false,
             log_only: Some(format!("[trading] {message}")),
             private_ws_event: None,
+            mexc_futures_client: None,
         }
     }
 
@@ -1401,6 +1450,7 @@ impl ConnectionProbeResult {
             state_only: false,
             log_only: None,
             private_ws_event: Some(event),
+            mexc_futures_client: None,
         }
     }
 
@@ -1419,6 +1469,7 @@ impl ConnectionProbeResult {
             state_only: true,
             log_only: None,
             private_ws_event: None,
+            mexc_futures_client: None,
         }
     }
 }
@@ -1440,6 +1491,7 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
             state_only: false,
             log_only: None,
             private_ws_event: None,
+            mexc_futures_client: success.mexc_futures_client,
         },
         Err(error) => ConnectionProbeResult {
             row_id: spec.row_id,
@@ -1451,17 +1503,18 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
             state_only: false,
             log_only: None,
             private_ws_event: None,
+            mexc_futures_client: None,
         },
     }
 }
 
-#[derive(Debug, Clone)]
 struct ProbeSuccess {
     message: String,
     balances: Vec<exchange::adapter::MexcAvailableBalance>,
     trades: Vec<ConnectionTradeRecord>,
     open_orders: Vec<LiveOpenOrder>,
     positions: Vec<LivePosition>,
+    mexc_futures_client: Option<MexcBlockingPrivateClient>,
 }
 
 fn live_order_external_oid() -> String {
@@ -1611,8 +1664,12 @@ impl LiveMarketOrderSpec {
     }
 }
 
-fn run_live_limit_order(row_id: String, spec: LiveLimitOrderSpec) -> ConnectionProbeResult {
-    match try_run_live_limit_order(spec) {
+fn run_live_limit_order(
+    row_id: String,
+    spec: LiveLimitOrderSpec,
+    cached_client: Option<MexcBlockingPrivateClient>,
+) -> ConnectionProbeResult {
+    match try_run_live_limit_order(spec, cached_client) {
         Ok(message) => ConnectionProbeResult::trading_log(row_id, message),
         Err(error) => ConnectionProbeResult::trading_state(
             row_id,
@@ -1622,14 +1679,11 @@ fn run_live_limit_order(row_id: String, spec: LiveLimitOrderSpec) -> ConnectionP
     }
 }
 
-fn try_run_live_limit_order(spec: LiveLimitOrderSpec) -> Result<String, String> {
-    let vault_key = load_or_create_device_vault_key()?;
-    let secret = load_connection_secret(&spec.credential_ref, &vault_key)?.ok_or_else(|| {
-        "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
-    })?;
-    let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
-    let client =
-        MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
+fn try_run_live_limit_order(
+    spec: LiveLimitOrderSpec,
+    cached_client: Option<MexcBlockingPrivateClient>,
+) -> Result<String, String> {
+    let client = mexc_futures_client_for_live_request(&spec.credential_ref, cached_client)?;
     let request = FuturesOrderRequest::new(
         &spec.symbol,
         &spec.price,
@@ -1656,8 +1710,12 @@ fn try_run_live_limit_order(spec: LiveLimitOrderSpec) -> Result<String, String> 
     ))
 }
 
-fn run_live_market_order(row_id: String, spec: LiveMarketOrderSpec) -> ConnectionProbeResult {
-    match try_run_live_market_order(spec) {
+fn run_live_market_order(
+    row_id: String,
+    spec: LiveMarketOrderSpec,
+    cached_client: Option<MexcBlockingPrivateClient>,
+) -> ConnectionProbeResult {
+    match try_run_live_market_order(spec, cached_client) {
         Ok(message) => ConnectionProbeResult::trading_log(row_id, message),
         Err(error) => ConnectionProbeResult::trading_state(
             row_id,
@@ -1667,14 +1725,11 @@ fn run_live_market_order(row_id: String, spec: LiveMarketOrderSpec) -> Connectio
     }
 }
 
-fn try_run_live_market_order(spec: LiveMarketOrderSpec) -> Result<String, String> {
-    let vault_key = load_or_create_device_vault_key()?;
-    let secret = load_connection_secret(&spec.credential_ref, &vault_key)?.ok_or_else(|| {
-        "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
-    })?;
-    let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
-    let client =
-        MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
+fn try_run_live_market_order(
+    spec: LiveMarketOrderSpec,
+    cached_client: Option<MexcBlockingPrivateClient>,
+) -> Result<String, String> {
+    let client = mexc_futures_client_for_live_request(&spec.credential_ref, cached_client)?;
     let external_oid = live_order_external_oid();
     let request = FuturesOrderRequest::market(
         &spec.symbol,
@@ -1703,9 +1758,10 @@ fn try_run_live_market_order(spec: LiveMarketOrderSpec) -> Result<String, String
 fn run_cancel_all_orders(
     row_id: String,
     reference: ConnectionCredentialRef,
+    cached_client: Option<MexcBlockingPrivateClient>,
     symbol: &str,
 ) -> ConnectionProbeResult {
-    match try_cancel_all_orders(reference, symbol) {
+    match try_cancel_all_orders(reference, cached_client, symbol) {
         Ok(message) => ConnectionProbeResult::trading_log(row_id, message),
         Err(error) => ConnectionProbeResult::trading_state(
             row_id,
@@ -1717,15 +1773,10 @@ fn run_cancel_all_orders(
 
 fn try_cancel_all_orders(
     reference: ConnectionCredentialRef,
+    cached_client: Option<MexcBlockingPrivateClient>,
     symbol: &str,
 ) -> Result<String, String> {
-    let vault_key = load_or_create_device_vault_key()?;
-    let secret = load_connection_secret(&reference, &vault_key)?.ok_or_else(|| {
-        "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
-    })?;
-    let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
-    let client =
-        MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
+    let client = mexc_futures_client_for_live_request(&reference, cached_client)?;
     let response = client
         .futures_cancel_all_orders(symbol)
         .map_err(|error| error.to_string())?;
@@ -1734,6 +1785,22 @@ fn try_cancel_all_orders(
         "Cancel all accepted for {symbol}; success={} code={}; waiting for private stream state",
         response.success, response.code
     ))
+}
+
+fn mexc_futures_client_for_live_request(
+    reference: &ConnectionCredentialRef,
+    cached_client: Option<MexcBlockingPrivateClient>,
+) -> Result<MexcBlockingPrivateClient, String> {
+    if let Some(client) = cached_client {
+        return Ok(client);
+    }
+
+    let vault_key = load_or_create_device_vault_key()?;
+    let secret = load_connection_secret(reference, &vault_key)?.ok_or_else(|| {
+        "Saved API keys were not found in the local credential vault. Delete and re-add this connection.".to_string()
+    })?;
+    let credentials = MexcCredentials::new(secret.access_key(), secret.secret_key())?;
+    MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())
 }
 
 fn run_trading_state_refresh(
@@ -1811,6 +1878,7 @@ fn probe_mexc_public(market: ConnectionMarket) -> Result<ProbeSuccess, String> {
         trades: Vec::new(),
         open_orders: Vec::new(),
         positions: Vec::new(),
+        mexc_futures_client: None,
     })
 }
 
@@ -1846,6 +1914,7 @@ fn probe_mexc_private_secret(
         MexcBlockingPrivateClient::new(credentials, None).map_err(|error| error.to_string())?;
 
     let mut message = "Private API authenticated".to_string();
+    let mut mexc_futures_client = None;
     let (balances, trades, open_orders, positions) = match market {
         ConnectionMarket::Spot => {
             let account = match client.spot_account_information() {
@@ -1863,6 +1932,7 @@ fn probe_mexc_private_secret(
             )
         }
         ConnectionMarket::Futures => {
+            mexc_futures_client = Some(client.clone());
             let assets = match client.futures_assets() {
                 Ok(assets) => assets,
                 Err(error) => {
@@ -1895,6 +1965,7 @@ fn probe_mexc_private_secret(
         trades,
         open_orders,
         positions,
+        mexc_futures_client,
     })
 }
 
