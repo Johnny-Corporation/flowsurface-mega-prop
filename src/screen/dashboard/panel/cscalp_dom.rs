@@ -46,6 +46,7 @@ const PRINT_BUBBLE_MAX_RADIUS: f32 = 18.0;
 const PRINT_LABEL_MIN_RADIUS: f32 = 8.0;
 const PRINT_LABEL_MAX_COUNT: usize = 18;
 const CLUSTER_FOOTER_ROWS: f32 = 3.0;
+const DOM_DEPTH_STALE_GAP_MS: u128 = 500;
 
 impl super::Panel for CscalpDom {
     fn scroll(&mut self, delta: f32) {
@@ -105,6 +106,7 @@ pub struct CscalpDom {
     pending_tick_size: Option<PriceStep>,
     raw_price_spread: Option<Price>,
     last_exchange_ts_ms: Option<UnixMs>,
+    last_depth_apply_at: Option<Instant>,
     working_orders: Vec<PaperOrder>,
     paper_position: PaperPosition,
     live_trading: LiveTradingSnapshot,
@@ -125,6 +127,7 @@ impl CscalpDom {
             raw_price_spread: None,
             pending_tick_size: None,
             last_exchange_ts_ms: None,
+            last_depth_apply_at: None,
             working_orders: Vec::new(),
             paper_position: PaperPosition::default(),
             live_trading: LiveTradingSnapshot::default(),
@@ -190,6 +193,43 @@ impl CscalpDom {
     }
 
     pub fn insert_depth(&mut self, depth: &Depth, update_t: UnixMs) {
+        let apply_at = Instant::now();
+        let local_gap_ms = self
+            .last_depth_apply_at
+            .map(|last| apply_at.duration_since(last).as_millis());
+        let exchange_gap_ms = self
+            .last_exchange_ts_ms
+            .map(|last| update_t.as_u64().saturating_sub(last.as_u64()));
+        let local_lag_ms = UnixMs::now().as_u64().saturating_sub(update_t.as_u64());
+        let local_gap_label =
+            local_gap_ms.map_or_else(|| "first".to_string(), |gap| gap.to_string());
+        let exchange_gap_label =
+            exchange_gap_ms.map_or_else(|| "first".to_string(), |gap| gap.to_string());
+        let stale_gap = local_gap_ms.is_some_and(|gap| gap > DOM_DEPTH_STALE_GAP_MS);
+        let (symbol, _) = self.ticker_info.ticker.to_full_symbol_and_type();
+
+        log::info!(
+            "DOM_DEPTH_APPLIED symbol={} exchange_ts={} local_lag_ms={} local_gap_ms={} exchange_gap_ms={} book_bids={} book_asks={} stale_gap={}",
+            symbol,
+            update_t.as_u64(),
+            local_lag_ms,
+            local_gap_label,
+            exchange_gap_label,
+            depth.bids.len(),
+            depth.asks.len(),
+            stale_gap,
+        );
+        if stale_gap {
+            log::warn!(
+                "DOM_DEPTH_STALE_GAP symbol={} exchange_ts={} local_gap_ms={} threshold_ms={}",
+                symbol,
+                update_t.as_u64(),
+                local_gap_label,
+                DOM_DEPTH_STALE_GAP_MS,
+            );
+        }
+        self.last_depth_apply_at = Some(apply_at);
+
         if let Some(next) = self.pending_tick_size.take() {
             self.step = next;
             self.trades.rebuild_grouped(self.step);
