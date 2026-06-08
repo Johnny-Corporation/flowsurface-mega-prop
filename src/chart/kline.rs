@@ -1,6 +1,6 @@
 use super::{
     Action, Basis, Chart, Interaction, Message, PlotConstants, PlotData, TEXT_SIZE, ViewState,
-    indicator, request_fetch, scale::linear::PriceInfoLabel,
+    indicator, request_fetch, safe_geometry, scale::linear::PriceInfoLabel,
 };
 use crate::chart::indicator::kline::KlineIndicatorImpl;
 use crate::connector::fetcher::{FetchRange, RequestHandler, is_trade_fetch_enabled};
@@ -20,7 +20,7 @@ use exchange::{Kline, OpenInterest as OIData, TickerInfo, Trade, UnixMs};
 
 use iced::task::Handle;
 use iced::theme::palette::Extended;
-use iced::widget::canvas::{self, Event, Geometry, Path, Stroke};
+use iced::widget::canvas::{self, Event, Geometry, Stroke};
 use iced::{Alignment, Element, Point, Rectangle, Renderer, Size, Theme, Vector, mouse};
 
 use enum_map::EnumMap;
@@ -1160,10 +1160,12 @@ fn draw_footprint_kline(
     } else {
         palette.danger.weak.color
     };
-    frame.fill_rectangle(
+    safe_geometry::fill_rectangle(
+        frame,
         Point::new(x_position - (candle_width / 8.0), y_open.min(y_close)),
         Size::new(candle_width / 4.0, (y_open - y_close).abs()),
         body_color,
+        "kline.footprint_body",
     );
 
     let wick_color = if kline.close >= kline.open {
@@ -1178,12 +1180,12 @@ fn draw_footprint_kline(
         },
         wick_color.scale_alpha(0.6),
     );
-    frame.stroke(
-        &Path::line(
-            Point::new(x_position, y_high),
-            Point::new(x_position, y_low),
-        ),
+    safe_geometry::stroke_line(
+        frame,
+        Point::new(x_position, y_high),
+        Point::new(x_position, y_low),
         marker_line,
+        "kline.footprint_wick",
     );
 }
 
@@ -1205,10 +1207,12 @@ fn draw_candle_dp(
     } else {
         palette.danger.base.color
     };
-    frame.fill_rectangle(
+    safe_geometry::fill_rectangle(
+        frame,
         Point::new(x_position - (candle_width / 2.0), y_open.min(y_close)),
         Size::new(candle_width, (y_open - y_close).abs()),
         body_color,
+        "kline.candle_body",
     );
 
     let wick_color = if kline.close >= kline.open {
@@ -1216,10 +1220,12 @@ fn draw_candle_dp(
     } else {
         palette.danger.base.color
     };
-    frame.fill_rectangle(
+    safe_geometry::fill_rectangle(
+        frame,
         Point::new(x_position - (candle_width / 8.0), y_high),
         Size::new(candle_width / 4.0, (y_high - y_low).abs()),
         wick_color,
+        "kline.candle_wick",
     );
 }
 

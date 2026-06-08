@@ -2,12 +2,13 @@ use std::ops::RangeInclusive;
 
 use iced::{
     Point, Theme,
-    widget::canvas::{self, Path, Stroke},
+    widget::canvas::{self, Stroke},
 };
 
 use crate::chart::{
     ViewState,
     indicator::plot::{Plot, PlotTooltip, Series, TooltipFn, YScale},
+    safe_geometry,
 };
 
 const DEFAULT_BAR_WIDTH_FACTOR: f32 = 0.9;
@@ -93,6 +94,10 @@ where
 
         datapoints.for_each_in(range, |_, y| {
             let v = (self.value)(y);
+            if !v.is_finite() {
+                return;
+            }
+
             if v < min_v {
                 min_v = v;
             }
@@ -129,14 +134,23 @@ where
     ) {
         let palette = theme.extended_palette();
         let color = palette.secondary.strong.color;
+        let stroke_width = if self.stroke_width.is_finite() && self.stroke_width > 0.0 {
+            self.stroke_width
+        } else {
+            return;
+        };
 
         let stroke = Stroke::with_color(
             Stroke {
-                width: self.stroke_width,
+                width: stroke_width,
                 ..Stroke::default()
             },
             color,
         );
+
+        if !ctx.cell_width.is_finite() || ctx.cell_width <= 0.0 {
+            return;
+        }
 
         let half_bar_width = (ctx.cell_width * DEFAULT_BAR_WIDTH_FACTOR) / 2.0;
         let shift_px = (self.x_shift_buckets as f32) * ctx.cell_width;
@@ -156,7 +170,13 @@ where
             }
 
             if let Some((px, py)) = prev {
-                frame.stroke(&Path::line(Point::new(px, py), Point::new(sx, sy)), stroke);
+                safe_geometry::stroke_line(
+                    frame,
+                    Point::new(px, py),
+                    Point::new(sx, sy),
+                    stroke,
+                    "indicator_line.segment",
+                );
             }
             prev = Some((sx, sy));
         });
@@ -167,7 +187,13 @@ where
                 let sx = x_for(x);
                 let sy = scale.to_y((self.value)(y));
                 if sx.is_finite() && sy.is_finite() && radius.is_finite() {
-                    frame.fill(&Path::circle(Point::new(sx, sy), radius), color);
+                    safe_geometry::fill_circle(
+                        frame,
+                        Point::new(sx, sy),
+                        radius,
+                        color,
+                        "indicator_line.point",
+                    );
                 }
             });
         }

@@ -2,6 +2,7 @@ pub mod comparison;
 pub mod heatmap;
 pub mod indicator;
 pub mod kline;
+pub(crate) mod safe_geometry;
 mod scale;
 mod tools;
 
