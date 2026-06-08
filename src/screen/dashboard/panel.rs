@@ -44,6 +44,7 @@ pub struct LimitOrderIntent {
     pub side: OrderSide,
     pub price: Price,
     pub quantity: f32,
+    pub position_intent: OrderPositionIntent,
 }
 
 #[derive(Debug, Clone)]
@@ -51,12 +52,20 @@ pub struct MarketOrderIntent {
     pub ticker_info: TickerInfo,
     pub side: OrderSide,
     pub quantity: f32,
+    pub position_intent: OrderPositionIntent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderSide {
     Buy,
     Sell,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderPositionIntent {
+    CloseFirst,
+    Open,
+    Close,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

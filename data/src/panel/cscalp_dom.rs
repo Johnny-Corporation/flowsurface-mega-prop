@@ -16,6 +16,10 @@ pub struct Config {
     pub view_mode: bool,
     #[serde(default = "default_paper_order_contracts")]
     pub paper_order_contracts: f32,
+    #[serde(default = "default_trading_mode")]
+    pub trading_mode: TradingMode,
+    #[serde(default = "default_hedge_order_intent")]
+    pub hedge_order_intent: HedgeOrderIntent,
     #[serde(default)]
     pub transparent_liquidity_fills: bool,
     pub trade_retention: Duration,
@@ -36,6 +40,8 @@ impl Default for Config {
             show_ruler: false,
             view_mode: default_view_mode(),
             paper_order_contracts: default_paper_order_contracts(),
+            trading_mode: default_trading_mode(),
+            hedge_order_intent: default_hedge_order_intent(),
             transparent_liquidity_fills: false,
             trade_retention: Duration::from_millis(TRADE_RETENTION_MS),
             cluster_timeframe: default_cluster_timeframe(),
@@ -43,6 +49,38 @@ impl Default for Config {
             cluster_split_ratio: default_cluster_split_ratio(),
             orderbook_split_ratio: default_orderbook_split_ratio(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum TradingMode {
+    Normal,
+    Hedge,
+}
+
+impl std::fmt::Display for TradingMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::Normal => "Normal",
+            Self::Hedge => "Hedge",
+        };
+        write!(f, "{label}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum HedgeOrderIntent {
+    Open,
+    Close,
+}
+
+impl std::fmt::Display for HedgeOrderIntent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::Open => "Open",
+            Self::Close => "Close",
+        };
+        write!(f, "{label}")
     }
 }
 
@@ -127,4 +165,25 @@ fn default_view_mode() -> bool {
 
 fn default_paper_order_contracts() -> f32 {
     1.0
+}
+
+fn default_trading_mode() -> TradingMode {
+    TradingMode::Normal
+}
+
+fn default_hedge_order_intent() -> HedgeOrderIntent {
+    HedgeOrderIntent::Open
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Config, HedgeOrderIntent, TradingMode};
+
+    #[test]
+    fn config_defaults_to_normal_open_safe_trading_mode() {
+        let cfg = Config::default();
+
+        assert_eq!(cfg.trading_mode, TradingMode::Normal);
+        assert_eq!(cfg.hedge_order_intent, HedgeOrderIntent::Open);
+    }
 }

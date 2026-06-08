@@ -672,8 +672,16 @@ impl ConnectionPanelState {
         };
 
         let row_id = row.id.clone();
+        let positions = row.positions.clone();
         let cached_client = self.cached_mexc_futures_client_for(&row_id);
-        let order = LiveLimitOrderSpec::new(reference.clone(), intent);
+        let order = match LiveLimitOrderSpec::new(reference.clone(), intent, &positions) {
+            Ok(order) => order,
+            Err(error) => {
+                self.last_action = "Order rejected".to_string();
+                self.push_log(format!("[trading] {error}"));
+                return;
+            }
+        };
         log::info!(
             "DOM_ORDER_CLICK kind=limit route={} external_oid={} symbol={} side={} price={} qty={}",
             mexc_futures_route_label(cached_client.as_ref()),
@@ -720,8 +728,16 @@ impl ConnectionPanelState {
         };
 
         let row_id = row.id.clone();
+        let positions = row.positions.clone();
         let cached_client = self.cached_mexc_futures_client_for(&row_id);
-        let order = LiveMarketOrderSpec::new(reference.clone(), intent);
+        let order = match LiveMarketOrderSpec::new(reference.clone(), intent, &positions) {
+            Ok(order) => order,
+            Err(error) => {
+                self.last_action = "Market order rejected".to_string();
+                self.push_log(format!("[trading] {error}"));
+                return;
+            }
+        };
         log::info!(
             "DOM_ORDER_CLICK kind=market route={} symbol={} side={} qty={}",
             mexc_futures_route_label(cached_client.as_ref()),
@@ -1627,6 +1643,96 @@ fn apply_private_position_update(
     *positions != before
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MexcOrderPlan {
+    side: FuturesOrderSide,
+    side_label: &'static str,
+    quantity: String,
+}
+
+fn mexc_order_plan(
+    symbol: &str,
+    side: panel::OrderSide,
+    position_intent: panel::OrderPositionIntent,
+    requested_quantity: f32,
+    positions: &[LivePosition],
+) -> Result<MexcOrderPlan, String> {
+    let requested_quantity = requested_quantity.max(1.0).round();
+
+    match position_intent {
+        panel::OrderPositionIntent::Open => Ok(open_mexc_order_plan(side, requested_quantity)),
+        panel::OrderPositionIntent::Close => {
+            close_mexc_order_plan(symbol, side, requested_quantity, positions)
+        }
+        panel::OrderPositionIntent::CloseFirst => {
+            close_mexc_order_plan(symbol, side, requested_quantity, positions)
+                .or_else(|_| Ok(open_mexc_order_plan(side, requested_quantity)))
+        }
+    }
+}
+
+fn open_mexc_order_plan(side: panel::OrderSide, requested_quantity: f32) -> MexcOrderPlan {
+    let (side, side_label) = match side {
+        panel::OrderSide::Buy => (FuturesOrderSide::OpenLong, "OPEN LONG"),
+        panel::OrderSide::Sell => (FuturesOrderSide::OpenShort, "OPEN SHORT"),
+    };
+
+    MexcOrderPlan {
+        side,
+        side_label,
+        quantity: format_contract_quantity(requested_quantity),
+    }
+}
+
+fn close_mexc_order_plan(
+    symbol: &str,
+    side: panel::OrderSide,
+    requested_quantity: f32,
+    positions: &[LivePosition],
+) -> Result<MexcOrderPlan, String> {
+    let close_position = matching_close_position(symbol, side, positions).ok_or_else(|| {
+        let missing_side = match side {
+            panel::OrderSide::Buy => "short",
+            panel::OrderSide::Sell => "long",
+        };
+        format!("No {symbol} {missing_side} position to close")
+    })?;
+
+    let available_quantity = close_position.contracts.abs().round();
+    if available_quantity < 1.0 {
+        return Err(format!("No {symbol} position size available to close"));
+    }
+
+    let (side, side_label) = match side {
+        panel::OrderSide::Buy => (FuturesOrderSide::CloseShort, "CLOSE SHORT"),
+        panel::OrderSide::Sell => (FuturesOrderSide::CloseLong, "CLOSE LONG"),
+    };
+
+    Ok(MexcOrderPlan {
+        side,
+        side_label,
+        quantity: format_contract_quantity(requested_quantity.min(available_quantity)),
+    })
+}
+
+fn matching_close_position<'a>(
+    symbol: &str,
+    side: panel::OrderSide,
+    positions: &'a [LivePosition],
+) -> Option<&'a LivePosition> {
+    positions.iter().find(|position| {
+        position.symbol == symbol
+            && match side {
+                panel::OrderSide::Buy => position.contracts < -LIVE_POSITION_EPSILON,
+                panel::OrderSide::Sell => position.contracts > LIVE_POSITION_EPSILON,
+            }
+    })
+}
+
+fn format_contract_quantity(quantity: f32) -> String {
+    format!("{:.0}", quantity.max(1.0).round())
+}
+
 #[derive(Debug, Clone)]
 struct LiveLimitOrderSpec {
     credential_ref: ConnectionCredentialRef,
@@ -1639,29 +1745,30 @@ struct LiveLimitOrderSpec {
 }
 
 impl LiveLimitOrderSpec {
-    fn new(credential_ref: ConnectionCredentialRef, intent: panel::LimitOrderIntent) -> Self {
+    fn new(
+        credential_ref: ConnectionCredentialRef,
+        intent: panel::LimitOrderIntent,
+        positions: &[LivePosition],
+    ) -> Result<Self, String> {
         let (symbol, _) = intent.ticker_info.ticker.to_full_symbol_and_type();
-        let side = match intent.side {
-            panel::OrderSide::Buy => FuturesOrderSide::OpenLong,
-            panel::OrderSide::Sell => FuturesOrderSide::OpenShort,
-        };
-        let side_label = match intent.side {
-            panel::OrderSide::Buy => "BUY",
-            panel::OrderSide::Sell => "SELL",
-        };
+        let plan = mexc_order_plan(
+            &symbol,
+            intent.side,
+            intent.position_intent,
+            intent.quantity,
+            positions,
+        )?;
         let price = intent.price.to_string(intent.ticker_info.min_ticksize);
-        let quantity_contracts = intent.quantity.max(1.0).round();
-        let quantity = format!("{quantity_contracts:.0}");
 
-        Self {
+        Ok(Self {
             credential_ref,
             symbol,
-            side,
-            side_label,
+            side: plan.side,
+            side_label: plan.side_label,
             price,
-            quantity,
+            quantity: plan.quantity,
             external_oid: live_order_external_oid(),
-        }
+        })
     }
 }
 
@@ -1675,25 +1782,27 @@ struct LiveMarketOrderSpec {
 }
 
 impl LiveMarketOrderSpec {
-    fn new(credential_ref: ConnectionCredentialRef, intent: panel::MarketOrderIntent) -> Self {
+    fn new(
+        credential_ref: ConnectionCredentialRef,
+        intent: panel::MarketOrderIntent,
+        positions: &[LivePosition],
+    ) -> Result<Self, String> {
         let (symbol, _) = intent.ticker_info.ticker.to_full_symbol_and_type();
-        let side = match intent.side {
-            panel::OrderSide::Buy => FuturesOrderSide::OpenLong,
-            panel::OrderSide::Sell => FuturesOrderSide::OpenShort,
-        };
-        let side_label = match intent.side {
-            panel::OrderSide::Buy => "BUY",
-            panel::OrderSide::Sell => "SELL",
-        };
-        let quantity = format!("{:.0}", intent.quantity.max(1.0).round());
+        let plan = mexc_order_plan(
+            &symbol,
+            intent.side,
+            intent.position_intent,
+            intent.quantity,
+            positions,
+        )?;
 
-        Self {
+        Ok(Self {
             credential_ref,
             symbol,
-            side,
-            side_label,
-            quantity,
-        }
+            side: plan.side,
+            side_label: plan.side_label,
+            quantity: plan.quantity,
+        })
     }
 }
 
@@ -2922,6 +3031,7 @@ mod tests {
         apply_private_position_update, futures_history_records, futures_open_orders,
         futures_open_positions, last_enabled_connection_id,
     };
+    use crate::screen::dashboard::panel;
     use crate::trading_state::{LiveOrderSide, LivePosition};
     use exchange::adapter::MexcPrivateOrderUpdate;
 
@@ -3152,6 +3262,89 @@ mod tests {
         assert_eq!(positions[1].contracts, -3.0);
         assert_eq!(positions[1].avg_entry, Some(3200.0));
         assert_eq!(positions[1].realized_pnl, 1.5);
+    }
+
+    #[test]
+    fn normal_mode_buy_closes_existing_short() {
+        let positions = vec![LivePosition {
+            symbol: "BTC_USDT".to_string(),
+            contracts: -3.0,
+            avg_entry: Some(65000.0),
+            realized_pnl: 0.0,
+        }];
+
+        let plan = super::mexc_order_plan(
+            "BTC_USDT",
+            panel::OrderSide::Buy,
+            panel::OrderPositionIntent::CloseFirst,
+            5.0,
+            &positions,
+        )
+        .unwrap();
+
+        assert_eq!(plan.side, exchange::adapter::FuturesOrderSide::CloseShort);
+        assert_eq!(plan.side_label, "CLOSE SHORT");
+        assert_eq!(plan.quantity, "3");
+    }
+
+    #[test]
+    fn normal_mode_sell_closes_existing_long() {
+        let positions = vec![LivePosition {
+            symbol: "BTC_USDT".to_string(),
+            contracts: 2.0,
+            avg_entry: Some(65000.0),
+            realized_pnl: 0.0,
+        }];
+
+        let plan = super::mexc_order_plan(
+            "BTC_USDT",
+            panel::OrderSide::Sell,
+            panel::OrderPositionIntent::CloseFirst,
+            5.0,
+            &positions,
+        )
+        .unwrap();
+
+        assert_eq!(plan.side, exchange::adapter::FuturesOrderSide::CloseLong);
+        assert_eq!(plan.side_label, "CLOSE LONG");
+        assert_eq!(plan.quantity, "2");
+    }
+
+    #[test]
+    fn hedge_open_mode_opens_even_when_opposite_position_exists() {
+        let positions = vec![LivePosition {
+            symbol: "BTC_USDT".to_string(),
+            contracts: -3.0,
+            avg_entry: Some(65000.0),
+            realized_pnl: 0.0,
+        }];
+
+        let plan = super::mexc_order_plan(
+            "BTC_USDT",
+            panel::OrderSide::Buy,
+            panel::OrderPositionIntent::Open,
+            5.0,
+            &positions,
+        )
+        .unwrap();
+
+        assert_eq!(plan.side, exchange::adapter::FuturesOrderSide::OpenLong);
+        assert_eq!(plan.side_label, "OPEN LONG");
+        assert_eq!(plan.quantity, "5");
+    }
+
+    #[test]
+    fn hedge_close_mode_requires_matching_position() {
+        let err = super::mexc_order_plan(
+            "BTC_USDT",
+            panel::OrderSide::Buy,
+            panel::OrderPositionIntent::Close,
+            5.0,
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(err.contains("No BTC_USDT short position to close"));
     }
 
     #[test]

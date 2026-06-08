@@ -5,11 +5,13 @@ use super::{
 use crate::{
     audio::SoundType,
     screen::dashboard::panel::{
-        Action, LimitOrderIntent, MarketOrderIntent, OrderClickButton, OrderSide,
+        Action, LimitOrderIntent, MarketOrderIntent, OrderClickButton, OrderPositionIntent,
+        OrderSide,
     },
     style,
     trading_state::{LiveOrderSide, LivePosition},
 };
+use data::panel::cscalp_dom::{HedgeOrderIntent, TradingMode};
 use exchange::unit::Price;
 use iced::{
     Alignment, Point, Rectangle, Size,
@@ -316,7 +318,7 @@ impl CscalpDom {
             ("$", signed_money(position_dollars)),
             ("%", format!("{:+.2}%", pnl_percent)),
             ("P", signed_money(pnl_dollars)),
-            ("", mode_label(self.config.view_mode).to_string()),
+            ("", mode_label(self.config).to_string()),
         ];
 
         let x0 = cols.orderbook.0;
@@ -393,6 +395,7 @@ impl CscalpDom {
             },
             price,
             quantity: self.config.paper_order_contracts.max(1.0),
+            position_intent: self.order_position_intent(),
         }))
     }
 
@@ -409,7 +412,18 @@ impl CscalpDom {
                 PaperOrderSide::Sell => OrderSide::Sell,
             },
             quantity: self.config.paper_order_contracts.max(1.0),
+            position_intent: self.order_position_intent(),
         }))
+    }
+
+    fn order_position_intent(&self) -> OrderPositionIntent {
+        match self.config.trading_mode {
+            TradingMode::Normal => OrderPositionIntent::CloseFirst,
+            TradingMode::Hedge => match self.config.hedge_order_intent {
+                HedgeOrderIntent::Open => OrderPositionIntent::Open,
+                HedgeOrderIntent::Close => OrderPositionIntent::Close,
+            },
+        }
     }
 
     fn execute_market_order(&mut self, side: PaperOrderSide) {
@@ -798,8 +812,16 @@ fn order_contracts_label(value: f32) -> String {
     format!("{:.0}", value.round().clamp(1.0, 100.0))
 }
 
-fn mode_label(view_mode: bool) -> &'static str {
-    if view_mode { "VIEW" } else { "LIVE" }
+fn mode_label(cfg: data::panel::cscalp_dom::Config) -> &'static str {
+    if cfg.view_mode {
+        "VIEW"
+    } else {
+        match (cfg.trading_mode, cfg.hedge_order_intent) {
+            (TradingMode::Normal, _) => "NORMAL",
+            (TradingMode::Hedge, HedgeOrderIntent::Open) => "H-OPEN",
+            (TradingMode::Hedge, HedgeOrderIntent::Close) => "H-CLOSE",
+        }
+    }
 }
 
 fn label_plate_color(text_color: iced::Color) -> iced::Color {
