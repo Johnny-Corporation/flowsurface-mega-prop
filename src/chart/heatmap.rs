@@ -467,6 +467,13 @@ impl canvas::Program<Message> for HeatmapChart {
         let palette = theme.extended_palette();
 
         let heatmap = chart.cache.main.draw(renderer, bounds_size, |frame| {
+            crate::watermark::draw_ticker_watermark(
+                frame,
+                Rectangle::with_size(bounds_size),
+                &chart.ticker_info,
+                palette.background.base.text,
+            );
+
             let center = Vector::new(bounds.width / 2.0, bounds.height / 2.0);
 
             frame.translate(center);

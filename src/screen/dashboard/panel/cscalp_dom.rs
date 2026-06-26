@@ -537,6 +537,17 @@ impl canvas::Program<Message> for CscalpDom {
 
                 let mut spread_row: Option<(f32, f32)> = None;
                 let footer_top = bounds.height - ROW_HEIGHT * CLUSTER_FOOTER_ROWS;
+                crate::watermark::draw_ticker_watermark(
+                    frame,
+                    Rectangle {
+                        x: cols.prints.0,
+                        y: 0.0,
+                        width: (cols.prints.1 - cols.prints.0).max(0.0),
+                        height: footer_top.max(0.0),
+                    },
+                    &self.ticker_info,
+                    text_color,
+                );
 
                 for visible_row in visible_rows.iter() {
                     if visible_row.y + ROW_HEIGHT > footer_top {
