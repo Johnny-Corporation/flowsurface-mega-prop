@@ -7,7 +7,7 @@ use sha2::Sha256;
 use std::{
     collections::BTreeMap,
     fmt,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use url::form_urlencoded;
 
@@ -282,20 +282,29 @@ impl MexcPrivateClient {
         let query = encode_pairs(params);
         let signature = sign_spot_payload(&query, &self.credentials.secret_key);
         let url = format!("{FETCH_DOMAIN}{path}?{query}&signature={signature}");
+        let started_at = Instant::now();
+        log_private_rest_start("spot", &method, path, !query.is_empty(), false);
 
-        let response = self
+        let response = match self
             .client
             .request(method.clone(), &url)
             .header("X-MEXC-APIKEY", self.credentials.access_key())
             .send()
             .await
-            .map_err(|error| {
-                AdapterError::InvalidRequest(format!(
+        {
+            Ok(response) => response,
+            Err(error) => {
+                log_private_rest_error("spot", &method, path, started_at.elapsed(), &error);
+                return Err(AdapterError::InvalidRequest(format!(
                     "MEXC spot private request failed for {path}: {error}"
-                ))
-            })?;
+                )));
+            }
+        };
+        let status = response.status();
+        let parsed = parse_json_response(method.clone(), path, response).await;
+        log_private_rest_result("spot", &method, path, status, started_at.elapsed(), &parsed);
 
-        parse_json_response(method, path, response).await
+        parsed
     }
 
     async fn send_futures_signed(
@@ -325,6 +334,14 @@ impl MexcPrivateClient {
             &self.credentials.secret_key,
         );
         let url = futures_request_url(path, &query);
+        let started_at = Instant::now();
+        log_private_rest_start(
+            "futures",
+            &method,
+            path,
+            !query.is_empty(),
+            !body_string.is_empty(),
+        );
 
         let mut builder = self
             .client
@@ -339,14 +356,41 @@ impl MexcPrivateClient {
             builder = builder.body(body_string);
         }
 
-        let response = builder.send().await.map_err(|error| {
-            AdapterError::InvalidRequest(format!(
-                "MEXC futures private request failed for {path}: {error}"
-            ))
-        })?;
+        let response = match builder.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                log_private_rest_error("futures", &method, path, started_at.elapsed(), &error);
+                return Err(AdapterError::InvalidRequest(format!(
+                    "MEXC futures private request failed for {path}: {error}"
+                )));
+            }
+        };
+        let status = response.status();
+        let parsed = match parse_json_response(method.clone(), path, response).await {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                log_private_rest_failure(
+                    "futures",
+                    &method,
+                    path,
+                    status,
+                    started_at.elapsed(),
+                    &error,
+                );
+                return Err(error);
+            }
+        };
+        let ensured = ensure_futures_success(&method, path, parsed);
+        log_private_rest_result(
+            "futures",
+            &method,
+            path,
+            status,
+            started_at.elapsed(),
+            &ensured,
+        );
 
-        let parsed = parse_json_response(method.clone(), path, response).await?;
-        ensure_futures_success(&method, path, parsed)
+        ensured
     }
 }
 
@@ -506,19 +550,28 @@ impl MexcBlockingPrivateClient {
         let query = encode_pairs(params);
         let signature = sign_spot_payload(&query, &self.credentials.secret_key);
         let url = format!("{FETCH_DOMAIN}{path}?{query}&signature={signature}");
+        let started_at = Instant::now();
+        log_private_rest_start("spot", &method, path, !query.is_empty(), false);
 
-        let response = self
+        let response = match self
             .client
             .request(method.clone(), &url)
             .header("X-MEXC-APIKEY", self.credentials.access_key())
             .send()
-            .map_err(|error| {
-                AdapterError::InvalidRequest(format!(
+        {
+            Ok(response) => response,
+            Err(error) => {
+                log_private_rest_error("spot", &method, path, started_at.elapsed(), &error);
+                return Err(AdapterError::InvalidRequest(format!(
                     "MEXC spot private request failed for {path}: {error}"
-                ))
-            })?;
+                )));
+            }
+        };
+        let status = response.status();
+        let parsed = parse_blocking_json_response(method.clone(), path, response);
+        log_private_rest_result("spot", &method, path, status, started_at.elapsed(), &parsed);
 
-        parse_blocking_json_response(method, path, response)
+        parsed
     }
 
     fn send_futures_signed(
@@ -548,6 +601,14 @@ impl MexcBlockingPrivateClient {
             &self.credentials.secret_key,
         );
         let url = futures_request_url(path, &query);
+        let started_at = Instant::now();
+        log_private_rest_start(
+            "futures",
+            &method,
+            path,
+            !query.is_empty(),
+            !body_string.is_empty(),
+        );
 
         let mut builder = self
             .client
@@ -562,14 +623,41 @@ impl MexcBlockingPrivateClient {
             builder = builder.body(body_string);
         }
 
-        let response = builder.send().map_err(|error| {
-            AdapterError::InvalidRequest(format!(
-                "MEXC futures private request failed for {path}: {error}"
-            ))
-        })?;
+        let response = match builder.send() {
+            Ok(response) => response,
+            Err(error) => {
+                log_private_rest_error("futures", &method, path, started_at.elapsed(), &error);
+                return Err(AdapterError::InvalidRequest(format!(
+                    "MEXC futures private request failed for {path}: {error}"
+                )));
+            }
+        };
+        let status = response.status();
+        let parsed = match parse_blocking_json_response(method.clone(), path, response) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                log_private_rest_failure(
+                    "futures",
+                    &method,
+                    path,
+                    status,
+                    started_at.elapsed(),
+                    &error,
+                );
+                return Err(error);
+            }
+        };
+        let ensured = ensure_futures_success(&method, path, parsed);
+        log_private_rest_result(
+            "futures",
+            &method,
+            path,
+            status,
+            started_at.elapsed(),
+            &ensured,
+        );
 
-        let parsed = parse_blocking_json_response(method.clone(), path, response)?;
-        ensure_futures_success(&method, path, parsed)
+        ensured
     }
 }
 
@@ -1028,6 +1116,88 @@ fn body_preview(body: &str, limit: usize) -> String {
     }
 
     preview
+}
+
+fn log_private_rest_start(
+    market: &str,
+    method: &Method,
+    path: &str,
+    query_present: bool,
+    body_present: bool,
+) {
+    log::info!(
+        target: "flowsurface_exchange::connection",
+        "MEXC_PRIVATE_REST_START market={} method={} path={} query_present={} body_present={}",
+        market,
+        method,
+        path,
+        query_present,
+        body_present
+    );
+}
+
+fn log_private_rest_result<T>(
+    market: &str,
+    method: &Method,
+    path: &str,
+    status: reqwest::StatusCode,
+    elapsed: Duration,
+    result: &Result<T, AdapterError>,
+) {
+    match result {
+        Ok(_) => {
+            log::info!(
+                target: "flowsurface_exchange::connection",
+                "MEXC_PRIVATE_REST_DONE market={} method={} path={} status={} elapsed_ms={} success=true",
+                market,
+                method,
+                path,
+                status.as_u16(),
+                elapsed.as_millis()
+            );
+        }
+        Err(error) => {
+            log_private_rest_failure(market, method, path, status, elapsed, error);
+        }
+    }
+}
+
+fn log_private_rest_failure(
+    market: &str,
+    method: &Method,
+    path: &str,
+    status: reqwest::StatusCode,
+    elapsed: Duration,
+    error: &AdapterError,
+) {
+    log::warn!(
+        target: "flowsurface_exchange::connection",
+        "MEXC_PRIVATE_REST_DONE market={} method={} path={} status={} elapsed_ms={} success=false error={}",
+        market,
+        method,
+        path,
+        status.as_u16(),
+        elapsed.as_millis(),
+        error
+    );
+}
+
+fn log_private_rest_error(
+    market: &str,
+    method: &Method,
+    path: &str,
+    elapsed: Duration,
+    error: &dyn fmt::Display,
+) {
+    log::warn!(
+        target: "flowsurface_exchange::connection",
+        "MEXC_PRIVATE_REST_TRANSPORT_ERROR market={} method={} path={} elapsed_ms={} error={}",
+        market,
+        method,
+        path,
+        elapsed.as_millis(),
+        error
+    );
 }
 
 fn now_ms() -> u64 {

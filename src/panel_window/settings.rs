@@ -1,4 +1,5 @@
 use crate::{
+    logger,
     style::{self, Icon},
     widget::info_hint,
 };
@@ -33,6 +34,7 @@ pub(crate) enum SettingsSection {
     Hotkeys,
     Appearance,
     Data,
+    Logs,
     Risk,
     About,
 }
@@ -60,6 +62,7 @@ pub(crate) struct SettingsPanelState {
     hotkeys_enabled: bool,
     direct_connections: bool,
     risk_guard: bool,
+    log_export_status: String,
     info_hints: info_hint::State<SettingsInfo>,
     last_action: &'static str,
 }
@@ -94,6 +97,7 @@ impl SettingsPanelState {
             hotkeys_enabled: true,
             direct_connections: true,
             risk_guard: true,
+            log_export_status: "No log export has been created in this session".to_string(),
             info_hints: info_hint::State::new(),
             last_action: "Ready",
         }
@@ -193,6 +197,12 @@ impl SettingsPanelState {
                 self.risk_guard = !self.risk_guard;
                 self.last_action = "Risk guard toggled";
             }
+            SettingsAction::ExportAllLogs => {
+                self.export_logs(true);
+            }
+            SettingsAction::ExportSectionLogs => {
+                self.export_logs(false);
+            }
             SettingsAction::Reset => {
                 *self = Self::default();
                 self.last_action = "Settings reset";
@@ -204,6 +214,39 @@ impl SettingsPanelState {
         }
 
         None
+    }
+
+    fn export_logs(&mut self, all_logs: bool) {
+        let result = if all_logs {
+            logger::export_all_logs()
+        } else {
+            logger::export_section_logs()
+        };
+        let mode = if all_logs { "all" } else { "sections" };
+
+        match result {
+            Ok(export) => {
+                self.last_action = "Logs exported";
+                self.log_export_status =
+                    format!("Exported {mode} logs to {}", export.path.to_string_lossy());
+                log::info!(
+                    target: "flowsurface::ui",
+                    "LOG_EXPORT_DONE mode={} file_count={}",
+                    mode,
+                    export.files.len()
+                );
+            }
+            Err(err) => {
+                self.last_action = "Log export failed";
+                self.log_export_status = format!("Failed to export {mode} logs: {err}");
+                log::warn!(
+                    target: "flowsurface::ui",
+                    "LOG_EXPORT_FAILED mode={} error={}",
+                    mode,
+                    err
+                );
+            }
+        }
     }
 }
 
@@ -245,12 +288,14 @@ pub(crate) enum SettingsAction {
     ToggleHotkeys,
     ToggleDirectConnections,
     ToggleRiskGuard,
+    ExportAllLogs,
+    ExportSectionLogs,
     Reset,
     Note(&'static str),
 }
 
 impl SettingsSection {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::General,
         Self::Chart,
         Self::Trading,
@@ -259,6 +304,7 @@ impl SettingsSection {
         Self::Hotkeys,
         Self::Appearance,
         Self::Data,
+        Self::Logs,
         Self::Risk,
         Self::About,
     ];
@@ -273,6 +319,7 @@ impl SettingsSection {
             Self::Hotkeys => "Hotkeys",
             Self::Appearance => "Appearance",
             Self::Data => "Data & Connections",
+            Self::Logs => "Logs",
             Self::Risk => "Risk Management",
             Self::About => "About",
         }
@@ -288,6 +335,7 @@ impl SettingsSection {
             Self::Hotkeys => "Keyboard workflow controls",
             Self::Appearance => "Theme and visual customization",
             Self::Data => "Storage, proxy, and market-data settings",
+            Self::Logs => "Support exports and local diagnostics",
             Self::Risk => "Capital protection and beta guardrails",
             Self::About => "Build and utility panel information",
         }
@@ -303,6 +351,7 @@ impl SettingsSection {
             Self::Hotkeys => Icon::Edit,
             Self::Appearance => Icon::Star,
             Self::Data => Icon::Folder,
+            Self::Logs => Icon::Edit,
             Self::Risk => Icon::Link,
             Self::About => Icon::ExternalLink,
         }
@@ -368,6 +417,7 @@ fn settings_content<'a>(state: &'a SettingsPanelState) -> Element<'a, PanelMessa
         SettingsSection::Hotkeys => settings_hotkeys_content(state),
         SettingsSection::Appearance => settings_appearance_content(state),
         SettingsSection::Data => settings_data_content(state),
+        SettingsSection::Logs => settings_logs_content(state),
         SettingsSection::Risk => settings_risk_content(state),
         SettingsSection::About => settings_about_content(),
     };
@@ -583,6 +633,23 @@ fn settings_data_content<'a>(state: &'a SettingsPanelState) -> Element<'a, Panel
     .into()
 }
 
+fn settings_logs_content<'a>(state: &'a SettingsPanelState) -> Element<'a, PanelMessage> {
+    column![
+        settings_command_row(
+            "Export support logs",
+            [
+                ("All logs", SettingsAction::ExportAllLogs),
+                ("Section files", SettingsAction::ExportSectionLogs),
+            ],
+        ),
+        settings_value("Export format", "Redacted .log files in logs/exports"),
+        settings_value("Sections", "app, ui, connection, exchange, trading"),
+        settings_status_row("Last export", state.log_export_status.as_str()),
+    ]
+    .spacing(8)
+    .into()
+}
+
 fn settings_risk_content<'a>(state: &'a SettingsPanelState) -> Element<'a, PanelMessage> {
     column![
         settings_toggle_with_info(
@@ -744,6 +811,51 @@ fn toggle_switch<'a>(checked: bool) -> Element<'a, PanelMessage> {
 
 fn settings_value<'a>(label: &'static str, value: &'static str) -> Element<'a, PanelMessage> {
     setting_row(label, dropdown_box(value))
+}
+
+fn settings_command_row<'a>(
+    label: &'static str,
+    commands: [(&'static str, SettingsAction); 2],
+) -> Element<'a, PanelMessage> {
+    let buttons = commands.into_iter().fold(
+        row![].spacing(8).align_y(Alignment::Center),
+        |row, (title, action)| {
+            row.push(
+                button(
+                    row![
+                        style::icon_text(Icon::Folder, 13),
+                        text(title).size(SETTINGS_BODY),
+                    ]
+                    .spacing(7)
+                    .align_y(Alignment::Center),
+                )
+                .padding(padding::left(10).right(10).top(6).bottom(6))
+                .style(settings_secondary_button)
+                .on_press(PanelMessage::SettingsAction(action)),
+            )
+        },
+    );
+
+    setting_row(label, buttons)
+}
+
+fn settings_status_row<'a>(label: &'static str, value: &'a str) -> Element<'a, PanelMessage> {
+    container(
+        column![
+            text(label).size(SETTINGS_BODY),
+            text(value)
+                .size(SETTINGS_SMALL)
+                .wrapping(text::Wrapping::Word)
+                .style(|theme: &Theme| text::Style {
+                    color: Some(theme.extended_palette().background.weak.text),
+                }),
+        ]
+        .spacing(5),
+    )
+    .width(Length::Fill)
+    .padding(padding::left(14).right(14).top(11).bottom(11))
+    .style(settings_row_card)
+    .into()
 }
 
 fn settings_value_box<'a>(value: impl Into<String>, width: Length) -> Element<'a, PanelMessage> {
