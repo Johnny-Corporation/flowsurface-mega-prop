@@ -744,6 +744,23 @@ impl Flowsurface {
                             event: msg,
                         });
                     }
+                    Some(dashboard::sidebar::Action::TickerPairSelected(ticker_info)) => {
+                        let Some(main_window_id) = self.main_window.map(|window| window.id) else {
+                            return task.map(Message::Sidebar);
+                        };
+                        let handles = self.handles.clone();
+
+                        let task = self.active_dashboard_mut().init_focused_dom_candles_pair(
+                            &handles,
+                            main_window_id,
+                            ticker_info,
+                        );
+
+                        return task.map(move |msg| Message::Dashboard {
+                            layout_id: None,
+                            event: msg,
+                        });
+                    }
                     Some(dashboard::sidebar::Action::ErrorOccurred(err)) => {
                         self.notifications.push(Toast::error(err.to_string()));
                     }

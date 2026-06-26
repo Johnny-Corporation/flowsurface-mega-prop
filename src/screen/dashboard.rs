@@ -70,6 +70,7 @@ pub struct Dashboard {
     pub popout: HashMap<window::Id, (pane_grid::State<pane::State>, WindowSpec)>,
     pub streams: UniqueStreams,
     layout_id: uuid::Uuid,
+    hovered_link_group: Option<LinkGroup>,
 }
 
 impl Default for Dashboard {
@@ -80,6 +81,7 @@ impl Default for Dashboard {
             streams: UniqueStreams::default(),
             popout: HashMap::new(),
             layout_id: uuid::Uuid::new_v4(),
+            hovered_link_group: None,
         }
     }
 }
@@ -202,6 +204,7 @@ impl Dashboard {
             streams: UniqueStreams::default(),
             popout,
             layout_id,
+            hovered_link_group: None,
         }
     }
 
@@ -270,6 +273,9 @@ impl Dashboard {
             Message::Pane(window, message) => match message {
                 pane::Message::PaneClicked(pane) => {
                     self.focus = Some((window, pane));
+                }
+                pane::Message::LinkGroupHovered(group) => {
+                    self.hovered_link_group = group;
                 }
                 pane::Message::PaneResized(pane_grid::ResizeEvent { split, ratio }) => {
                     self.panes.resize(split, ratio);
@@ -691,10 +697,13 @@ impl Dashboard {
     ) -> Element<'a, Message> {
         let pane_grid: Element<_> = PaneGrid::new(&self.panes, |id, pane, maximized| {
             let is_focused = self.focus == Some((main_window.id, id));
+            let is_link_group_hovered =
+                pane.link_group.is_some() && pane.link_group == self.hovered_link_group;
             pane.view(
                 id,
                 self.panes.len(),
                 is_focused,
+                is_link_group_hovered,
                 maximized,
                 main_window.id,
                 main_window,
@@ -724,10 +733,13 @@ impl Dashboard {
             let content = container(
                 PaneGrid::new(state, |id, pane, _maximized| {
                     let is_focused = self.focus == Some((window, id));
+                    let is_link_group_hovered =
+                        pane.link_group.is_some() && pane.link_group == self.hovered_link_group;
                     pane.view(
                         id,
                         state.len(),
                         is_focused,
+                        is_link_group_hovered,
                         false,
                         window,
                         main_window,
@@ -863,6 +875,70 @@ impl Dashboard {
         )))
     }
 
+    pub fn init_focused_dom_candles_pair(
+        &mut self,
+        handles: &AdapterHandles,
+        main_window: window::Id,
+        ticker_info: TickerInfo,
+    ) -> Task<Message> {
+        let Some(link_group) = self.next_available_link_group(main_window) else {
+            return Task::done(Message::Notification(Toast::warn(
+                "No free link groups available".to_string(),
+            )));
+        };
+
+        let selected_pane =
+            if let Some((_, pane)) = self.focus.filter(|(window, _)| *window == main_window) {
+                pane
+            } else if let Some(pane) = self.panes.iter().last().map(|(pane, _)| *pane) {
+                pane
+            } else {
+                let (state, pane) = pane_grid::State::new(pane::State::new());
+                self.panes = state;
+                pane
+            };
+
+        let Some((candles_pane, split)) =
+            self.panes
+                .split(pane_grid::Axis::Vertical, selected_pane, pane::State::new())
+        else {
+            return Task::done(Message::Notification(Toast::warn(
+                "Couldn't create linked DOM and candles panes".to_string(),
+            )));
+        };
+
+        self.panes.resize(split, 0.68);
+
+        if let Some(state) = self.panes.get_mut(selected_pane) {
+            state.link_group = Some(link_group);
+        }
+
+        if let Some(state) = self.panes.get_mut(candles_pane) {
+            state.link_group = Some(link_group);
+        }
+
+        self.focus = Some((main_window, selected_pane));
+
+        Task::batch([
+            self.init_pane(
+                handles,
+                main_window,
+                main_window,
+                selected_pane,
+                ticker_info,
+                ContentKind::CscalpDom,
+            ),
+            self.init_pane(
+                handles,
+                main_window,
+                main_window,
+                candles_pane,
+                ticker_info,
+                ContentKind::CandlestickChart,
+            ),
+        ])
+    }
+
     pub fn switch_tickers_in_group(
         &mut self,
         handles: &AdapterHandles,
@@ -922,6 +998,13 @@ impl Dashboard {
                 "No link group or focused pane found".to_string(),
             )))
         }
+    }
+
+    fn next_available_link_group(&self, main_window: window::Id) -> Option<LinkGroup> {
+        LinkGroup::ALL.into_iter().find(|group| {
+            self.iter_all_panes(main_window)
+                .all(|(_, _, state)| state.link_group != Some(*group))
+        })
     }
 
     pub fn toggle_trade_fetch(&mut self, is_enabled: bool, main_window: &Window) {
@@ -1412,6 +1495,22 @@ impl Dashboard {
         self.streams = UniqueStreams::from(all_pane_streams);
 
         Task::none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_available_link_group_skips_groups_already_used_by_default_market_columns() {
+        let dashboard = Dashboard::default();
+        let main_window = window::Id::unique();
+
+        assert_eq!(
+            dashboard.next_available_link_group(main_window),
+            Some(LinkGroup::C)
+        );
     }
 }
 

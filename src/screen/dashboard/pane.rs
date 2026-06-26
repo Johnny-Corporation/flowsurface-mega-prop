@@ -85,6 +85,7 @@ pub enum Message {
     Popout,
     Merge,
     SwitchLinkGroup(pane_grid::Pane, Option<LinkGroup>),
+    LinkGroupHovered(Option<LinkGroup>),
     VisualConfigChanged(pane_grid::Pane, VisualConfig, bool),
     PaneEvent(pane_grid::Pane, Event),
 }
@@ -522,6 +523,7 @@ impl State {
         id: pane_grid::Pane,
         panes: usize,
         is_focused: bool,
+        is_link_group_hovered: bool,
         maximized: bool,
         window: window::Id,
         main_window: &'a Window,
@@ -531,9 +533,12 @@ impl State {
         let mut top_left_buttons = if Content::Starter == self.content {
             row![]
         } else {
-            row![link_group_button(id, self.link_group, |id| {
-                Message::PaneEvent(id, Event::ShowModal(Modal::LinkGroup))
-            })]
+            row![link_group_button(
+                id,
+                self.link_group,
+                |id| { Message::PaneEvent(id, Event::ShowModal(Modal::LinkGroup)) },
+                Message::LinkGroupHovered
+            )]
         };
 
         if let Some(kind) = self.stream_pair_kind() {
@@ -1156,7 +1161,7 @@ impl State {
         }
 
         let content = pane_grid::Content::new(body)
-            .style(move |theme| style::pane_background(theme, is_focused));
+            .style(move |theme| style::pane_background(theme, is_focused, is_link_group_hovered));
 
         let top_right_buttons = {
             let compact_control = container(
