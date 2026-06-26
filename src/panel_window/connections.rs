@@ -652,10 +652,20 @@ impl ConnectionPanelState {
         let Some(row) = self.active_trading_row() else {
             self.last_action = "Order rejected".to_string();
             self.push_log("[trading] No active trading connection is ON".to_string());
+            log::warn!(
+                target: "flowsurface::trading",
+                "DOM_ORDER_REJECTED kind=limit reason=no_active_trading_connection"
+            );
             return;
         };
 
         if row.exchange != ConnectionExchange::Mexc || row.market != ConnectionMarket::Futures {
+            log::warn!(
+                target: "flowsurface::trading",
+                "DOM_ORDER_REJECTED kind=limit reason=unsupported_connection exchange={:?} market={:?}",
+                row.exchange,
+                row.market
+            );
             self.last_action = "Order rejected".to_string();
             self.push_log(
                 "[trading] Only MEXC Futures live orders are wired right now".to_string(),
@@ -664,6 +674,11 @@ impl ConnectionPanelState {
         }
 
         let CredentialState::Saved { reference, .. } = &row.credentials else {
+            log::warn!(
+                target: "flowsurface::trading",
+                "DOM_ORDER_REJECTED kind=limit reason=missing_saved_credentials row_id={}",
+                row.id
+            );
             self.last_action = "Order rejected".to_string();
             self.push_log(
                 "[trading] Active trading connection has no saved credentials".to_string(),
@@ -679,10 +694,16 @@ impl ConnectionPanelState {
             Err(error) => {
                 self.last_action = "Order rejected".to_string();
                 self.push_log(format!("[trading] {error}"));
+                log::warn!(
+                    target: "flowsurface::trading",
+                    "DOM_ORDER_REJECTED kind=limit reason=invalid_order_plan error={}",
+                    error
+                );
                 return;
             }
         };
         log::info!(
+            target: "flowsurface::trading",
             "DOM_ORDER_CLICK kind=limit route={} external_oid={} symbol={} side={} price={} qty={}",
             mexc_futures_route_label(cached_client.as_ref()),
             order.external_oid,
@@ -708,10 +729,20 @@ impl ConnectionPanelState {
         let Some(row) = self.active_trading_row() else {
             self.last_action = "Order rejected".to_string();
             self.push_log("[trading] No active trading connection is ON".to_string());
+            log::warn!(
+                target: "flowsurface::trading",
+                "DOM_ORDER_REJECTED kind=market reason=no_active_trading_connection"
+            );
             return;
         };
 
         if row.exchange != ConnectionExchange::Mexc || row.market != ConnectionMarket::Futures {
+            log::warn!(
+                target: "flowsurface::trading",
+                "DOM_ORDER_REJECTED kind=market reason=unsupported_connection exchange={:?} market={:?}",
+                row.exchange,
+                row.market
+            );
             self.last_action = "Order rejected".to_string();
             self.push_log(
                 "[trading] Only MEXC Futures live orders are wired right now".to_string(),
@@ -720,6 +751,11 @@ impl ConnectionPanelState {
         }
 
         let CredentialState::Saved { reference, .. } = &row.credentials else {
+            log::warn!(
+                target: "flowsurface::trading",
+                "DOM_ORDER_REJECTED kind=market reason=missing_saved_credentials row_id={}",
+                row.id
+            );
             self.last_action = "Order rejected".to_string();
             self.push_log(
                 "[trading] Active trading connection has no saved credentials".to_string(),
@@ -735,10 +771,16 @@ impl ConnectionPanelState {
             Err(error) => {
                 self.last_action = "Market order rejected".to_string();
                 self.push_log(format!("[trading] {error}"));
+                log::warn!(
+                    target: "flowsurface::trading",
+                    "DOM_ORDER_REJECTED kind=market reason=invalid_order_plan error={}",
+                    error
+                );
                 return;
             }
         };
         log::info!(
+            target: "flowsurface::trading",
             "DOM_ORDER_CLICK kind=market route={} symbol={} side={} qty={}",
             mexc_futures_route_label(cached_client.as_ref()),
             order.symbol,
@@ -762,16 +804,31 @@ impl ConnectionPanelState {
         let Some(row) = self.active_trading_row() else {
             self.last_action = "Cancel rejected".to_string();
             self.push_log("[trading] No active trading connection is ON".to_string());
+            log::warn!(
+                target: "flowsurface::trading",
+                "DOM_CANCEL_ALL_REJECTED reason=no_active_trading_connection"
+            );
             return;
         };
 
         if row.exchange != ConnectionExchange::Mexc || row.market != ConnectionMarket::Futures {
+            log::warn!(
+                target: "flowsurface::trading",
+                "DOM_CANCEL_ALL_REJECTED reason=unsupported_connection exchange={:?} market={:?}",
+                row.exchange,
+                row.market
+            );
             self.last_action = "Cancel rejected".to_string();
             self.push_log("[trading] Only MEXC Futures cancel-all is wired right now".to_string());
             return;
         }
 
         let CredentialState::Saved { reference, .. } = &row.credentials else {
+            log::warn!(
+                target: "flowsurface::trading",
+                "DOM_CANCEL_ALL_REJECTED reason=missing_saved_credentials row_id={}",
+                row.id
+            );
             self.last_action = "Cancel rejected".to_string();
             self.push_log(
                 "[trading] Active trading connection has no saved credentials".to_string(),
@@ -784,6 +841,7 @@ impl ConnectionPanelState {
         let reference = reference.clone();
         let cached_client = self.cached_mexc_futures_client_for(&row_id);
         log::info!(
+            target: "flowsurface::trading",
             "DOM_CANCEL_ALL_REQUEST route={} symbol={symbol}",
             mexc_futures_route_label(cached_client.as_ref())
         );
@@ -845,6 +903,11 @@ impl ConnectionPanelState {
         let stop_for_thread = Arc::clone(&stop);
         let tx = self.probe_tx.clone();
         let event_row_id = row_id.clone();
+        log::info!(
+            target: "flowsurface::connection",
+            "MEXC_PRIVATE_WS_START row_id={}",
+            row_id
+        );
 
         thread::spawn(move || {
             let vault_key = match load_or_create_device_vault_key() {
@@ -918,6 +981,11 @@ impl ConnectionPanelState {
 
     fn stop_private_ws(&mut self) {
         if let Some(ws) = self.private_ws.take() {
+            log::info!(
+                target: "flowsurface::connection",
+                "MEXC_PRIVATE_WS_STOP row_id={}",
+                ws.row_id
+            );
             if self
                 .mexc_futures_client
                 .as_ref()
@@ -942,12 +1010,22 @@ impl ConnectionPanelState {
         match event {
             MexcPrivateWsEvent::Connected => {
                 self.last_action = "Private stream".to_string();
+                log::info!(
+                    target: "flowsurface::connection",
+                    "MEXC_PRIVATE_WS_CONNECTED row_id={}",
+                    row_id
+                );
             }
             MexcPrivateWsEvent::LoggedIn => {
                 self.private_ws_connected = true;
                 self.next_trading_state_refresh = None;
                 self.last_action = "Private stream".to_string();
                 self.push_log("[trading] MEXC private WebSocket authenticated".to_string());
+                log::info!(
+                    target: "flowsurface::connection",
+                    "MEXC_PRIVATE_WS_AUTHENTICATED row_id={}",
+                    row_id
+                );
             }
             MexcPrivateWsEvent::Disconnected(reason) => {
                 self.private_ws_connected = false;
@@ -955,15 +1033,28 @@ impl ConnectionPanelState {
                 self.push_log(format!(
                     "[trading] MEXC private WebSocket disconnected: {reason}"
                 ));
+                log::warn!(
+                    target: "flowsurface::connection",
+                    "MEXC_PRIVATE_WS_DISCONNECTED row_id={} reason={}",
+                    row_id,
+                    reason
+                );
             }
             MexcPrivateWsEvent::Error(error) => {
                 self.last_action = "Private stream error".to_string();
                 self.push_log(format!("[trading] MEXC private WebSocket error: {error}"));
+                log::warn!(
+                    target: "flowsurface::connection",
+                    "MEXC_PRIVATE_WS_ERROR row_id={} error={}",
+                    row_id,
+                    error
+                );
             }
             MexcPrivateWsEvent::Order(update) => {
                 if let Some(row) = self.rows.iter_mut().find(|row| row.id == row_id) {
                     let changed = apply_private_order_update(&mut row.open_orders, &update);
                     log::info!(
+                        target: "flowsurface::trading",
                         "MEXC_PRIVATE_ORDER_UPDATE row_id={} order_id={} symbol={} side={} state={} price={} vol={} remain_vol={:?} changed={}",
                         row_id,
                         update.order_id,
@@ -984,6 +1075,14 @@ impl ConnectionPanelState {
                 if let Some(row) = self.rows.iter_mut().find(|row| row.id == row_id)
                     && apply_private_position_update(&mut row.positions, &update)
                 {
+                    log::info!(
+                        target: "flowsurface::trading",
+                        "MEXC_PRIVATE_POSITION_UPDATE row_id={} symbol={} side={} hold_vol={} changed=true",
+                        row_id,
+                        update.symbol,
+                        update.position_type,
+                        update.hold_vol
+                    );
                     self.last_action = "Private position".to_string();
                 }
             }
