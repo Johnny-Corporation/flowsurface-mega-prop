@@ -12,6 +12,7 @@ mod screen;
 mod style;
 mod trading_state;
 mod version;
+mod watermark;
 mod widget;
 mod window;
 
