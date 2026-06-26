@@ -489,7 +489,7 @@ pub fn pane_title_bar(theme: &Theme) -> Style {
     }
 }
 
-pub fn pane_background(theme: &Theme, is_focused: bool) -> Style {
+pub fn pane_background(theme: &Theme, is_focused: bool, is_link_group_hovered: bool) -> Style {
     let palette = theme.extended_palette();
 
     let color = if palette.is_dark {
@@ -498,24 +498,30 @@ pub fn pane_background(theme: &Theme, is_focused: bool) -> Style {
         palette.background.strong.color
     };
 
+    let border = if is_link_group_hovered {
+        Border {
+            width: 2.0,
+            color: palette.secondary.strong.color,
+            radius: 4.0.into(),
+        }
+    } else if is_focused {
+        Border {
+            width: 1.0,
+            color: palette.background.strong.color,
+            radius: 4.0.into(),
+        }
+    } else {
+        Border {
+            width: 1.0,
+            color: color.scale_alpha(0.5),
+            radius: 2.0.into(),
+        }
+    };
+
     Style {
         text_color: Some(palette.background.base.text),
         background: Some(palette.background.weakest.color.into()),
-        border: {
-            if is_focused {
-                Border {
-                    width: 1.0,
-                    color: palette.background.strong.color,
-                    radius: 4.0.into(),
-                }
-            } else {
-                Border {
-                    width: 1.0,
-                    color: color.scale_alpha(0.5),
-                    radius: 2.0.into(),
-                }
-            }
-        },
+        border,
         ..Default::default()
     }
 }

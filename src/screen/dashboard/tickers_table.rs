@@ -69,6 +69,7 @@ fn available_markets(venue: Venue) -> &'static [MarketKind] {
 
 pub enum Action {
     TickerSelected(TickerInfo, Option<ContentKind>),
+    TickerPairSelected(TickerInfo),
     ErrorOccurred(data::InternalError),
     Fetch(Task<Message>),
     FocusWidget(iced::widget::Id),
@@ -80,6 +81,7 @@ pub enum Message {
     ChangeSortOption(SortOptions),
     ShowSortingOptions,
     TickerSelected(Ticker, Option<ContentKind>),
+    TickerPairSelected(Ticker),
     ExpandTickerCard(Option<Ticker>),
     FavoriteTicker(Ticker),
     Scrolled(scrollable::Viewport),
@@ -251,6 +253,18 @@ impl TickersTable {
 
                 if let Some(ticker_info) = ticker_info {
                     return Some(Action::TickerSelected(ticker_info, content));
+                } else {
+                    log::warn!(
+                        "Ticker info not found for {ticker:?} on {:?}",
+                        ticker.exchange
+                    );
+                }
+            }
+            Message::TickerPairSelected(ticker) => {
+                let ticker_info = self.tickers_info.get(&ticker).cloned().flatten();
+
+                if let Some(ticker_info) = ticker_info {
+                    return Some(Action::TickerPairSelected(ticker_info));
                 } else {
                     log::warn!(
                         "Ticker info not found for {ticker:?} on {:?}",
@@ -1059,6 +1073,16 @@ impl TickersTable {
                 .width(Length::Fixed(width))
         };
 
+        let init_pair_btn = |ticker: Ticker, width: f32| {
+            button(
+                row![icon_text(Icon::Link, 12), text("DOM + Candles")]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+            )
+            .on_press(Message::TickerPairSelected(ticker))
+            .width(Length::Fixed(width))
+        };
+
         column![
             row![
                 button(icon_text(Icon::Return, 11))
@@ -1121,6 +1145,7 @@ impl TickersTable {
                 init_content_btn(ContentKind::ComparisonChart, *ticker, 180.0),
                 init_content_btn(ContentKind::TimeAndSales, *ticker, 160.0),
                 init_content_btn(ContentKind::CscalpDom, *ticker, 180.0),
+                init_pair_btn(*ticker, 180.0),
             ]
             .width(Length::Fill)
             .spacing(2)

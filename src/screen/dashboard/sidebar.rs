@@ -31,6 +31,7 @@ pub enum Action {
         exchange::TickerInfo,
         Option<data::layout::pane::ContentKind>,
     ),
+    TickerPairSelected(exchange::TickerInfo),
     ErrorOccurred(data::InternalError),
 }
 
@@ -72,6 +73,9 @@ impl Sidebar {
                             Task::none(),
                             Some(Action::TickerSelected(ticker_info, content)),
                         );
+                    }
+                    Some(tickers_table::Action::TickerPairSelected(ticker_info)) => {
+                        return (Task::none(), Some(Action::TickerPairSelected(ticker_info)));
                     }
                     Some(tickers_table::Action::Fetch(task)) => {
                         return (task.map(Message::TickersTable), None);
