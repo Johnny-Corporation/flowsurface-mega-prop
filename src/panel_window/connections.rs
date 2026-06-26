@@ -2,6 +2,7 @@ use crate::{
     screen::dashboard::panel,
     style,
     trading_state::{LiveOpenOrder, LiveOrderSide, LivePosition, LiveTradingSnapshot},
+    widget::toast::{Status, Toast},
 };
 
 use data::config::connection_credentials::{
@@ -24,7 +25,7 @@ use std::{
     cmp::Reverse,
     fmt,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
@@ -65,6 +66,11 @@ const MEXC_FUTURES_PUBLIC_PING_URL: &str = "https://api.mexc.com/api/v1/contract
 const CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(6);
 const TRADING_STATE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const LIVE_POSITION_EPSILON: f32 = 0.000001;
+const MEXC_FUTURES_API_DOCS_URL: &str = "https://mexcdevelop.github.io/apidocs/contract_v1_en/";
+const MEXC_SPOT_API_DOCS_URL: &str = "https://mexcdevelop.github.io/apidocs/spot_v3_en/";
+const MEXC_FUTURES_ORDER_CREATE_ENDPOINT: &str = "POST /v1/private/order/create";
+const MEXC_FUTURES_CANCEL_ALL_ENDPOINT: &str = "POST /v1/private/order/cancel_all";
+const MAX_API_ERROR_MESSAGE_CHARS: usize = 260;
 static LIVE_ORDER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -83,6 +89,7 @@ pub(crate) struct ConnectionPanelState {
     private_ws: Option<PrivateWsHandle>,
     private_ws_connected: bool,
     mexc_futures_client: Option<CachedMexcFuturesClient>,
+    pending_notifications: Vec<Toast>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,6 +200,7 @@ impl Default for ConnectionPanelState {
             private_ws: None,
             private_ws_connected: false,
             mexc_futures_client: None,
+            pending_notifications: Vec::new(),
         }
     }
 }
@@ -205,6 +213,10 @@ impl ConnectionPanelState {
 
         self.ensure_private_ws();
         self.refresh_trading_state_if_due(now);
+    }
+
+    pub(crate) fn take_notifications(&mut self) -> Vec<Toast> {
+        std::mem::take(&mut self.pending_notifications)
     }
 
     pub(crate) fn update(&mut self, action: ConnectionAction) {
@@ -599,6 +611,11 @@ impl ConnectionPanelState {
         }
     }
 
+    fn push_api_error_notification(&mut self, context: ExchangeApiErrorContext, error: &str) {
+        self.pending_notifications
+            .push(exchange_api_error_notification(context, error).toast());
+    }
+
     fn enabled_count(&self) -> usize {
         self.rows.iter().filter(|row| row.enabled).count()
     }
@@ -638,6 +655,7 @@ impl ConnectionPanelState {
                 log_only: None,
                 private_ws_event: None,
                 mexc_futures_client: None,
+                api_error_context: None,
             });
             return;
         };
@@ -958,6 +976,13 @@ impl ConnectionPanelState {
             }
             MexcPrivateWsEvent::Error(error) => {
                 self.last_action = "Private stream error".to_string();
+                self.push_api_error_notification(
+                    ExchangeApiErrorContext::mexc_futures(
+                        "Private WebSocket",
+                        Some("wss://contract.mexc.com/edge"),
+                    ),
+                    &error,
+                );
                 self.push_log(format!("[trading] MEXC private WebSocket error: {error}"));
             }
             MexcPrivateWsEvent::Order(update) => {
@@ -1037,6 +1062,8 @@ impl ConnectionPanelState {
     }
 
     fn apply_probe_result(&mut self, result: ConnectionProbeResult) {
+        let api_error_context = result.api_error_context.clone();
+
         if let Some(event) = result.private_ws_event {
             self.apply_private_ws_event(&result.row_id, event);
             return;
@@ -1068,6 +1095,9 @@ impl ConnectionPanelState {
                 }
                 Err(error) => {
                     self.last_action = "Trading state failed".to_string();
+                    if let Some(context) = api_error_context {
+                        self.push_api_error_notification(context, &error);
+                    }
                     self.push_log(format!("[trading] {error}"));
                 }
             }
@@ -1078,6 +1108,7 @@ impl ConnectionPanelState {
             return;
         };
 
+        let mut api_error_to_notify = None;
         let log_message = match result.outcome {
             Ok(message) => {
                 let label = row.label();
@@ -1110,9 +1141,14 @@ impl ConnectionPanelState {
                 {
                     self.mexc_futures_client = None;
                 }
+                api_error_to_notify = Some(error.clone());
                 format!("[connections] {label} failed: {error}")
             }
         };
+
+        if let (Some(context), Some(error)) = (api_error_context, api_error_to_notify) {
+            self.push_api_error_notification(context, &error);
+        }
 
         self.push_log(log_message);
 
@@ -1470,6 +1506,7 @@ struct ConnectionProbeResult {
     log_only: Option<String>,
     private_ws_event: Option<MexcPrivateWsEvent>,
     mexc_futures_client: Option<MexcBlockingPrivateClient>,
+    api_error_context: Option<ExchangeApiErrorContext>,
 }
 
 impl ConnectionProbeResult {
@@ -1485,6 +1522,7 @@ impl ConnectionProbeResult {
             log_only: Some(format!("[trading] {message}")),
             private_ws_event: None,
             mexc_futures_client: None,
+            api_error_context: None,
         }
     }
 
@@ -1500,6 +1538,7 @@ impl ConnectionProbeResult {
             log_only: None,
             private_ws_event: Some(event),
             mexc_futures_client: None,
+            api_error_context: None,
         }
     }
 
@@ -1507,6 +1546,7 @@ impl ConnectionProbeResult {
         row_id: String,
         outcome: Result<String, String>,
         snapshot: LiveTradingSnapshot,
+        api_error_context: Option<ExchangeApiErrorContext>,
     ) -> Self {
         Self {
             row_id,
@@ -1519,11 +1559,13 @@ impl ConnectionProbeResult {
             log_only: None,
             private_ws_event: None,
             mexc_futures_client: None,
+            api_error_context,
         }
     }
 }
 
 fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
+    let api_error_context = api_error_context_for_probe(&spec);
     let result = match spec.mode {
         ConnectionMode::View => probe_mexc_public(spec.market),
         ConnectionMode::Trade => probe_mexc_private(&spec),
@@ -1541,6 +1583,7 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
             log_only: None,
             private_ws_event: None,
             mexc_futures_client: success.mexc_futures_client,
+            api_error_context: None,
         },
         Err(error) => ConnectionProbeResult {
             row_id: spec.row_id,
@@ -1553,7 +1596,35 @@ fn run_connection_probe(spec: ConnectionProbeSpec) -> ConnectionProbeResult {
             log_only: None,
             private_ws_event: None,
             mexc_futures_client: None,
+            api_error_context,
         },
+    }
+}
+
+fn api_error_context_for_probe(spec: &ConnectionProbeSpec) -> Option<ExchangeApiErrorContext> {
+    match (spec.market, spec.mode) {
+        (ConnectionMarket::Spot, ConnectionMode::View) => Some(ExchangeApiErrorContext::mexc_spot(
+            "Test public API",
+            Some("GET https://api.mexc.com/api/v3/time"),
+        )),
+        (ConnectionMarket::Futures, ConnectionMode::View) => {
+            Some(ExchangeApiErrorContext::mexc_futures(
+                "Test public API",
+                Some("GET https://api.mexc.com/api/v1/contract/detail"),
+            ))
+        }
+        (ConnectionMarket::Spot, ConnectionMode::Trade) => {
+            Some(ExchangeApiErrorContext::mexc_spot(
+                "Authenticate private API",
+                Some("GET /api/v3/account"),
+            ))
+        }
+        (ConnectionMarket::Futures, ConnectionMode::Trade) => {
+            Some(ExchangeApiErrorContext::mexc_futures(
+                "Authenticate private API",
+                Some("GET /v1/private/account/assets"),
+            ))
+        }
     }
 }
 
@@ -1564,6 +1635,215 @@ struct ProbeSuccess {
     open_orders: Vec<LiveOpenOrder>,
     positions: Vec<LivePosition>,
     mexc_futures_client: Option<MexcBlockingPrivateClient>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExchangeApiErrorContext {
+    exchange: &'static str,
+    action: String,
+    endpoint: Option<String>,
+    docs_url: &'static str,
+}
+
+impl ExchangeApiErrorContext {
+    fn mexc_futures(action: impl Into<String>, endpoint: Option<&str>) -> Self {
+        Self {
+            exchange: "MEXC",
+            action: action.into(),
+            endpoint: endpoint.map(str::to_string),
+            docs_url: MEXC_FUTURES_API_DOCS_URL,
+        }
+    }
+
+    fn mexc_spot(action: impl Into<String>, endpoint: Option<&str>) -> Self {
+        Self {
+            exchange: "MEXC",
+            action: action.into(),
+            endpoint: endpoint.map(str::to_string),
+            docs_url: MEXC_SPOT_API_DOCS_URL,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExchangeApiErrorNotification {
+    exchange: &'static str,
+    action: String,
+    endpoint: Option<String>,
+    code: Option<String>,
+    message: String,
+    explanation: String,
+    details: String,
+    docs_url: &'static str,
+}
+
+impl ExchangeApiErrorNotification {
+    fn toast(&self) -> Toast {
+        let mut lines = vec![
+            format!("Exchange: {}", self.exchange),
+            format!("Action: {}", self.action),
+        ];
+
+        if let Some(endpoint) = &self.endpoint {
+            lines.push(format!("Endpoint: {endpoint}"));
+        }
+
+        if let Some(code) = &self.code {
+            lines.push(format!("Code: {code}"));
+        }
+
+        lines.push(format!("Message: {}", self.message));
+        lines.push(format!("Explanation: {}", self.explanation));
+
+        if self.details != self.message {
+            lines.push(format!("Details: {}", self.details));
+        }
+
+        lines.push(format!("Docs: {}", self.docs_url));
+
+        Toast::custom(
+            format!("{} API error", self.exchange),
+            lines.join("\n"),
+            Status::Danger,
+        )
+    }
+}
+
+fn exchange_api_error_notification(
+    context: ExchangeApiErrorContext,
+    error: &str,
+) -> ExchangeApiErrorNotification {
+    let details = sanitize_exchange_error_text(error);
+    let code = extract_mexc_error_code(&details);
+    let message = extract_exchange_error_message(&details);
+    let explanation = explain_exchange_error(context.docs_url, code.as_deref(), &message);
+
+    ExchangeApiErrorNotification {
+        exchange: context.exchange,
+        action: context.action,
+        endpoint: context.endpoint,
+        code,
+        message,
+        explanation,
+        details: truncate_for_toast(&details),
+        docs_url: context.docs_url,
+    }
+}
+
+fn sanitize_exchange_error_text(error: &str) -> String {
+    let compact = error
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    sensitive_assignment_regex()
+        .replace_all(&compact, "${prefix}<redacted>${suffix}")
+        .to_string()
+}
+
+fn extract_mexc_error_code(error: &str) -> Option<String> {
+    mexc_code_regex()
+        .captures(error)
+        .and_then(|captures| captures.name("code"))
+        .map(|code| code.as_str().to_string())
+}
+
+fn extract_exchange_error_message(error: &str) -> String {
+    let message = if let Some(message) =
+        error.split_once(" returned code ").and_then(|(_, rest)| {
+            rest.split_once(": ")
+                .map(|(_, message)| message.to_string())
+        }) {
+        message
+    } else if let Some(message) = extract_json_message(error) {
+        message
+    } else {
+        error.to_string()
+    };
+
+    truncate_for_toast(trim_sensitive_tail(&message).trim())
+}
+
+fn extract_json_message(error: &str) -> Option<String> {
+    json_message_regex()
+        .captures(error)
+        .and_then(|captures| captures.name("message"))
+        .map(|message| message.as_str().to_string())
+}
+
+fn trim_sensitive_tail(message: &str) -> &str {
+    sensitive_assignment_regex()
+        .find(message)
+        .map(|match_| &message[..match_.start()])
+        .unwrap_or(message)
+}
+
+fn sensitive_assignment_regex() -> &'static regex::Regex {
+    static REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)(?P<prefix>\b(?:accessKey|apiKey|secretKey|secret|signature|sign|token)\b\s*["']?\s*[:=]\s*["']?)[^"',&}\s]+(?P<suffix>["']?)"#,
+        )
+        .expect("sensitive exchange error regex is valid")
+    })
+}
+
+fn mexc_code_regex() -> &'static regex::Regex {
+    static REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        regex::Regex::new(r#"(?i)(?:returned code|["']code["']\s*:|code)\s*(?P<code>-?\d+)"#)
+            .expect("MEXC code regex is valid")
+    })
+}
+
+fn json_message_regex() -> &'static regex::Regex {
+    static REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        regex::Regex::new(r#"(?i)["']message["']\s*:\s*["'](?P<message>[^"']+)"#)
+            .expect("JSON message regex is valid")
+    })
+}
+
+fn explain_exchange_error(docs_url: &str, code: Option<&str>, message: &str) -> String {
+    match (docs_url, code) {
+        (MEXC_FUTURES_API_DOCS_URL, Some("1005")) => {
+            "Check Futures API permissions, IP whitelist, and contract account activation."
+                .to_string()
+        }
+        (MEXC_FUTURES_API_DOCS_URL, Some("402")) => {
+            "Re-check the saved Futures API key and secret; MEXC reports this key pair is invalid or expired."
+                .to_string()
+        }
+        (MEXC_SPOT_API_DOCS_URL, Some("10072")) => {
+            "Re-check the saved Spot API key, API permissions, and whether the key belongs to Spot."
+                .to_string()
+        }
+        _ if message.to_ascii_lowercase().contains("timeout") => {
+            "The request timed out before MEXC responded; check network/proxy reachability and retry."
+                .to_string()
+        }
+        _ if message.to_ascii_lowercase().contains("network") => {
+            "MEXC reported a network/API-side failure; retry after checking credentials, permissions, and connectivity."
+                .to_string()
+        }
+        _ => "Review the exchange response, credentials, permissions, market type, and current API docs."
+            .to_string(),
+    }
+}
+
+fn truncate_for_toast(message: &str) -> String {
+    let trimmed = message.trim();
+    let mut truncated = trimmed
+        .chars()
+        .take(MAX_API_ERROR_MESSAGE_CHARS)
+        .collect::<String>();
+
+    if trimmed.chars().count() > MAX_API_ERROR_MESSAGE_CHARS {
+        truncated.push_str("...");
+    }
+
+    truncated
 }
 
 fn live_order_external_oid() -> String {
@@ -1817,6 +2097,10 @@ fn run_live_limit_order(
             row_id,
             Err(format!("Order failed: {error}")),
             LiveTradingSnapshot::default(),
+            Some(ExchangeApiErrorContext::mexc_futures(
+                "Place limit order",
+                Some(MEXC_FUTURES_ORDER_CREATE_ENDPOINT),
+            )),
         ),
     }
 }
@@ -1899,6 +2183,10 @@ fn run_live_market_order(
             row_id,
             Err(format!("Market order failed: {error}")),
             LiveTradingSnapshot::default(),
+            Some(ExchangeApiErrorContext::mexc_futures(
+                "Place market order",
+                Some(MEXC_FUTURES_ORDER_CREATE_ENDPOINT),
+            )),
         ),
     }
 }
@@ -1980,6 +2268,10 @@ fn run_cancel_all_orders(
             row_id,
             Err(format!("Cancel all failed: {error}")),
             LiveTradingSnapshot::default(),
+            Some(ExchangeApiErrorContext::mexc_futures(
+                "Cancel all orders",
+                Some(MEXC_FUTURES_CANCEL_ALL_ENDPOINT),
+            )),
         ),
     }
 }
@@ -2062,12 +2354,18 @@ fn run_trading_state_refresh(
                 snapshot.open_orders.len(),
                 snapshot.positions.len()
             );
-            ConnectionProbeResult::trading_state(row_id, Ok(message), snapshot)
+            ConnectionProbeResult::trading_state(row_id, Ok(message), snapshot, None)
         }
         Err(error) => ConnectionProbeResult::trading_state(
             row_id,
             Err(format!("State refresh failed: {error}")),
             LiveTradingSnapshot::default(),
+            Some(ExchangeApiErrorContext::mexc_futures(
+                "Refresh trading state",
+                Some(
+                    "GET /v1/private/order/list/open_orders + GET /v1/private/position/open_positions",
+                ),
+            )),
         ),
     }
 }
@@ -3375,6 +3673,35 @@ mod tests {
         assert!(super::is_mexc_futures_contract_network_error(
             "MEXC futures private request GET /v1/private/account/assets returned code 1005: Network error"
         ));
+    }
+
+    #[test]
+    fn mexc_api_error_notification_formats_details_and_redacts_secrets() {
+        let notification = super::exchange_api_error_notification(
+            super::ExchangeApiErrorContext::mexc_futures(
+                "Place limit order",
+                Some("POST /v1/private/order/create"),
+            ),
+            "MEXC futures private request POST /v1/private/order/create returned code 1005: Network error. Please try again. accessKey=abc123 signature=deadbeef token=sekret",
+        );
+
+        let toast = notification.toast();
+        let body = toast.body();
+
+        assert_eq!(toast.title(), "MEXC API error");
+        assert!(body.contains("Exchange: MEXC"));
+        assert!(body.contains("Action: Place limit order"));
+        assert!(body.contains("Endpoint: POST /v1/private/order/create"));
+        assert!(body.contains("Code: 1005"));
+        assert!(body.contains("Message: Network error. Please try again."));
+        assert!(body.contains("Explanation: Check Futures API permissions"));
+        assert!(body.contains("Docs: https://mexcdevelop.github.io/apidocs/contract_v1_en/"));
+        assert!(body.contains("accessKey=<redacted>"));
+        assert!(body.contains("signature=<redacted>"));
+        assert!(body.contains("token=<redacted>"));
+        assert!(!body.contains("abc123"));
+        assert!(!body.contains("deadbeef"));
+        assert!(!body.contains("sekret"));
     }
 
     #[test]

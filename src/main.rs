@@ -245,6 +245,7 @@ impl Flowsurface {
             Message::Tick(now) => {
                 self.tick_startup_loading(now);
                 self.connection_state.tick(now);
+                self.drain_connection_notifications();
                 let live_trading_snapshot = self.connection_state.live_trading_snapshot();
 
                 for panel in self.panel_windows.values_mut() {
@@ -270,6 +271,7 @@ impl Flowsurface {
             }
             Message::ConnectionTick(now) => {
                 self.connection_state.tick(now);
+                self.drain_connection_notifications();
                 let live_trading_snapshot = self.connection_state.live_trading_snapshot();
 
                 let Some(main_window) = self.main_window else {
@@ -400,6 +402,7 @@ impl Flowsurface {
                         }
                         Some(dashboard::Event::PanelAction(action)) => {
                             self.connection_state.handle_panel_action(action);
+                            self.drain_connection_notifications();
                             Task::none()
                         }
                         Some(dashboard::Event::ResolveStreams { pane_id, streams }) => {
@@ -509,6 +512,7 @@ impl Flowsurface {
 
                     if handles_connection_action {
                         self.connection_state.update(action);
+                        self.drain_connection_notifications();
                     } else if let Some(panel) = self.panel_windows.get_mut(&window) {
                         panel.update(panel_window::PanelMessage::ConnectionAction(action));
                     }
@@ -787,6 +791,12 @@ impl Flowsurface {
         self.startup_animation_frames = self.startup_animation_frames.saturating_add(1);
         if self.startup_animation_frames >= STARTUP_ANIMATION_READY_FRAMES {
             self.startup_text_started_at = Some(now);
+        }
+    }
+
+    fn drain_connection_notifications(&mut self) {
+        for notification in self.connection_state.take_notifications() {
+            self.notifications.push(notification);
         }
     }
 

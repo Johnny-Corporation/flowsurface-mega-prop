@@ -1250,6 +1250,7 @@ dependencies = [
  "num-traits",
  "palette",
  "rand 0.10.1",
+ "regex",
  "reqwest",
  "rodio",
  "rustc-hash 2.1.2",
