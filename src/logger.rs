@@ -4,7 +4,6 @@ use std::{
     io::{self, BufRead, Write},
     panic::PanicHookInfo,
     path::{Path, PathBuf},
-    process,
     sync::{Once, OnceLock, mpsc},
     thread::{self, JoinHandle},
 };
@@ -343,11 +342,10 @@ fn redact_log_line(line: &str) -> String {
         return line.to_string();
     }
 
-    let redacted = sensitive_pair_regex().replace_all(line, "$1=[redacted]");
+    let redacted = bearer_token_regex().replace_all(line, "Bearer [redacted]");
+    let redacted = sensitive_pair_regex().replace_all(&redacted, "$1=[redacted]");
     let redacted = sensitive_json_regex().replace_all(&redacted, "$1\"[redacted]\"");
-    bearer_token_regex()
-        .replace_all(&redacted, "Bearer [redacted]")
-        .into_owned()
+    redacted.into_owned()
 }
 
 fn contains_sensitive_marker(line: &str) -> bool {
@@ -356,6 +354,7 @@ fn contains_sensitive_marker(line: &str) -> bool {
         || lower.contains("secret")
         || lower.contains("signature")
         || lower.contains("token")
+        || lower.contains("bearer")
         || lower.contains("authorization")
         || lower.contains("password")
         || lower.contains("passwd")
@@ -389,8 +388,7 @@ fn bearer_token_regex() -> &'static Regex {
 }
 
 fn initial_rotation(log_path: &PathBuf) -> io::Result<()> {
-    let dir = log_path.parent().unwrap_or(std::path::Path::new("."));
-    let previous = dir.join("flowsurface-previous.log");
+    let previous = previous_log_path(log_path);
 
     if let Err(e) = fs::remove_file(&previous)
         && e.kind() != io::ErrorKind::NotFound
@@ -403,6 +401,13 @@ fn initial_rotation(log_path: &PathBuf) -> io::Result<()> {
         return Err(e);
     }
     Ok(())
+}
+
+fn previous_log_path(log_path: &Path) -> PathBuf {
+    log_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("flowsurface-previous.log")
 }
 
 struct BackgroundLogger {
@@ -479,6 +484,7 @@ impl Drop for BackgroundLogger {
 
 struct Logger {
     file: fs::File,
+    path: PathBuf,
     current_size: u64,
 }
 
@@ -493,8 +499,17 @@ impl Logger {
 
         Ok(Logger {
             file,
+            path: path.clone(),
             current_size: size,
         })
+    }
+
+    fn rotate(&mut self) -> io::Result<()> {
+        self.file.flush()?;
+        fs::copy(&self.path, previous_log_path(&self.path))?;
+        self.file.set_len(0)?;
+        self.current_size = 0;
+        Ok(())
     }
 }
 
@@ -503,18 +518,7 @@ impl Write for Logger {
         let buf_len = buf.len() as u64;
 
         if self.current_size + buf_len > MAX_LOG_FILE_SIZE {
-            let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
-            let error_msg = format!(
-                "\n{}:FATAL -- Log file size would exceed the maximum allowed size of {} bytes\n",
-                timestamp, MAX_LOG_FILE_SIZE
-            );
-
-            eprintln!("{error_msg}");
-
-            let _ = self.file.write_all(error_msg.as_bytes());
-            let _ = self.file.flush();
-
-            process::abort();
+            self.rotate()?;
         }
 
         let bytes = self.file.write(buf)?;
@@ -584,6 +588,7 @@ fn append_stderr_log_line(message: &str) -> io::Result<()> {
         .append(true)
         .open(log_path)?;
 
+    let message = redact_log_line(message);
     writeln!(
         file,
         "{}:FATAL -- {message}",
@@ -606,7 +611,7 @@ mod tests {
 
     #[test]
     fn redact_log_line_masks_credentials_and_signatures() {
-        let line = "12:00:00.000:INFO [exchange] -- request api_key=access-123 secret_key=\"very-secret\" signature=deadbeef token: bearer-456";
+        let line = "12:00:00.000:INFO [exchange] -- request api_key=access-123 secret_key=\"very-secret\" signature=deadbeef token: bearer-456 Authorization: Bearer session-secret password=hunter2";
 
         let redacted = redact_log_line(line);
 
@@ -614,10 +619,42 @@ mod tests {
         assert!(!redacted.contains("very-secret"));
         assert!(!redacted.contains("deadbeef"));
         assert!(!redacted.contains("bearer-456"));
+        assert!(!redacted.contains("session-secret"));
+        assert!(!redacted.contains("hunter2"));
         assert!(redacted.contains("api_key=[redacted]"));
         assert!(redacted.contains("secret_key=[redacted]"));
         assert!(redacted.contains("signature=[redacted]"));
         assert!(redacted.contains("token=[redacted]"));
+    }
+
+    #[test]
+    fn logger_rotates_at_size_limit_without_terminating() {
+        let root = temp_export_root();
+        fs::create_dir_all(&root).unwrap();
+        let current = root.join("flowsurface-current.log");
+        fs::write(&current, "before rotation\n").unwrap();
+
+        let mut logger = Logger::new(&current).unwrap();
+        logger.current_size = MAX_LOG_FILE_SIZE;
+        logger.write_all(b"after rotation\n").unwrap();
+        logger.flush().unwrap();
+
+        assert_eq!(
+            fs::read_to_string(previous_log_path(&current)).unwrap(),
+            "before rotation\n"
+        );
+        assert_eq!(fs::read_to_string(&current).unwrap(), "after rotation\n");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn redact_log_line_masks_panic_shaped_credentials() {
+        let redacted =
+            redact_log_line("panic Authorization: Bearer panic-secret password=panic-password");
+
+        assert!(!redacted.contains("panic-secret"));
+        assert!(!redacted.contains("panic-password"));
     }
 
     #[test]

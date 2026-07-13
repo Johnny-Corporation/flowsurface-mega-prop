@@ -1836,6 +1836,8 @@ fn sanitize_exchange_error_text(error: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
 
+    let compact = exchange_bearer_token_regex().replace_all(&compact, "Bearer <redacted>");
+
     sensitive_assignment_regex()
         .replace_all(&compact, "${prefix}<redacted>${suffix}")
         .to_string()
@@ -1882,9 +1884,17 @@ fn sensitive_assignment_regex() -> &'static regex::Regex {
     static REGEX: OnceLock<regex::Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
         regex::Regex::new(
-            r#"(?i)(?P<prefix>\b(?:accessKey|apiKey|secretKey|secret|signature|sign|token)\b\s*["']?\s*[:=]\s*["']?)[^"',&}\s]+(?P<suffix>["']?)"#,
+            r#"(?i)(?P<prefix>\b(?:access[_-]?key|api[_-]?key|secret[_-]?key|secret|signature|sign|token|authorization|password|passwd)\b\s*["']?\s*[:=]\s*["']?)[^"',&}\s]+(?P<suffix>["']?)"#,
         )
         .expect("sensitive exchange error regex is valid")
+    })
+}
+
+fn exchange_bearer_token_regex() -> &'static regex::Regex {
+    static REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        regex::Regex::new(r#"(?i)\bBearer\s+[A-Za-z0-9._~+/\-=]+"#)
+            .expect("exchange bearer token regex is valid")
     })
 }
 
@@ -1906,10 +1916,6 @@ fn json_message_regex() -> &'static regex::Regex {
 
 fn explain_exchange_error(docs_url: &str, code: Option<&str>, message: &str) -> String {
     match (docs_url, code) {
-        (MEXC_FUTURES_API_DOCS_URL, Some("1005")) => {
-            "Check Futures API permissions, IP whitelist, and contract account activation."
-                .to_string()
-        }
         (MEXC_FUTURES_API_DOCS_URL, Some("402")) => {
             "Re-check the saved Futures API key and secret; MEXC reports this key pair is invalid or expired."
                 .to_string()
@@ -1919,11 +1925,11 @@ fn explain_exchange_error(docs_url: &str, code: Option<&str>, message: &str) -> 
                 .to_string()
         }
         _ if message.to_ascii_lowercase().contains("timeout") => {
-            "The request timed out before MEXC responded; check network/proxy reachability and retry."
+            "MEXC did not confirm the request outcome. Refresh and reconcile open orders and positions before retrying."
                 .to_string()
         }
         _ if message.to_ascii_lowercase().contains("network") => {
-            "MEXC reported a network/API-side failure; retry after checking credentials, permissions, and connectivity."
+            "MEXC did not confirm the request outcome. Check connectivity, then refresh and reconcile open orders and positions before retrying."
                 .to_string()
         }
         _ => "Review the exchange response, credentials, permissions, market type, and current API docs."
@@ -3781,7 +3787,7 @@ mod tests {
                 "Place limit order",
                 Some("POST /v1/private/order/create"),
             ),
-            "MEXC futures private request POST /v1/private/order/create returned code 1005: Network error. Please try again. accessKey=abc123 signature=deadbeef token=sekret",
+            "MEXC futures private request POST /v1/private/order/create returned code 1005: Network error. Please try again. accessKey=abc123 api_key=snake-api secret-key=hyphen-secret signature=deadbeef token=sekret Authorization: Bearer session-secret password=hunter2 passwd=legacy-secret",
         );
 
         let toast = notification.toast();
@@ -3793,14 +3799,20 @@ mod tests {
         assert!(body.contains("Endpoint: POST /v1/private/order/create"));
         assert!(body.contains("Code: 1005"));
         assert!(body.contains("Message: Network error. Please try again."));
-        assert!(body.contains("Explanation: Check Futures API permissions"));
+        assert!(body.contains("Explanation: MEXC did not confirm the request outcome"));
+        assert!(body.contains("reconcile open orders and positions before retrying"));
         assert!(body.contains("Docs: https://mexcdevelop.github.io/apidocs/contract_v1_en/"));
         assert!(body.contains("accessKey=<redacted>"));
         assert!(body.contains("signature=<redacted>"));
         assert!(body.contains("token=<redacted>"));
         assert!(!body.contains("abc123"));
+        assert!(!body.contains("snake-api"));
+        assert!(!body.contains("hyphen-secret"));
         assert!(!body.contains("deadbeef"));
         assert!(!body.contains("sekret"));
+        assert!(!body.contains("session-secret"));
+        assert!(!body.contains("hunter2"));
+        assert!(!body.contains("legacy-secret"));
     }
 
     #[test]
