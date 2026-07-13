@@ -9,6 +9,7 @@ const WATERMARK_ALPHA: f32 = 0.065;
 const WATERMARK_MIN_SIZE: f32 = 12.0;
 const WATERMARK_MAX_SIZE: f32 = 86.0;
 const WATERMARK_CHAR_ADVANCE: f32 = 0.58;
+const WATERMARK_SIZE_SCALE: f32 = 1.0 / 1.5;
 
 pub(crate) fn ticker_label(ticker_info: &TickerInfo) -> String {
     let (symbol, _) = ticker_info.ticker.display_symbol_and_type();
@@ -55,6 +56,7 @@ fn watermark_text_size(bounds: Rectangle, label: &str) -> f32 {
         .min(fit_width)
         .min(bounds.height * 0.32)
         .min(WATERMARK_MAX_SIZE)
+        * WATERMARK_SIZE_SCALE
 }
 
 #[cfg(test)]
@@ -74,5 +76,19 @@ mod tests {
 
         assert_eq!(label, "MEXC BTC_USDT");
         assert!(!label.to_ascii_lowercase().contains("linear"));
+    }
+
+    #[test]
+    fn watermark_size_is_one_and_a_half_times_smaller_than_pane_target() {
+        let bounds = iced::Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 600.0,
+            height: 300.0,
+        };
+
+        let size = super::watermark_text_size(bounds, "MEXC BTC_USDT");
+
+        assert!((size * 1.5 - bounds.height * 0.18).abs() < 0.001);
     }
 }
