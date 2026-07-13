@@ -1498,22 +1498,6 @@ impl Dashboard {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn next_available_link_group_skips_groups_already_used_by_default_market_columns() {
-        let dashboard = Dashboard::default();
-        let main_window = window::Id::unique();
-
-        assert_eq!(
-            dashboard.next_available_link_group(main_window),
-            Some(LinkGroup::C)
-        );
-    }
-}
-
 impl From<fetcher::FetchUpdate> for Message {
     fn from(update: fetcher::FetchUpdate) -> Self {
         match update {
@@ -1540,5 +1524,21 @@ impl From<fetcher::FetchUpdate> for Message {
                 Message::ErrorOccurred(Some(pane_id), DashboardError::Fetch(error))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_available_link_group_skips_groups_already_used_by_default_market_columns() {
+        let dashboard = Dashboard::default();
+        let main_window = window::Id::unique();
+
+        assert_eq!(
+            dashboard.next_available_link_group(main_window),
+            Some(LinkGroup::C)
+        );
     }
 }
