@@ -139,6 +139,9 @@ impl Controller {
     pub fn set_seek_time_input(&mut self, value: String) {
         self.seek_time_input = value;
         self.seek_draft_dirty = true;
+        if self.status == "Use UTC time as HH:MM:SS" {
+            self.status.clear();
+        }
     }
 
     pub fn status(&self) -> String {
@@ -222,13 +225,20 @@ impl Controller {
     }
 
     pub fn seek_from_input(&mut self) -> Option<Vec<exchange::Event>> {
-        let date = match self
-            .seek_date
-            .as_ref()
-            .and_then(|date| NaiveDate::parse_from_str(&date.value, DATE_FORMAT).ok())
-        {
-            Some(value) => value,
+        let selected_date = match self.seek_date.clone() {
+            Some(value) if self.available_dates().contains(&value) => value,
             None => {
+                self.status = "Select a downloaded replay date".into();
+                return None;
+            }
+            Some(_) => {
+                self.status = "Select a downloaded replay date".into();
+                return None;
+            }
+        };
+        let date = match NaiveDate::parse_from_str(&selected_date.value, DATE_FORMAT) {
+            Ok(value) => value,
+            Err(_) => {
                 self.status = "Select a downloaded replay date".into();
                 return None;
             }
@@ -339,7 +349,9 @@ impl Controller {
                     .advance_to(target_ms);
                 frames.push(frame);
                 self.cursor_ms = target_ms;
-                self.status.clear();
+                if !self.seek_draft_dirty {
+                    self.status.clear();
+                }
                 break;
             }
 
@@ -441,7 +453,17 @@ impl Controller {
         let Some(timestamp) = cursor_datetime(self.cursor_ms) else {
             return;
         };
-        self.seek_date = Some(ReplayDate::new(timestamp.format(DATE_FORMAT).to_string()));
+        let available_dates = self.available_dates();
+        let cursor_date = ReplayDate::new(timestamp.format(DATE_FORMAT).to_string());
+        if available_dates.contains(&cursor_date) {
+            self.seek_date = Some(cursor_date);
+        } else if self
+            .seek_date
+            .as_ref()
+            .is_none_or(|date| !available_dates.contains(date))
+        {
+            self.seek_date = available_dates.first().cloned();
+        }
         self.seek_time_input = timestamp.format(TIME_FORMAT).to_string();
         self.seek_draft_dirty = false;
     }
@@ -674,5 +696,65 @@ mod tests {
 
         assert_eq!(controller.seek_time_input(), "13:45:00");
         assert!(controller.seek_draft_dirty);
+    }
+
+    #[test]
+    fn gap_cursor_keeps_a_valid_downloaded_seek_date() {
+        let downloaded_date = ReplayDate::new("2026-06-05".into());
+        let mut controller = Controller {
+            catalog: Catalog {
+                version: replay::CATALOG_VERSION,
+                instruments: vec![Instrument {
+                    symbol: "NKE".into(),
+                    display_name: "Nike".into(),
+                    dataset: "XNYS.PILLAR".into(),
+                    min_tick_price_units: 1_000_000,
+                    days: vec![replay::ReplayDay {
+                        date: downloaded_date.value.clone(),
+                        start_ts_ms: 1,
+                        end_ts_ms: 2,
+                        source_instrument_id: None,
+                        source_symbol: Some("NKE".into()),
+                        l2_file: String::new(),
+                        trades_file: String::new(),
+                        raw_l3_files: Vec::new(),
+                    }],
+                }],
+            },
+            session: None,
+            selected_symbol: Some("NKE".into()),
+            cursor_ms: 1_780_790_400_000,
+            seek_date: Some(downloaded_date.clone()),
+            seek_time_input: String::new(),
+            seek_draft_dirty: false,
+            status: String::new(),
+            last_tick: Instant::now(),
+            reset_requested: false,
+            market_warning: false,
+        };
+
+        controller.sync_seek_draft();
+
+        assert_eq!(controller.seek_date(), Some(downloaded_date));
+    }
+
+    #[test]
+    fn seek_submission_rejects_a_date_outside_the_downloaded_sessions() {
+        let mut controller = Controller {
+            catalog: Catalog::default(),
+            session: None,
+            selected_symbol: None,
+            cursor_ms: 0,
+            seek_date: Some(ReplayDate::new("2026-06-07".into())),
+            seek_time_input: "10:30:00".into(),
+            seek_draft_dirty: true,
+            status: String::new(),
+            last_tick: Instant::now(),
+            reset_requested: false,
+            market_warning: false,
+        };
+
+        assert!(controller.seek_from_input().is_none());
+        assert_eq!(controller.status, "Select a downloaded replay date");
     }
 }

@@ -1015,13 +1015,13 @@ impl Flowsurface {
                     button(text("Go").size(crate::style::text_size::SMALL))
                         .on_press(Message::ReplaySeekSubmitted)
                         .padding(4),
-                    text(self.backtest.status()).size(crate::style::text_size::SMALL),
                 ]
                 .align_y(Alignment::Center)
                 .spacing(6),
                 row![jumps_back, speed_buttons, jumps_forward]
                     .align_y(Alignment::Center)
                     .spacing(10),
+                text(self.backtest.status()).size(crate::style::text_size::SMALL),
             ]
             .spacing(4),
         )
