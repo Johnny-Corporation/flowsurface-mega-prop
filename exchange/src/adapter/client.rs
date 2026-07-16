@@ -28,6 +28,7 @@ impl AdapterHandles {
         proxy: Option<&super::proxy::Proxy>,
     ) -> Result<(), AdapterError> {
         match venue {
+            Venue::Databento => return Err(Self::missing_venue_error(venue)),
             Venue::Binance => {
                 self.binance = Some(binance::BinanceHandle::new(proxy)?);
             }
@@ -87,6 +88,7 @@ impl AdapterHandles {
 
     pub fn has_venue(&self, venue: Venue) -> bool {
         match venue {
+            Venue::Databento => false,
             Venue::Binance => self.binance.is_some(),
             Venue::Bybit => self.bybit.is_some(),
             Venue::Hyperliquid => self.hyperliquid.is_some(),
@@ -103,6 +105,7 @@ impl AdapterHandles {
         let market_kind = config.exchange.market_type();
 
         match config.exchange.venue() {
+            Venue::Databento => Self::missing_venue_stream(config.exchange),
             Venue::Binance => self.binance.clone().map_or_else(
                 || Self::missing_venue_stream(config.exchange),
                 |handle| handle.connect_kline_stream(streams, market_kind).boxed(),
@@ -134,6 +137,7 @@ impl AdapterHandles {
         let market_kind = config.exchange.market_type();
 
         match config.exchange.venue() {
+            Venue::Databento => Self::missing_venue_stream(config.exchange),
             Venue::Binance => self.binance.clone().map_or_else(
                 || Self::missing_venue_stream(config.exchange),
                 |handle| handle.connect_trade_stream(streams, market_kind).boxed(),
@@ -162,6 +166,7 @@ impl AdapterHandles {
         let push_freq = config.push_freq;
 
         match config.exchange.venue() {
+            Venue::Databento => Self::missing_venue_stream(config.exchange),
             Venue::Binance => self.binance.clone().map_or_else(
                 || Self::missing_venue_stream(config.exchange),
                 |handle| handle.connect_depth_stream(ticker, push_freq).boxed(),
@@ -200,6 +205,7 @@ impl AdapterHandles {
         markets: &[MarketKind],
     ) -> Result<HashMap<Ticker, Option<TickerInfo>>, AdapterError> {
         match venue {
+            Venue::Databento => Err(Self::missing_venue_error(venue)),
             Venue::Binance => {
                 let Some(handle) = self.binance.as_ref() else {
                     return Err(Self::missing_venue_error(venue));
@@ -265,6 +271,7 @@ impl AdapterHandles {
         contract_sizes: Option<HashMap<Ticker, f32>>,
     ) -> Result<HashMap<Ticker, TickerStats>, AdapterError> {
         match venue {
+            Venue::Databento => Err(Self::missing_venue_error(venue)),
             Venue::Binance => {
                 let Some(handle) = self.binance.as_ref() else {
                     return Err(Self::missing_venue_error(venue));
@@ -331,6 +338,7 @@ impl AdapterHandles {
         let venue = ticker_info.ticker.exchange.venue();
 
         match venue {
+            Venue::Databento => Err(Self::missing_venue_error(venue)),
             Venue::Binance => {
                 let Some(handle) = self.binance.as_ref() else {
                     return Err(Self::missing_venue_error(venue));

@@ -16,7 +16,7 @@ repository = "https://github.com/flowsurface-rs/flowsurface"
 homepage = "https://flowsurface.com"
 
 [workspace]
-members = [ "data", "exchange"]
+members = [ "data", "exchange", "replay"]
 
 [workspace.dependencies]
 iced_core = { version = "0.14.0", features = ["serde"] }
@@ -34,6 +34,7 @@ url = "2.5.8"
 uuid = { version = "1.23.1", features = ["v4"] }
 data = { version = "0.8.8", path = "data", package = "flowsurface-data" }
 exchange = { version = "0.8.8", path = "exchange", package = "flowsurface-exchange" }
+replay = { version = "0.8.8", path = "replay", package = "flowsurface-replay" }
 
 [dependencies]
 iced = { version = "0.14.0", default-features = false, features = [
@@ -70,6 +71,7 @@ rand = "0.10.1"
 iced_wgpu = "0.14.0"
 exchange.workspace = true
 data.workspace = true
+replay.workspace = true
 
 [features]
 debug = ["iced/hot"]

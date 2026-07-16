@@ -300,6 +300,7 @@ pub struct StreamSpecs {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum Venue {
+    Databento,
     Bybit,
     Binance,
     Hyperliquid,
@@ -323,6 +324,7 @@ impl std::fmt::Display for Venue {
             f,
             "{}",
             match self {
+                Venue::Databento => "Databento",
                 Venue::Bybit => "Bybit",
                 Venue::Binance => "Binance",
                 Venue::Hyperliquid => "Hyperliquid",
@@ -337,7 +339,9 @@ impl FromStr for Venue {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.eq_ignore_ascii_case("bybit") {
+        if s.eq_ignore_ascii_case("databento") {
+            Ok(Self::Databento)
+        } else if s.eq_ignore_ascii_case("bybit") {
             Ok(Self::Bybit)
         } else if s.eq_ignore_ascii_case("binance") {
             Ok(Self::Binance)
@@ -355,6 +359,7 @@ impl FromStr for Venue {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, Enum)]
 pub enum Exchange {
+    DatabentoReplay,
     BinanceLinear,
     BinanceInverse,
     BinanceSpot,
@@ -427,6 +432,7 @@ impl Exchange {
 
     pub fn market_type(&self) -> MarketKind {
         match self {
+            Exchange::DatabentoReplay => MarketKind::Spot,
             Exchange::BinanceLinear
             | Exchange::BybitLinear
             | Exchange::HyperliquidLinear
@@ -446,6 +452,7 @@ impl Exchange {
 
     pub fn venue(&self) -> Venue {
         match self {
+            Exchange::DatabentoReplay => Venue::Databento,
             Exchange::BybitLinear | Exchange::BybitInverse | Exchange::BybitSpot => Venue::Bybit,
             Exchange::BinanceLinear | Exchange::BinanceInverse | Exchange::BinanceSpot => {
                 Venue::Binance
@@ -488,6 +495,7 @@ impl Exchange {
 
     pub fn supports_kline_timeframe(&self, tf: Timeframe) -> bool {
         match self.venue() {
+            Venue::Databento => false,
             Venue::Binance | Venue::Bybit | Venue::Hyperliquid | Venue::Okex => {
                 Timeframe::KLINE.contains(&tf)
             }
