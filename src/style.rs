@@ -81,6 +81,7 @@ pub fn icon_text<'a>(icon: Icon, size: u16) -> Text<'a, Theme, Renderer> {
 
 pub fn venue_icon(venue: exchange::adapter::Venue) -> Icon {
     match venue {
+        exchange::adapter::Venue::Databento => Icon::Folder,
         exchange::adapter::Venue::Bybit => Icon::BybitLogo,
         exchange::adapter::Venue::Binance => Icon::BinanceLogo,
         exchange::adapter::Venue::Hyperliquid => Icon::HyperliquidLogo,

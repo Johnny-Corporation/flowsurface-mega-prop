@@ -104,6 +104,21 @@ pub enum Event {
 }
 
 impl Dashboard {
+    pub fn layout_id(&self) -> uuid::Uuid {
+        self.layout_id
+    }
+
+    pub fn backtest() -> Self {
+        Self {
+            panes: pane_grid::State::with_configuration(Configuration::Pane(pane::State::new())),
+            focus: None,
+            streams: UniqueStreams::default(),
+            popout: HashMap::new(),
+            layout_id: uuid::Uuid::new_v4(),
+            hovered_link_group: None,
+        }
+    }
+
     fn default_pane_config() -> Configuration<pane::State> {
         Configuration::Split {
             axis: pane_grid::Axis::Horizontal,
