@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use exchange::{
     PushFrequency, Ticker, TickerInfo, Trade, UnixMs,
     adapter::{Exchange, StreamKind, StreamTicksize},
@@ -6,16 +6,36 @@ use exchange::{
     unit::{Price, Qty},
 };
 use replay::{Catalog, Instrument, ReplayFrame, ReplaySession};
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, fmt, sync::Arc, time::Instant};
 
-const DATE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+const DATE_FORMAT: &str = "%Y-%m-%d";
+const TIME_FORMAT: &str = "%H:%M:%S";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayDate {
+    value: String,
+}
+
+impl ReplayDate {
+    fn new(value: String) -> Self {
+        Self { value }
+    }
+}
+
+impl fmt::Display for ReplayDate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&format_human_date(&self.value))
+    }
+}
 
 pub struct Controller {
     catalog: Catalog,
     session: Option<ReplaySession>,
     selected_symbol: Option<String>,
     cursor_ms: u64,
-    date_time_input: String,
+    seek_date: Option<ReplayDate>,
+    seek_time_input: String,
+    seek_draft_dirty: bool,
     status: String,
     last_tick: Instant,
     reset_requested: bool,
@@ -39,7 +59,9 @@ impl Controller {
             session: None,
             selected_symbol,
             cursor_ms: 0,
-            date_time_input: String::new(),
+            seek_date: None,
+            seek_time_input: String::new(),
+            seek_draft_dirty: false,
             status,
             last_tick: Instant::now(),
             reset_requested: false,
@@ -83,20 +105,48 @@ impl Controller {
         self.selected_symbol.as_ref()
     }
 
-    pub fn date_time_input(&self) -> &str {
-        &self.date_time_input
+    pub fn available_dates(&self) -> Vec<ReplayDate> {
+        let Some(symbol) = self.selected_symbol.as_deref() else {
+            return Vec::new();
+        };
+        self.instrument(symbol)
+            .map(|instrument| {
+                instrument
+                    .days
+                    .iter()
+                    .map(|day| ReplayDate::new(day.date.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
-    pub fn set_date_time_input(&mut self, value: String) {
-        self.date_time_input = value;
+    pub fn seek_date(&self) -> Option<ReplayDate> {
+        self.seek_date.clone()
+    }
+
+    pub fn select_seek_date(&mut self, date: ReplayDate) {
+        if self.available_dates().contains(&date) {
+            self.seek_date = Some(date);
+            self.seek_draft_dirty = true;
+            self.status.clear();
+        }
+    }
+
+    pub fn seek_time_input(&self) -> &str {
+        &self.seek_time_input
+    }
+
+    pub fn set_seek_time_input(&mut self, value: String) {
+        self.seek_time_input = value;
+        self.seek_draft_dirty = true;
     }
 
     pub fn status(&self) -> String {
         let Some(session) = &self.session else {
             return self.status.clone();
         };
-        let cursor = format_cursor(self.cursor_ms);
-        let mut base = format!("{} · {}x · UTC", cursor, session.speed);
+        let cursor = format_human_cursor(self.cursor_ms);
+        let mut base = format!("{} UTC · {}x", cursor, session.speed);
         if !self.status.is_empty() {
             base.push_str(" · ");
             base.push_str(&self.status);
@@ -138,8 +188,8 @@ impl Controller {
                 let frame = session.seek(start_ms);
                 self.selected_symbol = Some(symbol);
                 self.cursor_ms = session.cursor_ms;
-                self.date_time_input = format_cursor(self.cursor_ms);
                 self.session = Some(session);
+                self.sync_seek_draft();
                 self.status.clear();
                 self.apply_snapshot_warning(&frame);
                 self.last_tick = Instant::now();
@@ -172,13 +222,26 @@ impl Controller {
     }
 
     pub fn seek_from_input(&mut self) -> Option<Vec<exchange::Event>> {
-        let parsed = match NaiveDateTime::parse_from_str(&self.date_time_input, DATE_TIME_FORMAT) {
-            Ok(value) => DateTime::<Utc>::from_naive_utc_and_offset(value, Utc),
-            Err(_) => {
-                self.status = "Use UTC as YYYY-MM-DD HH:MM:SS".into();
+        let date = match self
+            .seek_date
+            .as_ref()
+            .and_then(|date| NaiveDate::parse_from_str(&date.value, DATE_FORMAT).ok())
+        {
+            Some(value) => value,
+            None => {
+                self.status = "Select a downloaded replay date".into();
                 return None;
             }
         };
+        let time = match NaiveTime::parse_from_str(&self.seek_time_input, TIME_FORMAT) {
+            Ok(value) => value,
+            Err(_) => {
+                self.status = "Use UTC time as HH:MM:SS".into();
+                return None;
+            }
+        };
+        let parsed =
+            DateTime::<Utc>::from_naive_utc_and_offset(NaiveDateTime::new(date, time), Utc);
         let target_ms = u64::try_from(parsed.timestamp_millis()).ok()?;
         self.seek_to(target_ms)
     }
@@ -238,7 +301,7 @@ impl Controller {
         let seek_ms = if in_gap { day.end_ts_ms } else { target_ms };
         let frame = self.session.as_mut()?.seek(seek_ms);
         self.cursor_ms = target_ms;
-        self.date_time_input = format_cursor(self.cursor_ms);
+        self.sync_seek_draft();
         self.status = boundary_status.map_or_else(
             || {
                 if in_gap {
@@ -317,7 +380,7 @@ impl Controller {
             self.status.clear();
         }
 
-        self.date_time_input = format_cursor(self.cursor_ms);
+        self.sync_seek_draft_if_clean();
         for frame in &frames {
             self.apply_snapshot_warning(frame);
         }
@@ -371,6 +434,21 @@ impl Controller {
                 self.status = error.to_string();
                 false
             }
+        }
+    }
+
+    fn sync_seek_draft(&mut self) {
+        let Some(timestamp) = cursor_datetime(self.cursor_ms) else {
+            return;
+        };
+        self.seek_date = Some(ReplayDate::new(timestamp.format(DATE_FORMAT).to_string()));
+        self.seek_time_input = timestamp.format(TIME_FORMAT).to_string();
+        self.seek_draft_dirty = false;
+    }
+
+    fn sync_seek_draft_if_clean(&mut self) {
+        if !self.seek_draft_dirty {
+            self.sync_seek_draft();
         }
     }
 
@@ -466,12 +544,48 @@ impl Controller {
     }
 }
 
-fn format_cursor(timestamp_ms: u64) -> String {
+fn cursor_datetime(timestamp_ms: u64) -> Option<DateTime<Utc>> {
     i64::try_from(timestamp_ms)
         .ok()
         .and_then(DateTime::<Utc>::from_timestamp_millis)
-        .map(|timestamp| timestamp.format(DATE_TIME_FORMAT).to_string())
+}
+
+fn format_human_cursor(timestamp_ms: u64) -> String {
+    cursor_datetime(timestamp_ms)
+        .map(|timestamp| {
+            format!(
+                "{} · {}",
+                format_human_date(&timestamp.format(DATE_FORMAT).to_string()),
+                timestamp.format(TIME_FORMAT)
+            )
+        })
         .unwrap_or_else(|| "Invalid replay time".into())
+}
+
+fn format_human_date(value: &str) -> String {
+    let Ok(date) = NaiveDate::parse_from_str(value, DATE_FORMAT) else {
+        return value.to_owned();
+    };
+    format!(
+        "{}{} {} {}",
+        date.day(),
+        ordinal_suffix(date.day()),
+        date.format("%b"),
+        date.year()
+    )
+}
+
+fn ordinal_suffix(day: u32) -> &'static str {
+    if (11..=13).contains(&(day % 100)) {
+        "th"
+    } else {
+        match day % 10 {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th",
+        }
+    }
 }
 
 impl Default for Controller {
@@ -522,5 +636,43 @@ mod tests {
         assert!(matches!(events[0], exchange::Event::TradesReceived(..)));
         assert!(matches!(events[1], exchange::Event::DepthReceived(..)));
         assert!(matches!(events[2], exchange::Event::TradesReceived(..)));
+    }
+
+    #[test]
+    fn human_dates_use_english_ordinals() {
+        assert_eq!(format_human_date("2026-06-01"), "1st Jun 2026");
+        assert_eq!(format_human_date("2026-06-02"), "2nd Jun 2026");
+        assert_eq!(format_human_date("2026-06-03"), "3rd Jun 2026");
+        assert_eq!(format_human_date("2026-06-11"), "11th Jun 2026");
+        assert_eq!(format_human_date("2026-06-12"), "12th Jun 2026");
+        assert_eq!(format_human_date("2026-06-13"), "13th Jun 2026");
+        assert_eq!(format_human_date("2026-06-21"), "21st Jun 2026");
+        assert_eq!(format_human_date("2026-06-22"), "22nd Jun 2026");
+        assert_eq!(format_human_date("2026-06-23"), "23rd Jun 2026");
+        assert_eq!(format_human_date("2026-06-30"), "30th Jun 2026");
+    }
+
+    #[test]
+    fn playback_cursor_does_not_overwrite_a_dirty_seek_draft() {
+        let mut controller = Controller {
+            catalog: Catalog::default(),
+            session: None,
+            selected_symbol: None,
+            cursor_ms: 1_780_296_608_000,
+            seek_date: Some(ReplayDate::new("2026-06-01".into())),
+            seek_time_input: "10:30:00".into(),
+            seek_draft_dirty: false,
+            status: String::new(),
+            last_tick: Instant::now(),
+            reset_requested: false,
+            market_warning: false,
+        };
+
+        controller.set_seek_time_input("13:45:00".into());
+        controller.cursor_ms += 5_000;
+        controller.sync_seek_draft_if_clean();
+
+        assert_eq!(controller.seek_time_input(), "13:45:00");
+        assert!(controller.seek_draft_dirty);
     }
 }

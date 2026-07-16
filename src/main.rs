@@ -150,7 +150,8 @@ enum Message {
     ReplaySymbolSelected(String),
     ReplaySpeedChanged(u16),
     ReplayJumpMinutes(i32),
-    ReplayDateTimeChanged(String),
+    ReplayDateSelected(backtest::ReplayDate),
+    ReplayTimeChanged(String),
     ReplaySeekSubmitted,
 }
 
@@ -259,7 +260,8 @@ impl Flowsurface {
                     ]);
                 }
             }
-            Message::ReplayDateTimeChanged(value) => self.backtest.set_date_time_input(value),
+            Message::ReplayDateSelected(date) => self.backtest.select_seek_date(date),
+            Message::ReplayTimeChanged(value) => self.backtest.set_seek_time_input(value),
             Message::ReplaySeekSubmitted => {
                 if let Some(events) = self.backtest.seek_from_input() {
                     self.backtest.take_reset_requested();
@@ -989,17 +991,27 @@ impl Flowsurface {
         )
         .placeholder("No local tickers")
         .width(150);
-        let date_time = text_input("YYYY-MM-DD HH:MM:SS UTC", self.backtest.date_time_input())
-            .on_input(Message::ReplayDateTimeChanged)
+        let date_picker = pick_list(
+            self.backtest.available_dates(),
+            self.backtest.seek_date(),
+            Message::ReplayDateSelected,
+        )
+        .placeholder("No downloaded dates")
+        .width(145);
+        let time_input = text_input("HH:MM:SS", self.backtest.seek_time_input())
+            .on_input(Message::ReplayTimeChanged)
             .on_submit(Message::ReplaySeekSubmitted)
-            .width(210);
+            .width(95);
 
         container(
             column![
                 row![
                     text("REPLAY").size(crate::style::text_size::SECTION),
                     symbol_picker,
-                    date_time,
+                    text("Jump to").size(crate::style::text_size::SMALL),
+                    date_picker,
+                    time_input,
+                    text("UTC").size(crate::style::text_size::SMALL),
                     button(text("Go").size(crate::style::text_size::SMALL))
                         .on_press(Message::ReplaySeekSubmitted)
                         .padding(4),
