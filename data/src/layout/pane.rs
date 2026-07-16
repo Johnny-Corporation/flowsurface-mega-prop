@@ -1,4 +1,4 @@
-use exchange::{TickMultiplier, TickerInfo, Timeframe};
+use exchange::{TickMultiplier, TickerInfo, Timeframe, adapter::Exchange};
 use serde::{Deserialize, Serialize};
 
 use crate::chart::{comparison, heatmap, kline};
@@ -326,6 +326,8 @@ impl PaneSetup {
                     TickMultiplier(10)
                 } else if let Some(tm) = current_tick_multiplier {
                     tm
+                } else if exchange == Exchange::DatabentoReplay {
+                    TickMultiplier(1)
                 } else if is_client_aggr {
                     TickMultiplier(5)
                 } else {
@@ -367,5 +369,25 @@ impl PaneSetup {
             depth_aggr,
             push_freq,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use exchange::Ticker;
+
+    #[test]
+    fn databento_dom_defaults_to_one_tick_per_price_row() {
+        let ticker = TickerInfo::new(
+            Ticker::new("EURUSD", Exchange::DatabentoReplay),
+            0.00005,
+            1.0,
+            None,
+        );
+
+        let setup = PaneSetup::new(ContentKind::CscalpDom, ticker, None, None, None);
+
+        assert_eq!(setup.tick_multiplier, Some(TickMultiplier(1)));
     }
 }
