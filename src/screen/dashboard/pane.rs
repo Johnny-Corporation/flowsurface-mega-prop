@@ -569,11 +569,14 @@ impl State {
             .align_y(Alignment::Center)
             .spacing(4);
 
-            let tickers_list_btn = button(content)
-                .on_press(Message::PaneEvent(
+            let mut tickers_list_btn = button(content);
+            if base_ti.ticker.exchange != exchange::adapter::Exchange::DatabentoReplay {
+                tickers_list_btn = tickers_list_btn.on_press(Message::PaneEvent(
                     id,
                     Event::ShowModal(Modal::MiniTickersList(MiniPanel::new())),
-                ))
+                ));
+            }
+            let tickers_list_btn = tickers_list_btn
                 .style(|theme, status| {
                     style::button::modifier(
                         theme,

@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod backtest;
 mod chart;
 mod connector;
 mod layout;
@@ -37,7 +38,7 @@ use iced::{
     Alignment, Element, Subscription, Task, keyboard, padding,
     widget::{
         Space, button, column, container, pane_grid, pick_list, row, rule, scrollable, text,
-        tooltip::Position as TooltipPosition,
+        text_input, tooltip::Position as TooltipPosition,
     },
 };
 use std::{borrow::Cow, collections::HashMap, vec};
@@ -80,12 +81,21 @@ fn main() {
 const STARTUP_ANIMATION_READY_FRAMES: u8 = 2;
 const CONNECTION_TICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionMode {
+    Live,
+    Backtest,
+}
+
 struct Flowsurface {
     main_window: Option<window::Window>,
     main_window_spec: Option<WindowSpec>,
     sidebar: dashboard::Sidebar,
     handles: exchange::adapter::AdapterHandles,
     layout_manager: LayoutManager,
+    backtest_dashboard: Dashboard,
+    backtest: backtest::Controller,
+    session_mode: SessionMode,
     theme_editor: ThemeEditor,
     network: NetworkManager,
     audio_stream: AudioStream,
@@ -135,6 +145,13 @@ enum Message {
     NetworkManager(modal::network_manager::Message),
     Layouts(modal::layout_manager::Message),
     AudioStream(modal::audio::Message),
+    SessionModeChanged(SessionMode),
+    BacktestEvents(Vec<exchange::Event>),
+    ReplaySymbolSelected(String),
+    ReplaySpeedChanged(u16),
+    ReplayJumpMinutes(i32),
+    ReplayDateTimeChanged(String),
+    ReplaySeekSubmitted,
 }
 
 impl Flowsurface {
@@ -155,6 +172,9 @@ impl Flowsurface {
             main_window: None,
             main_window_spec: saved_state.main_window,
             layout_manager: saved_state.layout_manager,
+            backtest_dashboard: Dashboard::backtest(),
+            backtest: backtest::Controller::new(),
+            session_mode: SessionMode::Live,
             theme_editor: ThemeEditor::new(saved_state.custom_theme),
             audio_stream,
             sidebar,
@@ -196,58 +216,81 @@ impl Flowsurface {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::MarketWsEvent(event) => {
-                let Some(main_window) = self.main_window else {
+            Message::SessionModeChanged(mode) => {
+                if mode == self.session_mode {
                     return Task::none();
-                };
-
-                let main_window_id = main_window.id;
-                let dashboard = self.active_dashboard_mut();
-
-                match event {
-                    exchange::Event::Connected(_exchange) => {}
-                    exchange::Event::Disconnected(exchange, reason) => {
-                        log::info!("a stream disconnected from {exchange} WS: {reason:?}");
+                }
+                self.session_mode = mode;
+                if mode == SessionMode::Backtest {
+                    let initial_events = self.backtest.reload_catalog().unwrap_or_default();
+                    if self.backtest.ticker_info().is_none() {
+                        self.notifications.push(Toast::warn(
+                            "No local replay data. Import Databento MBO files first.",
+                        ));
+                        return Task::none();
                     }
-                    exchange::Event::DepthReceived(stream, update_t, depth) => {
-                        let task = dashboard
-                            .ingest_depth(&stream, update_t, &depth, main_window_id)
-                            .map(move |msg| Message::Dashboard {
-                                layout_id: None,
-                                event: msg,
-                            });
-
-                        return task;
-                    }
-                    exchange::Event::TradesReceived(stream, update_t, buffer) => {
-                        let task = dashboard
-                            .ingest_trades(&stream, &buffer, update_t, main_window_id)
-                            .map(move |msg| Message::Dashboard {
-                                layout_id: None,
-                                event: msg,
-                            });
-
-                        if let Some(msg) = self.audio_stream.try_play_sound(&stream, &buffer) {
-                            self.notifications.push(Toast::error(msg));
-                        }
-
-                        return task;
-                    }
-                    exchange::Event::KlineReceived(stream, kline) => {
-                        return dashboard
-                            .update_latest_klines(&stream, &kline, main_window_id)
-                            .map(move |msg| Message::Dashboard {
-                                layout_id: None,
-                                event: msg,
-                            });
-                    }
+                    self.backtest.take_reset_requested();
+                    return Task::batch([
+                        self.initialize_backtest_pane(),
+                        Task::done(Message::BacktestEvents(initial_events)),
+                    ]);
                 }
             }
+            Message::BacktestEvents(events) => {
+                let mut tasks = Vec::with_capacity(events.len());
+                for event in events {
+                    tasks.push(self.ingest_market_event(event));
+                }
+                return Task::batch(tasks);
+            }
+            Message::ReplaySymbolSelected(symbol) => {
+                let initial_events = self.backtest.select_symbol(symbol).unwrap_or_default();
+                self.backtest.take_reset_requested();
+                let init = self.initialize_backtest_pane();
+                return Task::batch([init, Task::done(Message::BacktestEvents(initial_events))]);
+            }
+            Message::ReplaySpeedChanged(speed) => self.backtest.set_speed(speed),
+            Message::ReplayJumpMinutes(minutes) => {
+                if let Some(events) = self.backtest.jump_minutes(minutes) {
+                    self.backtest.take_reset_requested();
+                    return Task::batch([
+                        self.initialize_backtest_pane(),
+                        Task::done(Message::BacktestEvents(events)),
+                    ]);
+                }
+            }
+            Message::ReplayDateTimeChanged(value) => self.backtest.set_date_time_input(value),
+            Message::ReplaySeekSubmitted => {
+                if let Some(events) = self.backtest.seek_from_input() {
+                    self.backtest.take_reset_requested();
+                    return Task::batch([
+                        self.initialize_backtest_pane(),
+                        Task::done(Message::BacktestEvents(events)),
+                    ]);
+                }
+            }
+            Message::MarketWsEvent(event) => return self.ingest_market_event(event),
             Message::Tick(now) => {
                 self.tick_startup_loading(now);
                 self.connection_state.tick(now);
                 self.drain_connection_notifications();
-                let live_trading_snapshot = self.connection_state.live_trading_snapshot();
+                let replay_events = if self.session_mode == SessionMode::Backtest {
+                    self.backtest.tick(now)
+                } else {
+                    Vec::new()
+                };
+                let replay_reset = self.session_mode == SessionMode::Backtest
+                    && self.backtest.take_reset_requested();
+                let replay_init = if replay_reset {
+                    self.initialize_backtest_pane()
+                } else {
+                    Task::none()
+                };
+                let live_trading_snapshot = if self.session_mode == SessionMode::Live {
+                    self.connection_state.live_trading_snapshot()
+                } else {
+                    Default::default()
+                };
 
                 for panel in self.panel_windows.values_mut() {
                     panel.tick(now);
@@ -259,20 +302,32 @@ impl Flowsurface {
 
                 let main_window_id = main_window.id;
                 let handles = self.handles.clone();
-                self.active_dashboard_mut()
-                    .set_live_trading_snapshot(main_window_id, &live_trading_snapshot);
-
-                return self
-                    .active_dashboard_mut()
-                    .tick(&handles, now, main_window_id)
-                    .map(move |msg| Message::Dashboard {
-                        layout_id: None,
-                        event: msg,
-                    });
+                let dashboard = self.active_dashboard_mut();
+                let layout_id = dashboard.layout_id();
+                dashboard.set_live_trading_snapshot(main_window_id, &live_trading_snapshot);
+                let dashboard_tick =
+                    dashboard
+                        .tick(&handles, now, main_window_id)
+                        .map(move |msg| Message::Dashboard {
+                            layout_id: Some(layout_id),
+                            event: msg,
+                        });
+                return if replay_events.is_empty() {
+                    Task::batch([replay_init, dashboard_tick])
+                } else {
+                    Task::batch([
+                        replay_init,
+                        dashboard_tick,
+                        Task::done(Message::BacktestEvents(replay_events)),
+                    ])
+                };
             }
             Message::ConnectionTick(now) => {
                 self.connection_state.tick(now);
                 self.drain_connection_notifications();
+                if self.session_mode == SessionMode::Backtest {
+                    return Task::none();
+                }
                 let live_trading_snapshot = self.connection_state.live_trading_snapshot();
 
                 let Some(main_window) = self.main_window else {
@@ -292,12 +347,18 @@ impl Flowsurface {
                     let Some(main_window) = self.main_window.map(|window| window.id) else {
                         return window::close(window);
                     };
-                    let dashboard = self.active_dashboard_mut();
-
                     if window != main_window {
-                        dashboard.popout.remove(&window);
+                        if self.backtest_dashboard.popout.remove(&window).is_none() {
+                            for dashboard in self.layout_manager.iter_dashboards_mut() {
+                                if dashboard.popout.remove(&window).is_some() {
+                                    break;
+                                }
+                            }
+                        }
                         return window::close(window);
                     }
+
+                    let dashboard = self.active_dashboard_mut();
 
                     let mut active_windows = dashboard
                         .popout
@@ -381,7 +442,13 @@ impl Flowsurface {
                 let layout_id = id.unwrap_or(active_layout.unique);
                 let handles = self.handles.clone();
 
-                if let Some(dashboard) = self.layout_manager.mut_dashboard(layout_id) {
+                let dashboard = if layout_id == self.backtest_dashboard.layout_id() {
+                    Some(&mut self.backtest_dashboard)
+                } else {
+                    self.layout_manager.mut_dashboard(layout_id)
+                };
+
+                if let Some(dashboard) = dashboard {
                     let (main_task, event) =
                         dashboard.update(&handles, msg, &main_window, &layout_id);
 
@@ -402,8 +469,14 @@ impl Flowsurface {
                             Task::none()
                         }
                         Some(dashboard::Event::PanelAction(action)) => {
-                            self.connection_state.handle_panel_action(action);
-                            self.drain_connection_notifications();
+                            if self.session_mode == SessionMode::Backtest {
+                                self.notifications.push(Toast::warn(
+                                    "Order entry is disabled during local replay.",
+                                ));
+                            } else {
+                                self.connection_state.handle_panel_action(action);
+                                self.drain_connection_notifications();
+                            }
                             Task::none()
                         }
                         Some(dashboard::Event::ResolveStreams { pane_id, streams }) => {
@@ -793,6 +866,62 @@ impl Flowsurface {
         Task::none()
     }
 
+    fn ingest_market_event(&mut self, event: exchange::Event) -> Task<Message> {
+        let event_exchange = match &event {
+            exchange::Event::Connected(exchange) | exchange::Event::Disconnected(exchange, _) => {
+                *exchange
+            }
+            exchange::Event::DepthReceived(stream, ..)
+            | exchange::Event::TradesReceived(stream, ..)
+            | exchange::Event::KlineReceived(stream, ..) => stream.ticker_info().exchange(),
+        };
+        let is_replay = event_exchange == exchange::adapter::Exchange::DatabentoReplay;
+        if (self.session_mode == SessionMode::Backtest) != is_replay {
+            return Task::none();
+        }
+        let Some(main_window) = self.main_window else {
+            return Task::none();
+        };
+
+        let main_window_id = main_window.id;
+        let play_audio = self.session_mode == SessionMode::Live;
+        let dashboard = self.active_dashboard_mut();
+        let layout_id = dashboard.layout_id();
+
+        match event {
+            exchange::Event::Connected(_exchange) => Task::none(),
+            exchange::Event::Disconnected(exchange, reason) => {
+                log::info!("a stream disconnected from {exchange} WS: {reason:?}");
+                Task::none()
+            }
+            exchange::Event::DepthReceived(stream, update_t, depth) => dashboard
+                .ingest_depth(&stream, update_t, &depth, main_window_id)
+                .map(move |msg| Message::Dashboard {
+                    layout_id: Some(layout_id),
+                    event: msg,
+                }),
+            exchange::Event::TradesReceived(stream, update_t, buffer) => {
+                let task = dashboard
+                    .ingest_trades(&stream, &buffer, update_t, main_window_id)
+                    .map(move |msg| Message::Dashboard {
+                        layout_id: Some(layout_id),
+                        event: msg,
+                    });
+                if play_audio && let Some(msg) = self.audio_stream.try_play_sound(&stream, &buffer)
+                {
+                    self.notifications.push(Toast::error(msg));
+                }
+                task
+            }
+            exchange::Event::KlineReceived(stream, kline) => dashboard
+                .update_latest_klines(&stream, &kline, main_window_id)
+                .map(move |msg| Message::Dashboard {
+                    layout_id: Some(layout_id),
+                    event: msg,
+                }),
+        }
+    }
+
     fn tick_startup_loading(&mut self, now: std::time::Instant) {
         if self.startup_loading_finished {
             return;
@@ -818,6 +947,97 @@ impl Flowsurface {
         }
     }
 
+    fn replay_controls(&self) -> Element<'_, Message> {
+        let speed = self.backtest.speed();
+        let speed_buttons = [1_u16, 2, 5, 10, 100].into_iter().fold(
+            row![text("Speed").size(crate::style::text_size::SMALL)].spacing(4),
+            |row, value| {
+                row.push(
+                    button(text(format!("{value}x")).size(crate::style::text_size::SMALL))
+                        .on_press(Message::ReplaySpeedChanged(value))
+                        .padding(4)
+                        .style(move |theme, status| {
+                            style::button::modifier(theme, status, speed == value)
+                        }),
+                )
+            },
+        );
+
+        let jumps_back = [-10, -5, -1]
+            .into_iter()
+            .fold(row![].spacing(4), |row, value| {
+                row.push(
+                    button(text(format!("{value}m")).size(crate::style::text_size::SMALL))
+                        .on_press(Message::ReplayJumpMinutes(value))
+                        .padding(4),
+                )
+            });
+        let jumps_forward = [1, 5, 10]
+            .into_iter()
+            .fold(row![].spacing(4), |row, value| {
+                row.push(
+                    button(text(format!("+{value}m")).size(crate::style::text_size::SMALL))
+                        .on_press(Message::ReplayJumpMinutes(value))
+                        .padding(4),
+                )
+            });
+
+        let symbol_picker = pick_list(
+            self.backtest.symbols(),
+            self.backtest.selected_symbol().cloned(),
+            Message::ReplaySymbolSelected,
+        )
+        .placeholder("No local tickers")
+        .width(150);
+        let date_time = text_input("YYYY-MM-DD HH:MM:SS UTC", self.backtest.date_time_input())
+            .on_input(Message::ReplayDateTimeChanged)
+            .on_submit(Message::ReplaySeekSubmitted)
+            .width(210);
+
+        container(
+            column![
+                row![
+                    text("REPLAY").size(crate::style::text_size::SECTION),
+                    symbol_picker,
+                    date_time,
+                    button(text("Go").size(crate::style::text_size::SMALL))
+                        .on_press(Message::ReplaySeekSubmitted)
+                        .padding(4),
+                    text(self.backtest.status()).size(crate::style::text_size::SMALL),
+                ]
+                .align_y(Alignment::Center)
+                .spacing(6),
+                row![jumps_back, speed_buttons, jumps_forward]
+                    .align_y(Alignment::Center)
+                    .spacing(10),
+            ]
+            .spacing(4),
+        )
+        .padding(padding::left(8).right(8).top(5).bottom(5))
+        .style(style::panel_value_box)
+        .into()
+    }
+
+    fn initialize_backtest_pane(&mut self) -> Task<Message> {
+        let Some(main_window_id) = self.main_window.map(|window| window.id) else {
+            return Task::none();
+        };
+        let Some(ticker_info) = self.backtest.ticker_info() else {
+            return Task::none();
+        };
+        self.backtest_dashboard
+            .init_focused_pane(
+                &self.handles,
+                main_window_id,
+                ticker_info,
+                data::layout::pane::ContentKind::CscalpDom,
+            )
+            .map(move |event| Message::Dashboard {
+                layout_id: None,
+                event,
+            })
+    }
+
     fn view(&self, id: window::Id) -> Element<'_, Message> {
         if self
             .main_window
@@ -832,9 +1052,21 @@ impl Flowsurface {
             );
         }
 
-        let dashboard = self.active_dashboard();
-        let sidebar_pos = self.sidebar.position();
         let main_window = self.main_window.as_ref();
+        let dashboard = if Some(id) == main_window.map(|window| window.id) {
+            self.active_dashboard()
+        } else if self.backtest_dashboard.popout.contains_key(&id) {
+            &self.backtest_dashboard
+        } else {
+            self.layout_manager
+                .layouts
+                .iter()
+                .find(|layout| layout.dashboard.popout.contains_key(&id))
+                .map(|layout| &layout.dashboard)
+                .unwrap_or_else(|| self.active_dashboard())
+        };
+        let dashboard_layout_id = dashboard.layout_id();
+        let sidebar_pos = self.sidebar.position();
 
         let tickers_table = &self.sidebar.tickers_table;
 
@@ -848,11 +1080,36 @@ impl Flowsurface {
             let dashboard_view = dashboard
                 .view(main_window, tickers_table, self.timezone)
                 .map(move |msg| Message::Dashboard {
-                    layout_id: None,
+                    layout_id: Some(dashboard_layout_id),
                     event: msg,
                 });
 
+            let mode_switch = row![
+                button(text("LIVE").size(crate::style::text_size::SMALL))
+                    .on_press(Message::SessionModeChanged(SessionMode::Live))
+                    .padding(4)
+                    .style(|theme, status| {
+                        style::button::modifier(
+                            theme,
+                            status,
+                            self.session_mode == SessionMode::Live,
+                        )
+                    }),
+                button(text("BACKTEST").size(crate::style::text_size::SMALL))
+                    .on_press(Message::SessionModeChanged(SessionMode::Backtest))
+                    .padding(4)
+                    .style(|theme, status| {
+                        style::button::modifier(
+                            theme,
+                            status,
+                            self.session_mode == SessionMode::Backtest,
+                        )
+                    }),
+            ]
+            .spacing(2);
+
             let header_title = row![
+                mode_switch,
                 panel_window::menu_bar(),
                 Space::new().width(iced::Length::Fill),
                 container(
@@ -874,17 +1131,26 @@ impl Flowsurface {
             .spacing(12)
             .padding(padding::top(4).left(8).right(8));
 
-            let base = column![
-                header_title,
+            let workspace: Element<'_, Message> = if self.session_mode == SessionMode::Live {
                 match sidebar_pos {
-                    sidebar::Position::Left => row![sidebar_view, dashboard_view,],
+                    sidebar::Position::Left => row![sidebar_view, dashboard_view],
                     sidebar::Position::Right => row![dashboard_view, sidebar_view],
                 }
                 .spacing(4)
-                .padding(8),
-            ];
+                .padding(8)
+                .into()
+            } else {
+                column![dashboard_view, self.replay_controls()]
+                    .spacing(4)
+                    .padding(8)
+                    .into()
+            };
 
-            if let Some(menu) = self.sidebar.active_menu() {
+            let base = column![header_title, workspace];
+
+            if self.session_mode == SessionMode::Live
+                && let Some(menu) = self.sidebar.active_menu()
+            {
                 self.view_with_modal(base.into(), dashboard, menu)
             } else {
                 base.into()
@@ -972,7 +1238,7 @@ impl Flowsurface {
 
         let mut subscriptions = vec![window_events, tick, connection_tick, hotkeys];
 
-        if self.main_window.is_some() {
+        if self.main_window.is_some() && self.session_mode == SessionMode::Live {
             subscriptions.push(self.sidebar.subscription().map(Message::Sidebar));
 
             let active_market_exchanges = self.connection_state.active_market_exchanges();
@@ -987,6 +1253,9 @@ impl Flowsurface {
     }
 
     fn active_dashboard(&self) -> &Dashboard {
+        if self.session_mode == SessionMode::Backtest {
+            return &self.backtest_dashboard;
+        }
         let active_layout = self
             .layout_manager
             .active_layout_id()
@@ -998,6 +1267,9 @@ impl Flowsurface {
     }
 
     fn active_dashboard_mut(&mut self) -> &mut Dashboard {
+        if self.session_mode == SessionMode::Backtest {
+            return &mut self.backtest_dashboard;
+        }
         let active_layout = self
             .layout_manager
             .active_layout_id()

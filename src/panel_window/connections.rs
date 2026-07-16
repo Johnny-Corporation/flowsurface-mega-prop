@@ -401,6 +401,16 @@ impl ConnectionPanelState {
     }
 
     pub(crate) fn handle_panel_action(&mut self, action: panel::Action) {
+        let ticker_info = match &action {
+            panel::Action::PlaceLimitOrder(intent) => intent.ticker_info,
+            panel::Action::PlaceMarketOrder(intent) => intent.ticker_info,
+            panel::Action::CancelAllOrders(ticker_info) => *ticker_info,
+        };
+        if ticker_info.exchange() == Exchange::DatabentoReplay {
+            self.pending_notifications
+                .push(Toast::warn("Orders are disabled for local replay data."));
+            return;
+        }
         match action {
             panel::Action::PlaceLimitOrder(intent) => self.place_limit_order(intent),
             panel::Action::PlaceMarketOrder(intent) => self.place_market_order(intent),

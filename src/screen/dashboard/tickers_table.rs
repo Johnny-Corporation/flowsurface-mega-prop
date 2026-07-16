@@ -59,6 +59,7 @@ const EXCHANGE_UNAVAILABLE_TOOLTIP: &str = "Metadata unavailable.\nCheck logs fo
 
 fn available_markets(venue: Venue) -> &'static [MarketKind] {
     match venue {
+        Venue::Databento => &[],
         Venue::Binance | Venue::Bybit | Venue::Okex => &MarketKind::ALL,
         Venue::Hyperliquid => &[MarketKind::Spot, MarketKind::LinearPerps],
         // Skip metadata fetch for Mexc spot as it requires protobuf for websocket
