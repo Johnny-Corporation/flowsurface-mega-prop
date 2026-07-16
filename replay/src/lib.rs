@@ -175,6 +175,13 @@ impl ReplaySession {
         self.speed = speed.max(1);
     }
 
+    pub fn first_two_sided_timestamp_ms(&self) -> Option<u64> {
+        self.snapshots
+            .iter()
+            .find(|snapshot| !snapshot.bids.is_empty() && !snapshot.asks.is_empty())
+            .map(|snapshot| snapshot.ts_recv_ns / 1_000_000)
+    }
+
     pub fn advance(&mut self, wall_elapsed_ms: u64) -> ReplayFrame {
         let delta = wall_elapsed_ms.saturating_mul(u64::from(self.speed));
         self.seek_forward_to(self.cursor_ms.saturating_add(delta))
@@ -353,5 +360,58 @@ mod tests {
             vec![150, 250, 450]
         );
         assert!(frame.reached_end);
+    }
+
+    #[test]
+    fn first_two_sided_timestamp_skips_empty_and_one_sided_books() {
+        let instrument = Instrument {
+            symbol: "NKE".into(),
+            display_name: "Nike".into(),
+            dataset: "XNYS.PILLAR".into(),
+            min_tick_price_units: 1_000_000,
+            days: Vec::new(),
+        };
+        let day = ReplayDay {
+            date: "2026-06-01".into(),
+            start_ts_ms: 100,
+            end_ts_ms: 500,
+            source_instrument_id: None,
+            source_symbol: Some("NKE".into()),
+            l2_file: String::new(),
+            trades_file: String::new(),
+            raw_l3_files: Vec::new(),
+        };
+        let level = Level {
+            price_units: 100,
+            qty_units: 1,
+        };
+        let session = ReplaySession {
+            instrument,
+            day,
+            cursor_ms: 100,
+            speed: 1,
+            snapshots: vec![
+                BookSnapshot {
+                    ts_recv_ns: 100_000_000,
+                    bids: Vec::new(),
+                    asks: Vec::new(),
+                },
+                BookSnapshot {
+                    ts_recv_ns: 200_000_000,
+                    bids: vec![level],
+                    asks: Vec::new(),
+                },
+                BookSnapshot {
+                    ts_recv_ns: 300_900_000,
+                    bids: vec![level],
+                    asks: vec![level],
+                },
+            ],
+            trades: Vec::new(),
+            snapshot_index: 0,
+            trade_index: 0,
+        };
+
+        assert_eq!(session.first_two_sided_timestamp_ms(), Some(300));
     }
 }

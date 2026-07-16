@@ -132,7 +132,10 @@ impl Controller {
         let date = instrument.days.first()?.date.clone();
         match ReplaySession::open(instrument, &date) {
             Ok(mut session) => {
-                let frame = session.seek(session.day.start_ts_ms);
+                let start_ms = session
+                    .first_two_sided_timestamp_ms()
+                    .unwrap_or(session.day.start_ts_ms);
+                let frame = session.seek(start_ms);
                 self.selected_symbol = Some(symbol);
                 self.cursor_ms = session.cursor_ms;
                 self.date_time_input = format_cursor(self.cursor_ms);
