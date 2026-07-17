@@ -43,6 +43,40 @@ use iced::{
 };
 use std::{borrow::Cow, collections::HashMap, vec};
 
+struct PauseIcon;
+
+impl iced::widget::canvas::Program<Message> for PauseIcon {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        theme: &iced::Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<iced::widget::canvas::Geometry> {
+        let mut frame = iced::widget::canvas::Frame::new(renderer, bounds.size());
+        let color = theme.extended_palette().background.base.text;
+        let bar_width = 2.0;
+        let bar_height = 9.0_f32.min(bounds.height);
+        let gap = 2.0;
+        let left = (bounds.width - bar_width * 2.0 - gap) * 0.5;
+        let top = (bounds.height - bar_height) * 0.5;
+        frame.fill_rectangle(
+            iced::Point::new(left, top),
+            iced::Size::new(bar_width, bar_height),
+            color,
+        );
+        frame.fill_rectangle(
+            iced::Point::new(left + bar_width + gap, top),
+            iced::Size::new(bar_width, bar_height),
+            color,
+        );
+        vec![frame.into_geometry()]
+    }
+}
+
 fn main() {
     logger::install_panic_hook();
 
@@ -958,7 +992,8 @@ impl Flowsurface {
 
     fn replay_controls(&self) -> Element<'_, Message> {
         let speed = self.backtest.speed();
-        let pause_button = button(text("⏸").size(crate::style::text_size::SMALL))
+        let pause_icon = iced::widget::Canvas::new(PauseIcon).width(10).height(10);
+        let pause_button = button(pause_icon)
             .on_press(Message::ReplaySpeedChanged(0))
             .padding(4)
             .style(move |theme, status| style::button::modifier(theme, status, speed == 0));
