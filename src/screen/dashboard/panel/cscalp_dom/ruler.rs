@@ -1,5 +1,5 @@
 use super::{
-    CscalpDom, ROW_HEIGHT,
+    CscalpDom, ROW_HEIGHT, Side,
     types::{ColumnRanges, PriceGrid},
 };
 use crate::style;
@@ -49,10 +49,12 @@ impl CscalpDom {
     }
 
     fn ruler_distance_label(&self, price: Price, grid: &PriceGrid) -> Option<String> {
-        let ticks = if price >= grid.best_ask {
-            Price::steps_between_inclusive(grid.best_ask, price, grid.tick)?.saturating_sub(1)
-        } else if price <= grid.best_bid {
-            Price::steps_between_inclusive(price, grid.best_bid, grid.tick)?.saturating_sub(1)
+        let current_best_bid = self.best_price(Side::Bid).unwrap_or(grid.best_bid);
+        let current_best_ask = self.best_price(Side::Ask).unwrap_or(grid.best_ask);
+        let ticks = if price >= current_best_ask {
+            Price::steps_between_inclusive(current_best_ask, price, grid.tick)?.saturating_sub(1)
+        } else if price <= current_best_bid {
+            Price::steps_between_inclusive(price, current_best_bid, grid.tick)?.saturating_sub(1)
         } else {
             return None;
         };

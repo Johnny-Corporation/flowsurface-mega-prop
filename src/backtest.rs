@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc, Weekday};
 use exchange::{
     PushFrequency, Ticker, TickerInfo, Trade, UnixMs,
     adapter::{Exchange, StreamKind, StreamTicksize},
@@ -6,7 +6,12 @@ use exchange::{
     unit::{Price, Qty},
 };
 use replay::{Catalog, Instrument, ReplayFrame, ReplaySession};
-use std::{collections::BTreeMap, fmt, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    sync::Arc,
+    time::Instant,
+};
 
 const DATE_FORMAT: &str = "%Y-%m-%d";
 const TIME_FORMAT: &str = "%H:%M:%S";
@@ -19,6 +24,37 @@ pub struct ReplayDate {
 impl ReplayDate {
     fn new(value: String) -> Self {
         Self { value }
+    }
+
+    fn parsed(&self) -> Option<NaiveDate> {
+        NaiveDate::parse_from_str(&self.value, DATE_FORMAT).ok()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReplayYear(i32);
+
+impl fmt::Display for ReplayYear {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReplayMonth(u32);
+
+impl fmt::Display for ReplayMonth {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(month_name(self.0))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReplayDayOfMonth(u32);
+
+impl fmt::Display for ReplayDayOfMonth {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}{}", self.0, ordinal_suffix(self.0))
     }
 }
 
@@ -109,19 +145,129 @@ impl Controller {
         let Some(symbol) = self.selected_symbol.as_deref() else {
             return Vec::new();
         };
-        self.instrument(symbol)
-            .map(|instrument| {
-                instrument
-                    .days
-                    .iter()
-                    .map(|day| ReplayDate::new(day.date.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
+        let Some(instrument) = self.instrument(symbol) else {
+            return Vec::new();
+        };
+        let timezone = replay_timezone(instrument);
+        let mut dates = BTreeSet::new();
+        for day in &instrument.days {
+            let (Some(start), Some(end)) = (
+                cursor_datetime(day.start_ts_ms),
+                cursor_datetime(day.end_ts_ms),
+            ) else {
+                continue;
+            };
+            let mut date = timezone.local_at_utc(start).datetime.date();
+            let end_date = timezone.local_at_utc(end).datetime.date();
+            while date <= end_date {
+                dates.insert(date);
+                let Some(next) = date.succ_opt() else {
+                    break;
+                };
+                date = next;
+            }
+        }
+        dates
+            .into_iter()
+            .map(|date| ReplayDate::new(date.format(DATE_FORMAT).to_string()))
+            .collect()
     }
 
-    pub fn seek_date(&self) -> Option<ReplayDate> {
-        self.seek_date.clone()
+    pub fn available_years(&self) -> Vec<ReplayYear> {
+        self.available_dates()
+            .into_iter()
+            .filter_map(|date| date.parsed().map(|date| ReplayYear(date.year())))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    pub fn seek_year(&self) -> Option<ReplayYear> {
+        self.seek_date
+            .as_ref()?
+            .parsed()
+            .map(|date| ReplayYear(date.year()))
+    }
+
+    pub fn select_seek_year(&mut self, year: ReplayYear) {
+        let current = self.seek_date.as_ref().and_then(ReplayDate::parsed);
+        let replacement = self.best_available_date(|date| date.year() == year.0, current);
+        if let Some(date) = replacement {
+            self.select_seek_date(date);
+        }
+    }
+
+    pub fn available_months(&self) -> Vec<ReplayMonth> {
+        let Some(year) = self.seek_year() else {
+            return Vec::new();
+        };
+        self.available_dates()
+            .into_iter()
+            .filter_map(|date| date.parsed())
+            .filter(|date| date.year() == year.0)
+            .map(|date| ReplayMonth(date.month()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    pub fn seek_month(&self) -> Option<ReplayMonth> {
+        self.seek_date
+            .as_ref()?
+            .parsed()
+            .map(|date| ReplayMonth(date.month()))
+    }
+
+    pub fn select_seek_month(&mut self, month: ReplayMonth) {
+        let current = self.seek_date.as_ref().and_then(ReplayDate::parsed);
+        let Some(year) = current.map(|date| date.year()) else {
+            return;
+        };
+        let replacement = self.best_available_date(
+            |date| date.year() == year && date.month() == month.0,
+            current,
+        );
+        if let Some(date) = replacement {
+            self.select_seek_date(date);
+        }
+    }
+
+    pub fn available_days(&self) -> Vec<ReplayDayOfMonth> {
+        let (Some(year), Some(month)) = (self.seek_year(), self.seek_month()) else {
+            return Vec::new();
+        };
+        self.available_dates()
+            .into_iter()
+            .filter_map(|date| date.parsed())
+            .filter(|date| date.year() == year.0 && date.month() == month.0)
+            .map(|date| ReplayDayOfMonth(date.day()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    pub fn seek_day(&self) -> Option<ReplayDayOfMonth> {
+        self.seek_date
+            .as_ref()?
+            .parsed()
+            .map(|date| ReplayDayOfMonth(date.day()))
+    }
+
+    pub fn select_seek_day(&mut self, day: ReplayDayOfMonth) {
+        let Some(current) = self.seek_date.as_ref().and_then(ReplayDate::parsed) else {
+            return;
+        };
+        let replacement = self.best_available_date(
+            |date| {
+                date.year() == current.year()
+                    && date.month() == current.month()
+                    && date.day() == day.0
+            },
+            Some(current),
+        );
+        if let Some(date) = replacement {
+            self.select_seek_date(date);
+        }
     }
 
     pub fn select_seek_date(&mut self, date: ReplayDate) {
@@ -139,17 +285,30 @@ impl Controller {
     pub fn set_seek_time_input(&mut self, value: String) {
         self.seek_time_input = value;
         self.seek_draft_dirty = true;
-        if self.status == "Use UTC time as HH:MM:SS" {
+        if self.status.starts_with("Use ") && self.status.ends_with(" time as HH:MM:SS") {
             self.status.clear();
         }
+    }
+
+    pub fn seek_timezone_label(&self) -> &'static str {
+        let timezone = self.current_timezone();
+        if let (Some(date), Ok(time)) = (
+            self.seek_date.as_ref().and_then(ReplayDate::parsed),
+            NaiveTime::parse_from_str(&self.seek_time_input, TIME_FORMAT),
+        ) {
+            return timezone.abbreviation_for_local(NaiveDateTime::new(date, time));
+        }
+        cursor_datetime(self.cursor_ms)
+            .map(|timestamp| timezone.local_at_utc(timestamp).abbreviation)
+            .unwrap_or_else(|| timezone.default_abbreviation())
     }
 
     pub fn status(&self) -> String {
         let Some(session) = &self.session else {
             return self.status.clone();
         };
-        let cursor = format_human_cursor(self.cursor_ms);
-        let mut base = format!("{} UTC · {}x", cursor, session.speed);
+        let cursor = format_human_cursor(self.cursor_ms, replay_timezone(&session.instrument));
+        let mut base = format!("{} · {}x", cursor, session.speed);
         if !self.status.is_empty() {
             base.push_str(" · ");
             base.push_str(&self.status);
@@ -163,6 +322,12 @@ impl Controller {
 
     pub fn speed(&self) -> u16 {
         self.session.as_ref().map_or(1, |session| session.speed)
+    }
+
+    pub fn status_window(&self) -> replay::ReplayStatusWindow {
+        self.session
+            .as_ref()
+            .map_or_else(Default::default, ReplaySession::status_window)
     }
 
     pub fn take_reset_requested(&mut self) -> bool {
@@ -188,7 +353,13 @@ impl Controller {
                 let start_ms = session
                     .first_two_sided_timestamp_ms()
                     .unwrap_or(session.day.start_ts_ms);
-                let frame = session.seek(start_ms);
+                let frame = match session.seek(start_ms) {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        self.status = error.to_string();
+                        return None;
+                    }
+                };
                 self.selected_symbol = Some(symbol);
                 self.cursor_ms = session.cursor_ms;
                 self.session = Some(session);
@@ -236,22 +407,23 @@ impl Controller {
                 return None;
             }
         };
-        let date = match NaiveDate::parse_from_str(&selected_date.value, DATE_FORMAT) {
-            Ok(value) => value,
-            Err(_) => {
-                self.status = "Select a downloaded replay date".into();
-                return None;
-            }
+        let Some(date) = selected_date.parsed() else {
+            self.status = "Select a downloaded replay date".into();
+            return None;
         };
         let time = match NaiveTime::parse_from_str(&self.seek_time_input, TIME_FORMAT) {
             Ok(value) => value,
             Err(_) => {
-                self.status = "Use UTC time as HH:MM:SS".into();
+                self.status = format!(
+                    "Use {} time as HH:MM:SS",
+                    self.current_timezone().default_abbreviation()
+                );
                 return None;
             }
         };
-        let parsed =
-            DateTime::<Utc>::from_naive_utc_and_offset(NaiveDateTime::new(date, time), Utc);
+        let parsed = self
+            .current_timezone()
+            .utc_from_local(NaiveDateTime::new(date, time));
         let target_ms = u64::try_from(parsed.timestamp_millis()).ok()?;
         self.seek_to(target_ms)
     }
@@ -309,13 +481,19 @@ impl Controller {
         }
 
         let seek_ms = if in_gap { day.end_ts_ms } else { target_ms };
-        let frame = self.session.as_mut()?.seek(seek_ms);
+        let frame = match self.session.as_mut()?.seek(seek_ms) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.status = error.to_string();
+                return None;
+            }
+        };
         self.cursor_ms = target_ms;
         self.sync_seek_draft();
         self.status = boundary_status.map_or_else(
             || {
                 if in_gap {
-                    "No market data at this UTC time".into()
+                    "No market data at this venue-local time".into()
                 } else {
                     String::new()
                 }
@@ -347,7 +525,13 @@ impl Controller {
                     .as_mut()
                     .expect("replay session exists")
                     .advance_to(target_ms);
-                frames.push(frame);
+                match frame {
+                    Ok(frame) => frames.push(frame),
+                    Err(error) => {
+                        self.status = error.to_string();
+                        break;
+                    }
+                }
                 self.cursor_ms = target_ms;
                 if !self.seek_draft_dirty {
                     self.status.clear();
@@ -361,7 +545,13 @@ impl Controller {
                     .as_mut()
                     .expect("replay session exists")
                     .advance_to(day_end);
-                frames.push(final_frame);
+                match final_frame {
+                    Ok(frame) => frames.push(frame),
+                    Err(error) => {
+                        self.status = error.to_string();
+                        break;
+                    }
+                }
             }
 
             let current_date = self
@@ -379,7 +569,7 @@ impl Controller {
 
             if target_ms < next_day.start_ts_ms {
                 self.cursor_ms = target_ms;
-                self.status = "No market data at this UTC time".into();
+                self.status = "No market data at this venue-local time".into();
                 break;
             }
 
@@ -387,7 +577,13 @@ impl Controller {
                 break;
             }
             let next = self.session.as_mut().expect("opened replay session");
-            frames.push(next.seek(next.day.start_ts_ms));
+            match next.seek(next.day.start_ts_ms) {
+                Ok(frame) => frames.push(frame),
+                Err(error) => {
+                    self.status = error.to_string();
+                    break;
+                }
+            }
             self.cursor_ms = next.day.start_ts_ms;
             self.status.clear();
         }
@@ -396,7 +592,7 @@ impl Controller {
         for frame in &frames {
             self.apply_snapshot_warning(frame);
         }
-        if self.status == "No market data at this UTC time" {
+        if self.status == "No market data at this venue-local time" {
             self.market_warning = false;
         }
         frames
@@ -406,7 +602,7 @@ impl Controller {
     }
 
     fn apply_snapshot_warning(&mut self, frame: &ReplayFrame) {
-        let Some(snapshot) = frame.snapshots.last() else {
+        let Some(snapshot) = frame.snapshot.as_ref() else {
             return;
         };
         self.market_warning = matches!(
@@ -453,6 +649,7 @@ impl Controller {
         let Some(timestamp) = cursor_datetime(self.cursor_ms) else {
             return;
         };
+        let timestamp = self.current_timezone().local_at_utc(timestamp).datetime;
         let available_dates = self.available_dates();
         let cursor_date = ReplayDate::new(timestamp.format(DATE_FORMAT).to_string());
         if available_dates.contains(&cursor_date) {
@@ -474,6 +671,46 @@ impl Controller {
         }
     }
 
+    fn best_available_date(
+        &self,
+        matches: impl Fn(NaiveDate) -> bool,
+        preferred: Option<NaiveDate>,
+    ) -> Option<ReplayDate> {
+        let candidates = self
+            .available_dates()
+            .into_iter()
+            .filter(|date| date.parsed().is_some_and(&matches))
+            .collect::<Vec<_>>();
+        candidates
+            .iter()
+            .find(|candidate| candidate.parsed() == preferred)
+            .or_else(|| {
+                preferred.and_then(|preferred| {
+                    candidates.iter().min_by_key(|candidate| {
+                        candidate
+                            .parsed()
+                            .map(|date| (date - preferred).num_days().unsigned_abs())
+                            .unwrap_or(u64::MAX)
+                    })
+                })
+            })
+            .or_else(|| candidates.first())
+            .cloned()
+    }
+
+    fn current_timezone(&self) -> ReplayTimezone {
+        self.session
+            .as_ref()
+            .map(|session| replay_timezone(&session.instrument))
+            .or_else(|| {
+                self.selected_symbol
+                    .as_deref()
+                    .and_then(|symbol| self.instrument(symbol))
+                    .map(replay_timezone)
+            })
+            .unwrap_or(ReplayTimezone::Utc)
+    }
+
     fn instrument(&self, symbol: &str) -> Option<&Instrument> {
         self.catalog
             .instruments
@@ -489,27 +726,12 @@ impl Controller {
     }
 
     fn events_for_ticker(ticker_info: TickerInfo, frame: ReplayFrame) -> Vec<exchange::Event> {
-        let snapshots = frame.snapshots.into_iter().peekable();
-        let mut trades = frame.trades.into_iter().peekable();
-        let mut events = Vec::with_capacity(snapshots.len().saturating_mul(2).saturating_add(1));
-
-        for snapshot in snapshots {
-            let mut trade_batch = Vec::new();
-            while trades
-                .peek()
-                .is_some_and(|trade| trade.ts_recv_ns <= snapshot.ts_recv_ns)
-            {
-                trade_batch.push(trades.next().expect("peeked replay trade"));
-            }
-            if !trade_batch.is_empty() {
-                events.push(Self::trades_event(ticker_info, trade_batch));
-            }
-            events.push(Self::depth_event(ticker_info, snapshot));
+        let mut events = Vec::with_capacity(2);
+        if !frame.trades.is_empty() {
+            events.push(Self::trades_event(ticker_info, frame.trades));
         }
-
-        let remaining_trades = trades.collect::<Vec<_>>();
-        if !remaining_trades.is_empty() {
-            events.push(Self::trades_event(ticker_info, remaining_trades));
+        if let Some(snapshot) = frame.snapshot {
+            events.push(Self::depth_event(ticker_info, snapshot));
         }
         events
     }
@@ -572,16 +794,159 @@ fn cursor_datetime(timestamp_ms: u64) -> Option<DateTime<Utc>> {
         .and_then(DateTime::<Utc>::from_timestamp_millis)
 }
 
-fn format_human_cursor(timestamp_ms: u64) -> String {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplayTimezone {
+    NewYork,
+    Chicago,
+    Utc,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReplayLocalTime {
+    datetime: NaiveDateTime,
+    abbreviation: &'static str,
+}
+
+impl ReplayTimezone {
+    fn local_at_utc(self, timestamp: DateTime<Utc>) -> ReplayLocalTime {
+        let is_daylight = self.is_daylight_at_utc(timestamp.naive_utc());
+        let offset_hours = self.offset_hours(is_daylight);
+        ReplayLocalTime {
+            datetime: timestamp.naive_utc() + Duration::hours(i64::from(offset_hours)),
+            abbreviation: self.abbreviation(is_daylight),
+        }
+    }
+
+    fn utc_from_local(self, datetime: NaiveDateTime) -> DateTime<Utc> {
+        let is_daylight = self.is_daylight_at_local(datetime);
+        let utc = datetime - Duration::hours(i64::from(self.offset_hours(is_daylight)));
+        DateTime::<Utc>::from_naive_utc_and_offset(utc, Utc)
+    }
+
+    fn abbreviation_for_local(self, datetime: NaiveDateTime) -> &'static str {
+        self.abbreviation(self.is_daylight_at_local(datetime))
+    }
+
+    fn default_abbreviation(self) -> &'static str {
+        match self {
+            Self::NewYork => "ET",
+            Self::Chicago => "CT",
+            Self::Utc => "UTC",
+        }
+    }
+
+    fn offset_hours(self, is_daylight: bool) -> i32 {
+        match (self, is_daylight) {
+            (Self::NewYork, true) => -4,
+            (Self::NewYork, false) => -5,
+            (Self::Chicago, true) => -5,
+            (Self::Chicago, false) => -6,
+            (Self::Utc, _) => 0,
+        }
+    }
+
+    fn abbreviation(self, is_daylight: bool) -> &'static str {
+        match (self, is_daylight) {
+            (Self::NewYork, true) => "EDT",
+            (Self::NewYork, false) => "EST",
+            (Self::Chicago, true) => "CDT",
+            (Self::Chicago, false) => "CST",
+            (Self::Utc, _) => "UTC",
+        }
+    }
+
+    fn is_daylight_at_utc(self, datetime: NaiveDateTime) -> bool {
+        let Some((start, end)) = self.utc_daylight_boundaries(datetime.date().year()) else {
+            return false;
+        };
+        datetime >= start && datetime < end
+    }
+
+    fn is_daylight_at_local(self, datetime: NaiveDateTime) -> bool {
+        if self == Self::Utc {
+            return false;
+        }
+        // Both replay venues follow the post-2007 US DST calendar.
+        let year = datetime.date().year();
+        let Some(start_date) = nth_weekday_of_month(year, 3, Weekday::Sun, 2) else {
+            return false;
+        };
+        let Some(end_date) = nth_weekday_of_month(year, 11, Weekday::Sun, 1) else {
+            return false;
+        };
+        let start = start_date.and_hms_opt(2, 0, 0).expect("valid DST time");
+        let end = end_date.and_hms_opt(2, 0, 0).expect("valid DST time");
+        datetime >= start && datetime < end
+    }
+
+    fn utc_daylight_boundaries(self, year: i32) -> Option<(NaiveDateTime, NaiveDateTime)> {
+        let start_date = nth_weekday_of_month(year, 3, Weekday::Sun, 2)?;
+        let end_date = nth_weekday_of_month(year, 11, Weekday::Sun, 1)?;
+        let (start_hour, end_hour) = match self {
+            Self::NewYork => (7, 6),
+            Self::Chicago => (8, 7),
+            Self::Utc => return None,
+        };
+        Some((
+            start_date.and_hms_opt(start_hour, 0, 0)?,
+            end_date.and_hms_opt(end_hour, 0, 0)?,
+        ))
+    }
+}
+
+fn replay_timezone(instrument: &Instrument) -> ReplayTimezone {
+    match instrument.dataset.as_str() {
+        "XNYS.PILLAR" => ReplayTimezone::NewYork,
+        "GLBX.MDP3" => ReplayTimezone::Chicago,
+        _ => ReplayTimezone::Utc,
+    }
+}
+
+fn nth_weekday_of_month(
+    year: i32,
+    month: u32,
+    weekday: Weekday,
+    occurrence: u32,
+) -> Option<NaiveDate> {
+    let first = NaiveDate::from_ymd_opt(year, month, 1)?;
+    let days_until = (7 + weekday.num_days_from_monday() as i64
+        - first.weekday().num_days_from_monday() as i64)
+        % 7;
+    first.checked_add_signed(Duration::days(
+        days_until + 7 * i64::from(occurrence.saturating_sub(1)),
+    ))
+}
+
+fn format_human_cursor(timestamp_ms: u64, timezone: ReplayTimezone) -> String {
     cursor_datetime(timestamp_ms)
         .map(|timestamp| {
+            let local = timezone.local_at_utc(timestamp);
             format!(
-                "{} · {}",
-                format_human_date(&timestamp.format(DATE_FORMAT).to_string()),
-                timestamp.format(TIME_FORMAT)
+                "{} · {} {}",
+                format_human_date(&local.datetime.format(DATE_FORMAT).to_string()),
+                local.datetime.format(TIME_FORMAT),
+                local.abbreviation,
             )
         })
         .unwrap_or_else(|| "Invalid replay time".into())
+}
+
+fn month_name(month: u32) -> &'static str {
+    match month {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => "?",
+    }
 }
 
 fn format_human_date(value: &str) -> String {
@@ -621,7 +986,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nanosecond_merge_keeps_trades_on_the_correct_side_of_a_snapshot() {
+    fn replay_frame_emits_trades_before_the_final_complete_book() {
         let ticker_info = TickerInfo::new(
             Ticker::new("NKE", Exchange::DatabentoReplay),
             0.01,
@@ -629,11 +994,12 @@ mod tests {
             None,
         );
         let frame = ReplayFrame {
-            snapshots: vec![replay::BookSnapshot {
+            book_events: Vec::new(),
+            snapshot: Some(replay::BookSnapshot {
                 ts_recv_ns: 100_100_000,
                 bids: Vec::new(),
                 asks: Vec::new(),
-            }],
+            }),
             trades: vec![
                 replay::ReplayTrade {
                     ts_recv_ns: 100_050_000,
@@ -657,7 +1023,6 @@ mod tests {
 
         assert!(matches!(events[0], exchange::Event::TradesReceived(..)));
         assert!(matches!(events[1], exchange::Event::DepthReceived(..)));
-        assert!(matches!(events[2], exchange::Event::TradesReceived(..)));
     }
 
     #[test]
@@ -672,6 +1037,62 @@ mod tests {
         assert_eq!(format_human_date("2026-06-22"), "22nd Jun 2026");
         assert_eq!(format_human_date("2026-06-23"), "23rd Jun 2026");
         assert_eq!(format_human_date("2026-06-30"), "30th Jun 2026");
+    }
+
+    #[test]
+    fn venue_local_cursor_uses_daylight_and_standard_labels() {
+        let summer = DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDate::from_ymd_opt(2026, 6, 1)
+                .unwrap()
+                .and_hms_opt(13, 30, 0)
+                .unwrap(),
+            Utc,
+        );
+        let winter = DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDate::from_ymd_opt(2026, 1, 5)
+                .unwrap()
+                .and_hms_opt(15, 30, 0)
+                .unwrap(),
+            Utc,
+        );
+
+        let new_york_summer = ReplayTimezone::NewYork.local_at_utc(summer);
+        assert_eq!(
+            new_york_summer.datetime.format(TIME_FORMAT).to_string(),
+            "09:30:00"
+        );
+        assert_eq!(new_york_summer.abbreviation, "EDT");
+
+        let chicago_summer = ReplayTimezone::Chicago.local_at_utc(summer);
+        assert_eq!(
+            chicago_summer.datetime.format(TIME_FORMAT).to_string(),
+            "08:30:00"
+        );
+        assert_eq!(chicago_summer.abbreviation, "CDT");
+
+        assert_eq!(
+            ReplayTimezone::NewYork.local_at_utc(winter).abbreviation,
+            "EST"
+        );
+        assert_eq!(
+            ReplayTimezone::Chicago.local_at_utc(winter).abbreviation,
+            "CST"
+        );
+    }
+
+    #[test]
+    fn local_seek_time_round_trips_to_utc() {
+        let local = NaiveDate::from_ymd_opt(2026, 6, 1)
+            .unwrap()
+            .and_hms_opt(9, 30, 0)
+            .unwrap();
+        let utc = ReplayTimezone::NewYork.utc_from_local(local);
+
+        assert_eq!(
+            utc.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-06-01 13:30:00"
+        );
+        assert_eq!(ReplayTimezone::NewYork.local_at_utc(utc).datetime, local);
     }
 
     #[test]
@@ -711,13 +1132,15 @@ mod tests {
                     min_tick_price_units: 1_000_000,
                     days: vec![replay::ReplayDay {
                         date: downloaded_date.value.clone(),
-                        start_ts_ms: 1,
-                        end_ts_ms: 2,
+                        start_ts_ms: 1_780_617_600_000,
+                        end_ts_ms: 1_780_693_200_134,
                         source_instrument_id: None,
                         source_symbol: Some("NKE".into()),
-                        l2_file: String::new(),
+                        mbo_file: String::new(),
                         trades_file: String::new(),
+                        status_file: None,
                         raw_l3_files: Vec::new(),
+                        raw_status_files: Vec::new(),
                     }],
                 }],
             },
@@ -735,7 +1158,7 @@ mod tests {
 
         controller.sync_seek_draft();
 
-        assert_eq!(controller.seek_date(), Some(downloaded_date));
+        assert_eq!(controller.seek_date, Some(downloaded_date));
     }
 
     #[test]

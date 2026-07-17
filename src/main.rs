@@ -150,7 +150,9 @@ enum Message {
     ReplaySymbolSelected(String),
     ReplaySpeedChanged(u16),
     ReplayJumpMinutes(i32),
-    ReplayDateSelected(backtest::ReplayDate),
+    ReplayYearSelected(backtest::ReplayYear),
+    ReplayMonthSelected(backtest::ReplayMonth),
+    ReplayDaySelected(backtest::ReplayDayOfMonth),
     ReplayTimeChanged(String),
     ReplaySeekSubmitted,
 }
@@ -260,7 +262,9 @@ impl Flowsurface {
                     ]);
                 }
             }
-            Message::ReplayDateSelected(date) => self.backtest.select_seek_date(date),
+            Message::ReplayYearSelected(year) => self.backtest.select_seek_year(year),
+            Message::ReplayMonthSelected(month) => self.backtest.select_seek_month(month),
+            Message::ReplayDaySelected(day) => self.backtest.select_seek_day(day),
             Message::ReplayTimeChanged(value) => self.backtest.set_seek_time_input(value),
             Message::ReplaySeekSubmitted => {
                 if let Some(events) = self.backtest.seek_from_input() {
@@ -293,6 +297,8 @@ impl Flowsurface {
                 } else {
                     Default::default()
                 };
+                let replay_status = (self.session_mode == SessionMode::Backtest)
+                    .then(|| self.backtest.status_window());
 
                 for panel in self.panel_windows.values_mut() {
                     panel.tick(now);
@@ -307,6 +313,7 @@ impl Flowsurface {
                 let dashboard = self.active_dashboard_mut();
                 let layout_id = dashboard.layout_id();
                 dashboard.set_live_trading_snapshot(main_window_id, &live_trading_snapshot);
+                dashboard.set_replay_status(main_window_id, replay_status);
                 let dashboard_tick =
                     dashboard
                         .tick(&handles, now, main_window_id)
@@ -951,8 +958,16 @@ impl Flowsurface {
 
     fn replay_controls(&self) -> Element<'_, Message> {
         let speed = self.backtest.speed();
+        let pause_button = button(text("⏸").size(crate::style::text_size::SMALL))
+            .on_press(Message::ReplaySpeedChanged(0))
+            .padding(4)
+            .style(move |theme, status| style::button::modifier(theme, status, speed == 0));
         let speed_buttons = [1_u16, 2, 5, 10, 100].into_iter().fold(
-            row![text("Speed").size(crate::style::text_size::SMALL)].spacing(4),
+            row![
+                text("Speed").size(crate::style::text_size::SMALL),
+                pause_button
+            ]
+            .spacing(4),
             |row, value| {
                 row.push(
                     button(text(format!("{value}x")).size(crate::style::text_size::SMALL))
@@ -991,13 +1006,27 @@ impl Flowsurface {
         )
         .placeholder("No local tickers")
         .width(150);
-        let date_picker = pick_list(
-            self.backtest.available_dates(),
-            self.backtest.seek_date(),
-            Message::ReplayDateSelected,
+        let year_picker = pick_list(
+            self.backtest.available_years(),
+            self.backtest.seek_year(),
+            Message::ReplayYearSelected,
         )
-        .placeholder("No downloaded dates")
-        .width(145);
+        .placeholder("Year")
+        .width(75);
+        let month_picker = pick_list(
+            self.backtest.available_months(),
+            self.backtest.seek_month(),
+            Message::ReplayMonthSelected,
+        )
+        .placeholder("Month")
+        .width(75);
+        let day_picker = pick_list(
+            self.backtest.available_days(),
+            self.backtest.seek_day(),
+            Message::ReplayDaySelected,
+        )
+        .placeholder("Day")
+        .width(65);
         let time_input = text_input("HH:MM:SS", self.backtest.seek_time_input())
             .on_input(Message::ReplayTimeChanged)
             .on_submit(Message::ReplaySeekSubmitted)
@@ -1009,9 +1038,11 @@ impl Flowsurface {
                     text("REPLAY").size(crate::style::text_size::SECTION),
                     symbol_picker,
                     text("Jump to").size(crate::style::text_size::SMALL),
-                    date_picker,
+                    day_picker,
+                    month_picker,
+                    year_picker,
                     time_input,
-                    text("UTC").size(crate::style::text_size::SMALL),
+                    text(self.backtest.seek_timezone_label()).size(crate::style::text_size::SMALL),
                     button(text("Go").size(crate::style::text_size::SMALL))
                         .on_press(Message::ReplaySeekSubmitted)
                         .padding(4),
