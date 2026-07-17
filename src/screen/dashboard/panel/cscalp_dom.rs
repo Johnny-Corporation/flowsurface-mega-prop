@@ -22,10 +22,11 @@ mod orders;
 mod prints;
 mod ruler;
 mod sections;
+mod status;
 mod types;
 use orders::{PaperOrder, PaperPosition};
 use sections::SectionDragState;
-use types::{ColumnRanges, DomRow, LastPrintMarker, Maxima, PriceGrid, VisibleRow};
+use types::{ColumnRanges, DomRow, LastPrintMarker, Maxima, PriceAxisState, PriceGrid, VisibleRow};
 
 const TEXT_SIZE: f32 = style::text_size::SMALL;
 const ROW_HEIGHT: f32 = 16.0;
@@ -50,12 +51,14 @@ const DOM_DEPTH_STALE_GAP_MS: u128 = 500;
 
 impl super::Panel for CscalpDom {
     fn scroll(&mut self, delta: f32) {
+        self.pin_price_axis_for_manual_navigation();
         self.scroll_px += delta;
         CscalpDom::invalidate(self, Some(Instant::now()));
     }
 
     fn reset_scroll(&mut self) {
         self.scroll_px = 0.0;
+        self.price_axis.reset();
         CscalpDom::invalidate(self, Some(Instant::now()));
     }
 
@@ -101,6 +104,7 @@ pub struct CscalpDom {
     last_tick: Instant,
     pub step: PriceStep,
     scroll_px: f32,
+    price_axis: PriceAxisState,
     orderbook: [GroupedDepth; 2],
     trades: TradeStore,
     pending_tick_size: Option<PriceStep>,
@@ -110,6 +114,7 @@ pub struct CscalpDom {
     working_orders: Vec<PaperOrder>,
     paper_position: PaperPosition,
     live_trading: LiveTradingSnapshot,
+    replay_status: Option<replay::ReplayStatusWindow>,
     fill_sounds: Option<crate::audio::SoundCache>,
 }
 
@@ -123,6 +128,7 @@ impl CscalpDom {
             last_tick: Instant::now(),
             step,
             scroll_px: 0.0,
+            price_axis: PriceAxisState::default(),
             orderbook: [GroupedDepth::new(), GroupedDepth::new()],
             raw_price_spread: None,
             pending_tick_size: None,
@@ -131,7 +137,15 @@ impl CscalpDom {
             working_orders: Vec::new(),
             paper_position: PaperPosition::default(),
             live_trading: LiveTradingSnapshot::default(),
+            replay_status: None,
             fill_sounds: None,
+        }
+    }
+
+    pub fn set_replay_status(&mut self, status: Option<replay::ReplayStatusWindow>) {
+        if self.replay_status != status {
+            self.replay_status = status;
+            self.invalidate(Some(Instant::now()));
         }
     }
 
@@ -232,6 +246,7 @@ impl CscalpDom {
 
         if let Some(next) = self.pending_tick_size.take() {
             self.step = next;
+            self.price_axis.reset();
             self.trades.rebuild_grouped(self.step);
         }
 
@@ -438,6 +453,17 @@ impl canvas::Program<Message> for CscalpDom {
                     }
                 }
                 mouse::Event::CursorMoved { .. } => {
+                    let is_over_orderbook = cursor_position.is_some_and(|position| {
+                        self.is_in_orderbook_area(bounds.width, position.x)
+                            && !self.is_in_trading_footer_area(
+                                bounds.width,
+                                bounds.height,
+                                position.x,
+                                position.y,
+                            )
+                    });
+                    let axis_changed = self.set_orderbook_hovered(is_over_orderbook);
+
                     if let Some(divider) = _state.dragging {
                         let cursor_position = cursor_position?;
                         Some(
@@ -448,7 +474,7 @@ impl canvas::Program<Message> for CscalpDom {
                             })
                             .and_capture(),
                         )
-                    } else if self.config.show_ruler {
+                    } else if self.config.show_ruler || axis_changed {
                         Some(
                             canvas::Action::publish(Message::Invalidate(Some(Instant::now())))
                                 .and_capture(),
@@ -698,6 +724,7 @@ impl canvas::Program<Message> for CscalpDom {
                     ask_color,
                 );
             }
+            self.draw_status_timeline(frame, text_color, divider_color);
         });
 
         vec![visual]
@@ -788,7 +815,7 @@ impl CscalpDom {
     }
 
     fn build_price_grid(&self) -> Option<PriceGrid> {
-        let best_bid = match (self.best_price(Side::Bid), self.best_price(Side::Ask)) {
+        let current_best_bid = match (self.best_price(Side::Bid), self.best_price(Side::Ask)) {
             (Some(bb), _) => bb,
             (None, Some(ba)) => ba.add_steps(-1, self.step),
             (None, None) => {
@@ -797,6 +824,7 @@ impl CscalpDom {
                 max_t.add_steps(-(steps as i64 / 2), self.step)
             }
         };
+        let best_bid = self.price_axis.anchor_best_bid(current_best_bid);
         let best_ask = best_bid.add_steps(1, self.step);
 
         Some(PriceGrid {
@@ -806,9 +834,20 @@ impl CscalpDom {
         })
     }
 
+    fn pin_price_axis_for_manual_navigation(&self) {
+        let best_bid = self.build_price_grid().map(|grid| grid.best_bid);
+        self.price_axis.pin_manual(best_bid);
+    }
+
+    fn set_orderbook_hovered(&self, hovered: bool) -> bool {
+        let best_bid = self.build_price_grid().map(|grid| grid.best_bid);
+        self.price_axis.set_hovered(hovered, best_bid)
+    }
+
     fn visible_rows(&self, bounds: Rectangle, grid: &PriceGrid) -> (Vec<VisibleRow>, Maxima) {
         let asks_grouped = self.grouped_asks();
         let bids_grouped = self.grouped_bids();
+        let current_best_bid = bids_grouped.last_key_value().map(|(price, _)| *price);
 
         let mut visible: Vec<VisibleRow> = Vec::new();
         let mut maxima = Maxima::default();
@@ -846,12 +885,14 @@ impl CscalpDom {
                 continue;
             };
 
-            let is_bid = idx > 0;
-            let order_qty = if is_bid {
-                bids_grouped.get(&price).copied().unwrap_or_default()
-            } else {
-                asks_grouped.get(&price).copied().unwrap_or_default()
+            let bid_qty = bids_grouped.get(&price).copied();
+            let ask_qty = asks_grouped.get(&price).copied();
+            let is_bid = match (bid_qty, ask_qty) {
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                _ => current_best_bid.is_some_and(|best_bid| price <= best_bid),
             };
+            let order_qty = if is_bid { bid_qty } else { ask_qty }.unwrap_or_default();
 
             let top_y_screen = mid_screen_y + PriceGrid::top_y(idx) - scroll;
             if top_y_screen >= bounds.height || top_y_screen + ROW_HEIGHT <= 0.0 {
@@ -885,13 +926,7 @@ impl CscalpDom {
         let mid_screen_y = bounds_height * 0.5;
         let scroll = self.scroll_px;
 
-        let idx = if price >= grid.best_ask {
-            let steps = Price::steps_between_inclusive(grid.best_ask, price, grid.tick)?;
-            -(steps as i32)
-        } else if price <= grid.best_bid {
-            let steps = Price::steps_between_inclusive(price, grid.best_bid, grid.tick)?;
-            steps as i32
-        } else {
+        let Some(idx) = grid.price_to_index(price) else {
             return Some(mid_screen_y - scroll);
         };
 

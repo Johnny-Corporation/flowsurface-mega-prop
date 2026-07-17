@@ -102,8 +102,10 @@ impl CscalpDom {
         }
 
         let price = self.screen_y_to_price(cursor_y, &grid, height)?;
+        let current_best_bid = self.best_price(super::Side::Bid).unwrap_or(grid.best_bid);
+        let current_best_ask = self.best_price(super::Side::Ask).unwrap_or(grid.best_ask);
 
-        let action = match click_order_kind(button, price, grid.best_bid, grid.best_ask) {
+        let action = match click_order_kind(button, price, current_best_bid, current_best_ask) {
             Some(ClickOrderKind::Limit(side, price)) => self.handle_limit_order_click(side, price),
             Some(ClickOrderKind::Market(side)) => self.handle_market_order_click(side),
             None => None,

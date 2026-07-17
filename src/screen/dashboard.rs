@@ -1236,6 +1236,19 @@ impl Dashboard {
             });
     }
 
+    pub fn set_replay_status(
+        &mut self,
+        main_window: window::Id,
+        status: Option<replay::ReplayStatusWindow>,
+    ) {
+        self.iter_all_panes_mut(main_window)
+            .for_each(|(_, _, pane_state)| {
+                if let pane::Content::CscalpDom(Some(panel)) = &mut pane_state.content {
+                    panel.set_replay_status(status);
+                }
+            });
+    }
+
     pub fn ingest_trades(
         &mut self,
         stream: &StreamKind,
