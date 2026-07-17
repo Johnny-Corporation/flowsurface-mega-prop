@@ -51,7 +51,6 @@ const DOM_DEPTH_STALE_GAP_MS: u128 = 500;
 
 impl super::Panel for CscalpDom {
     fn scroll(&mut self, delta: f32) {
-        self.pin_price_axis_for_manual_navigation();
         self.scroll_px += delta;
         CscalpDom::invalidate(self, Some(Instant::now()));
     }
@@ -453,17 +452,6 @@ impl canvas::Program<Message> for CscalpDom {
                     }
                 }
                 mouse::Event::CursorMoved { .. } => {
-                    let is_over_orderbook = cursor_position.is_some_and(|position| {
-                        self.is_in_orderbook_area(bounds.width, position.x)
-                            && !self.is_in_trading_footer_area(
-                                bounds.width,
-                                bounds.height,
-                                position.x,
-                                position.y,
-                            )
-                    });
-                    let axis_changed = self.set_orderbook_hovered(is_over_orderbook);
-
                     if let Some(divider) = _state.dragging {
                         let cursor_position = cursor_position?;
                         Some(
@@ -474,7 +462,7 @@ impl canvas::Program<Message> for CscalpDom {
                             })
                             .and_capture(),
                         )
-                    } else if self.config.show_ruler || axis_changed {
+                    } else if self.config.show_ruler {
                         Some(
                             canvas::Action::publish(Message::Invalidate(Some(Instant::now())))
                                 .and_capture(),
@@ -832,16 +820,6 @@ impl CscalpDom {
             best_ask,
             tick: self.step,
         })
-    }
-
-    fn pin_price_axis_for_manual_navigation(&self) {
-        let best_bid = self.build_price_grid().map(|grid| grid.best_bid);
-        self.price_axis.pin_manual(best_bid);
-    }
-
-    fn set_orderbook_hovered(&self, hovered: bool) -> bool {
-        let best_bid = self.build_price_grid().map(|grid| grid.best_bid);
-        self.price_axis.set_hovered(hovered, best_bid)
     }
 
     fn visible_rows(&self, bounds: Rectangle, grid: &PriceGrid) -> (Vec<VisibleRow>, Maxima) {
