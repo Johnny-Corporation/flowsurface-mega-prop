@@ -87,46 +87,21 @@ impl PriceGrid {
 #[derive(Default)]
 pub(super) struct PriceAxisState {
     anchor_price: Cell<Option<Price>>,
-    hovered: Cell<bool>,
-    manual_navigation: Cell<bool>,
 }
 
 impl PriceAxisState {
-    pub(super) fn set_hovered(&self, hovered: bool, current_best_bid: Option<Price>) -> bool {
-        let was_hovered = self.hovered.replace(hovered);
-        let previous_anchor = self.anchor_price.get();
-
-        if hovered {
-            self.pin_if_needed(current_best_bid);
-        } else if !self.manual_navigation.get() {
-            self.anchor_price.set(None);
-        }
-
-        was_hovered != hovered || previous_anchor != self.anchor_price.get()
-    }
-
-    pub(super) fn pin_manual(&self, current_best_bid: Option<Price>) {
-        self.manual_navigation.set(true);
-        self.pin_if_needed(current_best_bid);
-    }
-
     pub(super) fn reset(&self) {
         self.anchor_price.set(None);
-        self.hovered.set(false);
-        self.manual_navigation.set(false);
     }
 
     pub(super) fn anchor_best_bid(&self, current_best_bid: Price) -> Price {
-        if self.hovered.get() || self.manual_navigation.get() {
-            self.pin_if_needed(Some(current_best_bid));
-        }
-
+        self.pin_if_needed(current_best_bid);
         self.anchor_price.get().unwrap_or(current_best_bid)
     }
 
-    fn pin_if_needed(&self, current_best_bid: Option<Price>) {
+    fn pin_if_needed(&self, current_best_bid: Price) {
         if self.anchor_price.get().is_none() {
-            self.anchor_price.set(current_best_bid);
+            self.anchor_price.set(Some(current_best_bid));
         }
     }
 }
@@ -206,11 +181,10 @@ mod tests {
     }
 
     #[test]
-    fn hover_anchor_keeps_absolute_price_on_same_row_across_market_moves() {
+    fn absolute_price_rows_remain_fixed_across_market_moves() {
         let axis = PriceAxisState::default();
         let initial = grid(100.0);
-        let anchor_price = initial.best_bid;
-        axis.set_hovered(true, Some(anchor_price));
+        axis.anchor_best_bid(initial.best_bid);
 
         let moved_up = grid(axis.anchor_best_bid(Price::from_f32(102.0)).to_f32());
         let moved_down = grid(axis.anchor_best_bid(Price::from_f32(98.0)).to_f32());
@@ -228,31 +202,17 @@ mod tests {
     }
 
     #[test]
-    fn leaving_hover_restores_automatic_following() {
+    fn reset_recenters_once_then_holds_the_new_anchor() {
         let axis = PriceAxisState::default();
-        axis.set_hovered(true, Some(Price::from_f32(100.0)));
-        axis.set_hovered(false, None);
+        axis.anchor_best_bid(Price::from_f32(100.0));
+        axis.reset();
 
         assert_eq!(
             axis.anchor_best_bid(Price::from_f32(102.0)),
             Price::from_f32(102.0)
         );
-    }
-
-    #[test]
-    fn manual_navigation_stays_pinned_until_reset() {
-        let axis = PriceAxisState::default();
-        axis.pin_manual(Some(Price::from_f32(100.0)));
-        axis.set_hovered(false, None);
-
         assert_eq!(
-            axis.anchor_best_bid(Price::from_f32(102.0)),
-            Price::from_f32(100.0)
-        );
-
-        axis.reset();
-        assert_eq!(
-            axis.anchor_best_bid(Price::from_f32(102.0)),
+            axis.anchor_best_bid(Price::from_f32(98.0)),
             Price::from_f32(102.0)
         );
     }
