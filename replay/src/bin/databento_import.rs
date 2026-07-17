@@ -1,77 +1,23 @@
 use chrono::{DateTime, Utc};
 use dbn::{
-    FlagSet, MboMsg, Metadata, SType, Schema, SymbolIndex, UNDEF_PRICE, VersionUpgradePolicy,
+    FlagSet, MboMsg, Metadata, SType, Schema, StatusMsg, SymbolIndex, UNDEF_PRICE,
+    VersionUpgradePolicy,
     decode::{DbnMetadata, DecodeRecord, DynDecoder},
 };
 use flowsurface_replay::{
-    BookSnapshot, CATALOG_VERSION, Catalog, Instrument, Level, PROCESSED_DIRECTORY, RAW_DIRECTORY,
-    ReplayDay, ReplayError, ReplayTrade, data_root, relative_to_data_root, save_catalog,
-    write_zstd,
+    BookAction, BookEvent, BookSide, BookState, CATALOG_VERSION, Catalog, Instrument,
+    PROCESSED_DIRECTORY, RAW_DIRECTORY, ReplayBookData, ReplayDay, ReplayError, ReplayStatusRecord,
+    ReplayTrade, data_root, relative_to_data_root, save_catalog, write_zstd,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     error::Error,
-    fmt, fs,
+    fs,
     path::{Path, PathBuf},
 };
 
-const SNAPSHOT_INTERVAL_NS: u64 = 100_000_000;
-const BOOK_DEPTH: usize = 10;
+const CHECKPOINT_INTERVAL_NS: u64 = 15 * 60 * 1_000_000_000;
 const QTY_SCALE: i64 = 100_000_000;
-
-#[derive(Debug, Clone, Copy)]
-struct Order {
-    price_units: i64,
-    size: u64,
-    is_bid: bool,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum BookInvariantError {
-    MissingInitialClear(&'static str),
-    DuplicateAdd(u64),
-    UnknownModify(u64),
-    UnknownCancel(u64),
-    OversizedCancel {
-        order_id: u64,
-        cancelled_size: u64,
-        remaining_size: u64,
-    },
-    SideChangingModify(u64),
-}
-
-impl fmt::Display for BookInvariantError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingInitialClear(action) => write!(
-                formatter,
-                "{action} before initial Clear R; a full historical daily snapshot is required"
-            ),
-            Self::DuplicateAdd(order_id) => {
-                write!(formatter, "duplicate Add for order {order_id}")
-            }
-            Self::UnknownModify(order_id) => {
-                write!(formatter, "Modify for unknown order {order_id}")
-            }
-            Self::UnknownCancel(order_id) => {
-                write!(formatter, "Cancel for unknown order {order_id}")
-            }
-            Self::OversizedCancel {
-                order_id,
-                cancelled_size,
-                remaining_size,
-            } => write!(
-                formatter,
-                "Cancel size {cancelled_size} exceeds remaining size {remaining_size} for order {order_id}"
-            ),
-            Self::SideChangingModify(order_id) => {
-                write!(formatter, "Modify changes side for order {order_id}")
-            }
-        }
-    }
-}
-
-impl Error for BookInvariantError {}
 
 #[derive(Debug, Default)]
 struct InstrumentActivity {
@@ -86,154 +32,9 @@ struct SelectedInstrument {
 }
 
 #[derive(Debug, Default)]
-struct BookBuilder {
-    has_seen_clear: bool,
-    orders: HashMap<u64, Order>,
-    bids: BTreeMap<i64, u64>,
-    asks: BTreeMap<i64, u64>,
-}
-
-impl BookBuilder {
-    fn clear(&mut self) {
-        self.has_seen_clear = true;
-        self.orders.clear();
-        self.bids.clear();
-        self.asks.clear();
-    }
-
-    fn add(&mut self, key: u64, order: Order) -> Result<(), BookInvariantError> {
-        self.require_initial_clear("Add")?;
-        if self.orders.contains_key(&key) {
-            return Err(BookInvariantError::DuplicateAdd(key));
-        }
-        self.orders.insert(key, order);
-        self.adjust_level(order, order.size as i64);
-        Ok(())
-    }
-
-    fn modify(&mut self, key: u64, replacement: Order) -> Result<(), BookInvariantError> {
-        self.require_initial_clear("Modify")?;
-        let previous = self
-            .orders
-            .get(&key)
-            .copied()
-            .ok_or(BookInvariantError::UnknownModify(key))?;
-        if previous.is_bid != replacement.is_bid {
-            return Err(BookInvariantError::SideChangingModify(key));
-        }
-        self.adjust_level(previous, -(previous.size as i64));
-        self.orders.insert(key, replacement);
-        self.adjust_level(replacement, replacement.size as i64);
-        Ok(())
-    }
-
-    fn cancel(&mut self, key: u64, cancelled_size: u64) -> Result<(), BookInvariantError> {
-        self.require_initial_clear("Cancel")?;
-        let mut order = self
-            .orders
-            .get(&key)
-            .copied()
-            .ok_or(BookInvariantError::UnknownCancel(key))?;
-        if cancelled_size > order.size {
-            return Err(BookInvariantError::OversizedCancel {
-                order_id: key,
-                cancelled_size,
-                remaining_size: order.size,
-            });
-        }
-        self.orders.remove(&key);
-        self.adjust_level(order, -(cancelled_size as i64));
-        order.size -= cancelled_size;
-        if order.size > 0 {
-            self.orders.insert(key, order);
-        }
-        Ok(())
-    }
-
-    fn require_initial_clear(&self, action: &'static str) -> Result<(), BookInvariantError> {
-        if self.has_seen_clear {
-            Ok(())
-        } else {
-            Err(BookInvariantError::MissingInitialClear(action))
-        }
-    }
-
-    fn adjust_level(&mut self, order: Order, delta: i64) {
-        let levels = if order.is_bid {
-            &mut self.bids
-        } else {
-            &mut self.asks
-        };
-        let current = levels.get(&order.price_units).copied().unwrap_or_default();
-        let next = if delta.is_negative() {
-            current.saturating_sub(delta.unsigned_abs())
-        } else {
-            current.saturating_add(delta as u64)
-        };
-        if next == 0 {
-            levels.remove(&order.price_units);
-        } else {
-            levels.insert(order.price_units, next);
-        }
-    }
-
-    #[cfg(test)]
-    fn snapshot(&self, ts_recv_ns: u64) -> BookSnapshot {
-        let to_level = |(price_units, size): (&i64, &u64)| Level {
-            price_units: *price_units,
-            qty_units: i64::try_from(*size)
-                .unwrap_or(i64::MAX / QTY_SCALE)
-                .saturating_mul(QTY_SCALE),
-        };
-        BookSnapshot {
-            ts_recv_ns,
-            bids: self
-                .bids
-                .iter()
-                .rev()
-                .take(BOOK_DEPTH)
-                .map(to_level)
-                .collect(),
-            asks: self.asks.iter().take(BOOK_DEPTH).map(to_level).collect(),
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct MarketBooks {
-    books: HashMap<(u16, u32), BookBuilder>,
-}
-
-impl MarketBooks {
-    fn book_mut(&mut self, publisher_id: u16, instrument_id: u32) -> &mut BookBuilder {
-        self.books.entry((publisher_id, instrument_id)).or_default()
-    }
-
-    fn snapshot(&self, ts_recv_ns: u64) -> BookSnapshot {
-        let mut bids = BTreeMap::<i64, u64>::new();
-        let mut asks = BTreeMap::<i64, u64>::new();
-        for book in self.books.values() {
-            for (price, size) in book.bids.iter().rev().take(BOOK_DEPTH) {
-                let level = bids.entry(*price).or_default();
-                *level = level.saturating_add(*size);
-            }
-            for (price, size) in book.asks.iter().take(BOOK_DEPTH) {
-                let level = asks.entry(*price).or_default();
-                *level = level.saturating_add(*size);
-            }
-        }
-        let to_level = |(price_units, size): (&i64, &u64)| Level {
-            price_units: *price_units,
-            qty_units: i64::try_from(*size)
-                .unwrap_or(i64::MAX / QTY_SCALE)
-                .saturating_mul(QTY_SCALE),
-        };
-        BookSnapshot {
-            ts_recv_ns,
-            bids: bids.iter().rev().take(BOOK_DEPTH).map(to_level).collect(),
-            asks: asks.iter().take(BOOK_DEPTH).map(to_level).collect(),
-        }
-    }
+struct StatusGroup {
+    records: Vec<ReplayStatusRecord>,
+    raw_files: Vec<String>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -254,10 +55,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         Err(error) => return Err(error.into()),
     };
+    let mut status_inputs = Vec::new();
     for input in inputs {
-        let imported = import_file(&input)?;
-        merge_instrument(&mut catalog, imported);
+        let decoder = DynDecoder::from_file(&input, VersionUpgradePolicy::UpgradeToV3)?;
+        match decoder.metadata().schema {
+            Some(Schema::Mbo) => {
+                if already_imported_mbo(&catalog, &input) {
+                    println!("Skipping already imported MBO {}", input.display());
+                    continue;
+                }
+                let imported = import_file(&input)?;
+                merge_instrument(&mut catalog, imported);
+            }
+            Some(Schema::Status) => status_inputs.push(input),
+            schema => println!(
+                "Skipping {} with unsupported schema {schema:?}",
+                input.display()
+            ),
+        }
     }
+    import_status_files(&status_inputs, &mut catalog)?;
     catalog.version = CATALOG_VERSION;
     catalog.instruments.sort_by(|a, b| a.symbol.cmp(&b.symbol));
     save_catalog(&catalog)?;
@@ -267,6 +84,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         data_root().join(flowsurface_replay::CATALOG_FILE).display()
     );
     Ok(())
+}
+
+fn already_imported_mbo(catalog: &Catalog, raw_path: &Path) -> bool {
+    let raw_path = relative_to_data_root(raw_path);
+    imported_mbo_day(catalog, &raw_path).is_some_and(|day| {
+        data_root().join(&day.mbo_file).is_file() && data_root().join(&day.trades_file).is_file()
+    })
+}
+
+fn imported_mbo_day<'a>(catalog: &'a Catalog, raw_path: &str) -> Option<&'a ReplayDay> {
+    catalog
+        .instruments
+        .iter()
+        .flat_map(|instrument| &instrument.days)
+        .find(|day| day.raw_l3_files.iter().any(|path| path == raw_path))
 }
 
 fn collect_dbn_files(directory: &Path, output: &mut Vec<PathBuf>) -> Result<(), std::io::Error> {
@@ -298,13 +130,13 @@ fn import_file(path: &Path) -> Result<Instrument, Box<dyn Error>> {
     let symbol_map = metadata.symbol_map()?;
     let mut symbol = None;
     let mut date = None;
-    let mut books = MarketBooks::default();
-    let mut snapshots = Vec::new();
+    let mut book = BookState::default();
+    let mut events = Vec::new();
+    let mut checkpoints = Vec::new();
     let mut trades = Vec::new();
-    let mut last_snapshot_ns = 0;
+    let mut first_ts_ns = None;
     let mut last_ts_ns = 0;
-    let mut changed = false;
-    let mut crossed_snapshots = 0_u64;
+    let mut last_checkpoint_ns = 0;
 
     while let Some(message) = decoder.decode_record::<MboMsg>()? {
         reject_top_of_book_record(message.flags).map_err(|reason| {
@@ -352,11 +184,11 @@ fn import_file(path: &Path) -> Result<Instrument, Box<dyn Error>> {
             .into());
         }
         date = Some(message_date);
+        first_ts_ns.get_or_insert(ts_recv_ns);
         last_ts_ns = last_ts_ns.max(ts_recv_ns);
 
-        let action = message.action as u8 as char;
-        let is_bid = message.side as u8 as char == 'B';
-        if action == 'T' && message.price != UNDEF_PRICE {
+        let event = book_event(message)?;
+        if event.action == BookAction::Trade && message.price != UNDEF_PRICE {
             trades.push(ReplayTrade {
                 ts_recv_ns,
                 ts_event_ns: message.hd.ts_event,
@@ -364,58 +196,42 @@ fn import_file(path: &Path) -> Result<Instrument, Box<dyn Error>> {
                 qty_units: i64::from(message.size).saturating_mul(QTY_SCALE),
                 is_sell: message.side as u8 as char == 'A',
             });
-        } else {
-            let book = books.book_mut(message.hd.publisher_id, message.hd.instrument_id);
-            let order = Order {
-                price_units: dbn_price_to_units(message.price),
-                size: u64::from(message.size),
-                is_bid,
-            };
-            let invariant_result = match action {
-                'A' if message.price != UNDEF_PRICE => book.add(message.order_id, order),
-                'M' if message.price != UNDEF_PRICE => book.modify(message.order_id, order),
-                'C' => book.cancel(message.order_id, u64::from(message.size)),
-                'R' => {
-                    book.clear();
-                    Ok(())
-                }
-                'F' | 'N' | 'T' => Ok(()),
-                _ => Ok(()),
-            };
-            invariant_result.map_err(|error| {
-                format!(
-                    "{}: {error} at ts_recv={} publisher={} instrument={}",
-                    path.display(),
-                    message.ts_recv,
-                    message.hd.publisher_id,
-                    message.hd.instrument_id
-                )
-            })?;
-            changed |= matches!(action, 'A' | 'M' | 'C' | 'R');
         }
+        book.apply(&event).map_err(|error| {
+            format!(
+                "{}: {error} at ts_recv={} publisher={} instrument={}",
+                path.display(),
+                message.ts_recv,
+                message.hd.publisher_id,
+                message.hd.instrument_id
+            )
+        })?;
+        events.push(event);
 
-        if message.flags.is_last()
-            && changed
-            && (last_snapshot_ns == 0
-                || ts_recv_ns.saturating_sub(last_snapshot_ns) >= SNAPSHOT_INTERVAL_NS)
-        {
-            let snapshot = books.snapshot(ts_recv_ns);
-            crossed_snapshots += u64::from(is_crossed(&snapshot));
-            snapshots.push(snapshot);
-            last_snapshot_ns = ts_recv_ns;
-            changed = false;
+        if message.flags.is_last() {
+            let initial_two_sided_checkpoint = checkpoints.is_empty() && {
+                let snapshot = book.snapshot(ts_recv_ns);
+                !snapshot.bids.is_empty() && !snapshot.asks.is_empty()
+            };
+            let periodic_checkpoint = last_checkpoint_ns > 0
+                && ts_recv_ns.saturating_sub(last_checkpoint_ns) >= CHECKPOINT_INTERVAL_NS;
+            if initial_two_sided_checkpoint || periodic_checkpoint {
+                checkpoints.push(book.checkpoint(ts_recv_ns, events.len() as u64));
+                last_checkpoint_ns = ts_recv_ns;
+            }
         }
     }
 
     let symbol = symbol.ok_or("DBN file contained no MBO records")?;
     let date = date.ok_or("DBN file contained no dated records")?;
-    if changed && last_ts_ns > last_snapshot_ns {
-        let snapshot = books.snapshot(last_ts_ns);
-        crossed_snapshots += u64::from(is_crossed(&snapshot));
-        snapshots.push(snapshot);
+    if events.is_empty() {
+        return Err(format!("{} produced no MBO events", path.display()).into());
     }
-    if snapshots.is_empty() {
-        return Err(format!("{} produced no L2 snapshots", path.display()).into());
+    if checkpoints
+        .last()
+        .is_none_or(|checkpoint| checkpoint.next_event_index != events.len() as u64)
+    {
+        checkpoints.push(book.checkpoint(last_ts_ns, events.len() as u64));
     }
     trades.sort_by_key(|trade| trade.ts_recv_ns);
 
@@ -427,31 +243,38 @@ fn import_file(path: &Path) -> Result<Instrument, Box<dyn Error>> {
         .as_ref()
         .map(|source| source.symbol.clone())
         .unwrap_or_else(|| symbol.clone());
-    let l2_path = output_dir.join(format!("{date}.l2.fsr.zst"));
+    let mbo_path = output_dir.join(format!("{date}.mbo.fsr.zst"));
     let trades_path = output_dir.join(format!("{date}.trades.fsr.zst"));
-    write_zstd(&l2_path, &snapshots)?;
+    let event_count = events.len();
+    let checkpoint_count = checkpoints.len();
+    write_zstd(
+        &mbo_path,
+        &ReplayBookData {
+            events,
+            checkpoints,
+        },
+    )?;
     write_zstd(&trades_path, &trades)?;
 
     let day = ReplayDay {
         date,
-        start_ts_ms: snapshots
-            .first()
-            .map(|value| value.ts_recv_ns / 1_000_000)
-            .unwrap_or_default(),
+        start_ts_ms: first_ts_ns.unwrap_or_default() / 1_000_000,
         end_ts_ms: last_ts_ns / 1_000_000,
         source_instrument_id: selected_source.as_ref().map(|source| source.id),
         source_symbol: Some(source_symbol),
-        l2_file: relative_to_data_root(&l2_path),
+        mbo_file: relative_to_data_root(&mbo_path),
         trades_file: relative_to_data_root(&trades_path),
+        status_file: None,
         raw_l3_files: vec![relative_to_data_root(path)],
+        raw_status_files: Vec::new(),
     };
     println!(
-        "{} {}: {} L2 snapshots, {} trades, {} crossed auction/pre-open snapshots",
+        "{} {}: {} lossless MBO events, {} full checkpoints, {} trades",
         symbol,
         day.date,
-        snapshots.len(),
+        event_count,
+        checkpoint_count,
         trades.len(),
-        crossed_snapshots
     );
     Ok(Instrument {
         display_name: display_name(&symbol).to_owned(),
@@ -460,6 +283,131 @@ fn import_file(path: &Path) -> Result<Instrument, Box<dyn Error>> {
         dataset: metadata.dataset,
         days: vec![day],
     })
+}
+
+fn book_event(message: &MboMsg) -> Result<BookEvent, Box<dyn Error>> {
+    let action = match message.action as u8 as char {
+        'A' => BookAction::Add,
+        'M' => BookAction::Modify,
+        'C' => BookAction::Cancel,
+        'R' => BookAction::Clear,
+        'T' => BookAction::Trade,
+        'F' => BookAction::Fill,
+        'N' => BookAction::None,
+        value => return Err(format!("unknown MBO action {value:?}").into()),
+    };
+    let side = match message.side as u8 as char {
+        'B' => BookSide::Bid,
+        'A' => BookSide::Ask,
+        'N' => BookSide::None,
+        value => return Err(format!("unknown MBO side {value:?}").into()),
+    };
+    Ok(BookEvent {
+        ts_recv_ns: message.ts_recv,
+        ts_event_ns: message.hd.ts_event,
+        publisher_id: message.hd.publisher_id,
+        instrument_id: message.hd.instrument_id,
+        order_id: message.order_id,
+        price_units: if message.price == UNDEF_PRICE {
+            0
+        } else {
+            dbn_price_to_units(message.price)
+        },
+        qty_units: i64::from(message.size).saturating_mul(QTY_SCALE),
+        sequence: message.sequence,
+        ts_in_delta: message.ts_in_delta,
+        channel_id: message.channel_id,
+        flags: message.flags.raw(),
+        action,
+        side,
+    })
+}
+
+fn import_status_files(paths: &[PathBuf], catalog: &mut Catalog) -> Result<(), Box<dyn Error>> {
+    let mut groups = BTreeMap::<(String, String), StatusGroup>::new();
+    for path in paths {
+        let mut decoder = DynDecoder::from_file(path, VersionUpgradePolicy::UpgradeToV3)?;
+        let metadata = decoder.metadata().clone();
+        if metadata.schema != Some(Schema::Status) {
+            return Err(format!("{} is not Status data", path.display()).into());
+        }
+        let symbol_map = metadata.symbol_map()?;
+        let raw_file = relative_to_data_root(path);
+        let mut matched_records = 0_usize;
+        while let Some(message) = decoder.decode_record::<StatusMsg>()? {
+            let mapped_symbol = symbol_map
+                .get_for_rec(message)
+                .cloned()
+                .or_else(|| metadata.symbols.first().cloned())
+                .ok_or("Status DBN metadata has no symbol mapping")?;
+            let symbol = canonical_symbol(&mapped_symbol, &metadata.symbols);
+            let date = utc_date(message.ts_recv / 1_000_000)?;
+            let Some(day) = catalog
+                .instruments
+                .iter()
+                .find(|instrument| {
+                    instrument.symbol == symbol && instrument.dataset == metadata.dataset
+                })
+                .and_then(|instrument| instrument.days.iter().find(|day| day.date == date))
+            else {
+                continue;
+            };
+            if !status_source_matches(day, message.hd.instrument_id) {
+                continue;
+            }
+            let group = groups.entry((symbol, date)).or_default();
+            group.records.push(ReplayStatusRecord {
+                ts_recv_ns: message.ts_recv,
+                ts_event_ns: message.hd.ts_event,
+                action: message.action,
+                reason: message.reason,
+                trading_event: message.trading_event,
+                is_trading: message.is_trading as u8,
+                is_quoting: message.is_quoting as u8,
+                is_short_sell_restricted: message.is_short_sell_restricted as u8,
+            });
+            group.raw_files.push(raw_file.clone());
+            matched_records += 1;
+        }
+        if matched_records == 0 {
+            println!(
+                "{}: no Status records matched a downloaded MBO instrument/day",
+                path.display()
+            );
+        }
+    }
+
+    for ((symbol, date), mut group) in groups {
+        group.records.sort_by_key(|record| record.ts_recv_ns);
+        group.records.dedup();
+        group.raw_files.sort();
+        group.raw_files.dedup();
+        let instrument = catalog
+            .instruments
+            .iter_mut()
+            .find(|instrument| instrument.symbol == symbol)
+            .ok_or_else(|| format!("no replay instrument for Status symbol {symbol}"))?;
+        let day = instrument
+            .days
+            .iter_mut()
+            .find(|day| day.date == date)
+            .ok_or_else(|| format!("no replay day for Status symbol {symbol} on {date}"))?;
+        let status_path = data_root()
+            .join(PROCESSED_DIRECTORY)
+            .join(&instrument.dataset)
+            .join(&symbol)
+            .join(format!("{date}.status.fsr.zst"));
+        write_zstd(&status_path, &group.records)?;
+        day.status_file = Some(relative_to_data_root(&status_path));
+        day.raw_status_files = group.raw_files;
+        println!("{symbol} {date}: {} Status records", group.records.len());
+    }
+    Ok(())
+}
+
+fn status_source_matches(day: &ReplayDay, instrument_id: u32) -> bool {
+    day.source_instrument_id
+        .is_none_or(|selected| selected == instrument_id)
 }
 
 fn reject_top_of_book_record(flags: FlagSet) -> Result<(), &'static str> {
@@ -525,13 +473,6 @@ fn is_outright_futures_symbol(symbol: &str) -> bool {
     !symbol.contains('-')
 }
 
-fn is_crossed(snapshot: &BookSnapshot) -> bool {
-    matches!(
-        (snapshot.bids.first(), snapshot.asks.first()),
-        (Some(bid), Some(ask)) if bid.price_units > ask.price_units
-    )
-}
-
 fn primary_instrument(activity: &BTreeMap<u32, InstrumentActivity>) -> Option<u32> {
     activity
         .iter()
@@ -562,6 +503,11 @@ fn merge_instrument(catalog: &mut Catalog, mut imported: Instrument) {
             day.raw_l3_files.extend(previous.raw_l3_files.clone());
             day.raw_l3_files.sort();
             day.raw_l3_files.dedup();
+            day.status_file = day.status_file.or_else(|| previous.status_file.clone());
+            day.raw_status_files
+                .extend(previous.raw_status_files.clone());
+            day.raw_status_files.sort();
+            day.raw_status_files.dedup();
             *previous = day;
         } else {
             existing.days.push(day);
@@ -607,183 +553,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn book_aggregates_orders_and_partial_cancels() {
-        let mut book = BookBuilder::default();
-        book.clear();
-        book.add(
-            1,
-            Order {
-                price_units: 10,
-                size: 5,
-                is_bid: true,
-            },
-        )
-        .unwrap();
-        book.add(
-            2,
-            Order {
-                price_units: 10,
-                size: 7,
-                is_bid: true,
-            },
-        )
-        .unwrap();
-        book.cancel(1, 3).unwrap();
-        assert_eq!(book.snapshot(1).bids[0].qty_units, 9 * QTY_SCALE);
-    }
-
-    #[test]
-    fn duplicate_add_is_rejected_without_changing_the_book() {
-        let mut book = BookBuilder::default();
-        book.clear();
-        let first = Order {
-            price_units: 10,
-            size: 5,
-            is_bid: true,
-        };
-        book.add(1, first).unwrap();
-
-        assert_eq!(
-            book.add(
-                1,
-                Order {
-                    price_units: 11,
-                    size: 7,
-                    is_bid: true,
-                }
-            ),
-            Err(BookInvariantError::DuplicateAdd(1))
-        );
-        assert_eq!(book.snapshot(1).bids[0].price_units, 10);
-        assert_eq!(book.snapshot(1).bids[0].qty_units, 5 * QTY_SCALE);
-    }
-
-    #[test]
-    fn unknown_modify_and_cancel_are_rejected() {
-        let mut book = BookBuilder::default();
-        book.clear();
-        let replacement = Order {
-            price_units: 10,
-            size: 5,
-            is_bid: true,
-        };
-
-        assert_eq!(
-            book.modify(7, replacement),
-            Err(BookInvariantError::UnknownModify(7))
-        );
-        assert_eq!(book.cancel(8, 1), Err(BookInvariantError::UnknownCancel(8)));
-        assert!(book.orders.is_empty());
-    }
-
-    #[test]
-    fn order_events_require_an_initial_clear() {
-        let mut book = BookBuilder::default();
-        let order = Order {
-            price_units: 10,
-            size: 5,
-            is_bid: true,
-        };
-
-        assert_eq!(
-            book.add(1, order),
-            Err(BookInvariantError::MissingInitialClear("Add"))
-        );
-        assert_eq!(
-            book.modify(1, order),
-            Err(BookInvariantError::MissingInitialClear("Modify"))
-        );
-        assert_eq!(
-            book.cancel(1, 1),
-            Err(BookInvariantError::MissingInitialClear("Cancel"))
-        );
-        assert!(book.orders.is_empty());
-    }
-
-    #[test]
-    fn oversized_cancel_is_rejected_without_changing_the_book() {
-        let mut book = BookBuilder::default();
-        book.clear();
-        book.add(
-            5,
-            Order {
-                price_units: 10,
-                size: 3,
-                is_bid: true,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            book.cancel(5, 4),
-            Err(BookInvariantError::OversizedCancel {
-                order_id: 5,
-                cancelled_size: 4,
-                remaining_size: 3,
-            })
-        );
-        assert_eq!(book.snapshot(1).bids[0].qty_units, 3 * QTY_SCALE);
-    }
-
-    #[test]
-    fn known_modify_replaces_the_original_level() {
-        let mut book = BookBuilder::default();
-        book.clear();
-        book.add(
-            7,
-            Order {
-                price_units: 10,
-                size: 5,
-                is_bid: true,
-            },
-        )
-        .unwrap();
-
-        book.modify(
-            7,
-            Order {
-                price_units: 11,
-                size: 3,
-                is_bid: true,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(book.snapshot(1).bids.len(), 1);
-        assert_eq!(book.snapshot(1).bids[0].price_units, 11);
-        assert_eq!(book.snapshot(1).bids[0].qty_units, 3 * QTY_SCALE);
-    }
-
-    #[test]
-    fn side_changing_modify_is_rejected_without_changing_the_book() {
-        let mut book = BookBuilder::default();
-        book.clear();
-        book.add(
-            7,
-            Order {
-                price_units: 10,
-                size: 5,
-                is_bid: true,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            book.modify(
-                7,
-                Order {
-                    price_units: 11,
-                    size: 3,
-                    is_bid: false,
-                }
-            ),
-            Err(BookInvariantError::SideChangingModify(7))
-        );
-        assert_eq!(book.snapshot(1).bids[0].price_units, 10);
-        assert!(book.snapshot(1).asks.is_empty());
-    }
-
-    #[test]
     fn normalized_top_of_book_records_are_rejected() {
         assert!(reject_top_of_book_record(FlagSet::empty()).is_ok());
         assert_eq!(
@@ -825,33 +594,68 @@ mod tests {
     }
 
     #[test]
-    fn clearing_one_market_book_preserves_the_other() {
-        let mut books = MarketBooks::default();
-        books.book_mut(1, 10).clear();
-        books.book_mut(2, 20).clear();
-        books
-            .book_mut(1, 10)
-            .add(
-                1,
-                Order {
-                    price_units: 100,
-                    size: 2,
-                    is_bid: true,
-                },
-            )
-            .unwrap();
-        books
-            .book_mut(2, 20)
-            .add(
-                1,
-                Order {
-                    price_units: 101,
-                    size: 3,
-                    is_bid: true,
-                },
-            )
-            .unwrap();
-        books.book_mut(1, 10).clear();
-        assert_eq!(books.snapshot(1).bids[0].price_units, 101);
+    fn status_parent_download_keeps_only_the_selected_futures_contract() {
+        let day = ReplayDay {
+            date: "2026-06-01".into(),
+            start_ts_ms: 0,
+            end_ts_ms: 1,
+            source_instrument_id: Some(20_048),
+            source_symbol: Some("6EM6".into()),
+            mbo_file: String::new(),
+            trades_file: String::new(),
+            status_file: None,
+            raw_l3_files: Vec::new(),
+            raw_status_files: Vec::new(),
+        };
+        assert!(status_source_matches(&day, 20_048));
+        assert!(!status_source_matches(&day, 10_573));
+    }
+
+    #[test]
+    fn status_equity_without_parent_selection_accepts_its_records() {
+        let day = ReplayDay {
+            date: "2026-06-01".into(),
+            start_ts_ms: 0,
+            end_ts_ms: 1,
+            source_instrument_id: None,
+            source_symbol: Some("NKE".into()),
+            mbo_file: String::new(),
+            trades_file: String::new(),
+            status_file: None,
+            raw_l3_files: Vec::new(),
+            raw_status_files: Vec::new(),
+        };
+        assert!(status_source_matches(&day, 42));
+    }
+
+    #[test]
+    fn imported_mbo_lookup_uses_raw_file_identity() {
+        let raw_path = "replay/raw/XNYS.PILLAR/NKE/2026-06-01.mbo.dbn.zst";
+        let catalog = Catalog {
+            version: CATALOG_VERSION,
+            instruments: vec![Instrument {
+                symbol: "NKE".into(),
+                display_name: "Nike".into(),
+                dataset: "XNYS.PILLAR".into(),
+                min_tick_price_units: 1_000_000,
+                days: vec![ReplayDay {
+                    date: "2026-06-01".into(),
+                    start_ts_ms: 0,
+                    end_ts_ms: 1,
+                    source_instrument_id: None,
+                    source_symbol: Some("NKE".into()),
+                    mbo_file: "replay/processed/NKE.mbo.fsr.zst".into(),
+                    trades_file: "replay/processed/NKE.trades.fsr.zst".into(),
+                    status_file: None,
+                    raw_l3_files: vec![raw_path.into()],
+                    raw_status_files: Vec::new(),
+                }],
+            }],
+        };
+        assert_eq!(
+            imported_mbo_day(&catalog, raw_path).map(|day| day.date.as_str()),
+            Some("2026-06-01")
+        );
+        assert!(imported_mbo_day(&catalog, "replay/raw/other.dbn.zst").is_none());
     }
 }
