@@ -8,13 +8,18 @@ use iced::{
     Color,
     Length::Fill,
     Theme, border, padding,
-    widget::{button, column, container, row, scrollable, slider, space, text, tooltip::Position},
+    widget::{
+        button, column, container, mouse_area, row, scrollable, slider, space, text,
+        tooltip::Position,
+    },
 };
 
 pub mod chart;
 pub mod color_picker;
 pub mod column_drag;
 pub mod decorate;
+pub mod info_hint;
+pub mod loading;
 pub mod multi_split;
 pub mod toast;
 
@@ -237,6 +242,7 @@ pub fn link_group_button<'a, Message, F>(
     id: iced::widget::pane_grid::Pane,
     link_group: Option<data::layout::pane::LinkGroup>,
     on_press: F,
+    on_hover: impl Fn(Option<data::layout::pane::LinkGroup>) -> Message + 'static,
 ) -> Element<'a, Message>
 where
     Message: Clone + 'static,
@@ -244,22 +250,29 @@ where
 {
     let is_active = link_group.is_some();
 
-    let icon = if let Some(group) = link_group {
-        text(group.to_string())
+    let content = if let Some(group) = link_group {
+        row![
+            icon_text(Icon::Link, 12),
+            text(group.to_string())
+                .font(style::AZERET_MONO)
+                .size(style::text_size::TINY)
+        ]
     } else {
-        text("-")
+        row![icon_text(Icon::Link, 12)]
     };
 
-    button(
-        icon.font(style::AZERET_MONO)
-            .align_x(Alignment::Start)
-            .align_y(Alignment::Center),
-    )
-    .style(move |theme: &Theme, status| style::button::bordered_toggle(theme, status, is_active))
-    .on_press(on_press(id))
-    .height(PANE_CONTROL_BTN_HEIGHT)
-    .width(28)
-    .into()
+    let button = button(content.spacing(3).align_y(Alignment::Center))
+        .style(move |theme: &Theme, status| {
+            style::button::bordered_toggle(theme, status, is_active)
+        })
+        .on_press(on_press(id))
+        .height(PANE_CONTROL_BTN_HEIGHT)
+        .width(if is_active { 42 } else { 30 });
+
+    mouse_area(button)
+        .on_enter(on_hover(link_group))
+        .on_exit(on_hover(None))
+        .into()
 }
 
 #[macro_export]

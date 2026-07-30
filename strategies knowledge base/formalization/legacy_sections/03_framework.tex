@@ -1,0 +1,104 @@
+\section{How Trades Are Built: Setup Stacking, Context, and Quality}
+
+\subsection{The corpus does not believe in one-factor trading}
+
+The transcript material is explicit that a trade should be built like a constructor set from multiple components. A graphically obvious level alone is weak. A density alone is weak. An iceberg alone may be interesting but still insufficient. Quality comes from stacked evidence.
+
+\paragraph{Practical implication.} The right way to think about a setup in this project is not ``pattern present or absent'' but rather:
+
+\begin{enumerate}
+\item what base ingredients are present,
+\item how many of them align,
+\item whether any strong counter-signals are present,
+\item whether current market conditions are suitable for this specific pattern,
+\item whether this pattern appears to be working today for this instrument.
+\end{enumerate}
+
+\subsection{Minimum bases for a trade}
+
+The transcript corpus suggests that meaningful trades begin when multiple reasons align. For engineering purposes, a useful translation is:
+
+\begin{itemize}
+\item \textbf{one factor:} weak observation, usually not tradable,
+\item \textbf{two factors:} hypothesis worth watching,
+\item \textbf{three or more factors:} candidate trade,
+\item \textbf{three plus strong counter-signals:} candidate rejected,
+\item \textbf{three plus confirming sequence plus clean stop:} high-quality candidate.
+\end{itemize}
+
+\subsection{Core evidence families}
+
+The recurring evidence families are:
+
+\begin{longtable}{p{0.19\textwidth}p{0.31\textwidth}p{0.42\textwidth}}
+\toprule
+\textbf{Evidence family} & \textbf{Examples} & \textbf{Why it matters} \\
+\midrule
+Graph context & prior high, prior low, gap edge, range boundary, local retest, multi-test level & tells us where stops, trapped traders, and attention are likely concentrated \\
+Visible liquidity & density, ladder of densities, loaded side of book, empty side of book & defines immediate barriers, magnets, and short-term stop placement logic \\
+Hidden / replenishing liquidity & iceberg, repeated refill, unexpectedly persistent level & suggests a stronger participant than the displayed size alone implies \\
+Aggressive flow & frequent prints, larger prints, one-sided tape, sudden acceleration & indicates whether the level is being attacked or defended in real time \\
+Robot behavior & mechanical reposting, one-tick grinding, steady push & reveals execution logic that other traders can lean on temporarily \\
+Session context & opening auction aftermath, news release, lunch slowdown, late-session squeeze & changes both pattern quality and expected follow-through \\
+Cross-instrument context & leader instrument, index, currency leg, correlated future & filters whether the local move is supported or fighting the broader tape \\
+\bottomrule
+\end{longtable}
+
+\subsection{Clean versus unclean setups}
+
+The source corpus often speaks in terms that are partly objective and partly intuitive: a setup can look ``clean'', ``dirty'', ``crooked'', ``late'', ``too empty'', ``already moved'', or ``overfilled with passengers''. A research translation of those judgments is useful.
+
+\paragraph{A clean setup usually has:}
+\begin{itemize}
+\item clear location in chart context,
+\item obvious nearby invalidation,
+\item visible support from DOM behavior,
+\item tape consistent with the intended direction,
+\item acceptable spread and depth,
+\item not too much prior exhaustion,
+\item reasonable remaining room before the next obstacle.
+\end{itemize}
+
+\paragraph{An unclean setup usually has:}
+\begin{itemize}
+\item late entry after too much movement,
+\item unclear stop or stop placed through empty book,
+\item conflicting tape and DOM evidence,
+\item too many nearby opposing densities,
+\item no remaining room,
+\item obvious dependence on hope rather than sequence confirmation.
+\end{itemize}
+
+\subsection{Day-specific calibration}
+
+One of the strongest project-level ideas supported by the corpus is that the first part of the session should be used as a diagnostic period. The point is not merely to ``wait for setup''; the point is to learn:
+
+\begin{itemize}
+\item Are visible densities holding today or being sliced?
+\item Are breakouts following through today or failing quickly?
+\item Are robot-driven pushes persistent or easy to fade?
+\item Is the book deep enough for size, or too thin for confidence?
+\item Is the market responsive to tape aggression, or are prints being absorbed with little travel?
+\end{itemize}
+
+\researchnote{This naturally suggests an intraday adaptation layer: a running dashboard of setup hit-rates and travel statistics conditioned on the current day and instrument.}
+
+\subsection{Setup taxonomy used in this report}
+
+The formal setup taxonomy used below is:
+
+\begin{enumerate}
+\item bounce from visible density,
+\item breakout through visible density or chart level,
+\item false breakout / failed continuation,
+\item iceberg-like support or resistance,
+\item absorption and hidden liquidity,
+\item robot-driven movement,
+\item spring / recoil after one-sided impulse,
+\item volatility harvesting and spread capture,
+\item leader-follower or guide-instrument alignment,
+\item news-response trading,
+\item limit-up / limit-down style constraints,
+\item context-only filters that modify the interpretation of all of the above.
+\end{enumerate}
+

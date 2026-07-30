@@ -14,6 +14,7 @@ use crate::{
     },
     screen::dashboard::tickers_table::TickersTable,
     style,
+    trading_state::LiveTradingSnapshot,
     widget::toast::Toast,
     window::{self, Window},
 };
@@ -60,6 +61,7 @@ pub enum Message {
     },
     ResolveStreams(uuid::Uuid, Vec<PersistStreamKind>),
     RequestPalette,
+    PanelAction(panel::Action),
 }
 
 pub struct Dashboard {
@@ -68,6 +70,7 @@ pub struct Dashboard {
     pub popout: HashMap<window::Id, (pane_grid::State<pane::State>, WindowSpec)>,
     pub streams: UniqueStreams,
     layout_id: uuid::Uuid,
+    hovered_link_group: Option<LinkGroup>,
 }
 
 impl Default for Dashboard {
@@ -78,6 +81,7 @@ impl Default for Dashboard {
             streams: UniqueStreams::default(),
             popout: HashMap::new(),
             layout_id: uuid::Uuid::new_v4(),
+            hovered_link_group: None,
         }
     }
 }
@@ -85,6 +89,7 @@ impl Default for Dashboard {
 #[derive(Debug, Clone)]
 pub enum Event {
     Notification(Toast),
+    PanelAction(panel::Action),
     DistributeFetchedData {
         layout_id: uuid::Uuid,
         pane_id: uuid::Uuid,
@@ -199,6 +204,7 @@ impl Dashboard {
             streams: UniqueStreams::default(),
             popout,
             layout_id,
+            hovered_link_group: None,
         }
     }
 
@@ -267,6 +273,9 @@ impl Dashboard {
             Message::Pane(window, message) => match message {
                 pane::Message::PaneClicked(pane) => {
                     self.focus = Some((window, pane));
+                }
+                pane::Message::LinkGroupHovered(group) => {
+                    self.hovered_link_group = group;
                 }
                 pane::Message::PaneResized(pane_grid::ResizeEvent { split, ratio }) => {
                     self.panes.resize(split, ratio);
@@ -469,6 +478,9 @@ impl Dashboard {
                             pane::Effect::FocusWidget(id) => {
                                 return (iced::widget::operation::focus(id), None);
                             }
+                            pane::Effect::PanelAction(action) => {
+                                return (Task::none(), Some(Event::PanelAction(action)));
+                            }
                         };
                         return (task, None);
                     }
@@ -476,6 +488,9 @@ impl Dashboard {
             },
             Message::RequestPalette => {
                 return (Task::none(), Some(Event::RequestPalette));
+            }
+            Message::PanelAction(action) => {
+                return (Task::none(), Some(Event::PanelAction(action)));
             }
             Message::ChangePaneStatus(pane_id, status) => {
                 if let Some(pane_state) = self.get_mut_pane_state_by_uuid(main_window.id, pane_id) {
@@ -682,10 +697,13 @@ impl Dashboard {
     ) -> Element<'a, Message> {
         let pane_grid: Element<_> = PaneGrid::new(&self.panes, |id, pane, maximized| {
             let is_focused = self.focus == Some((main_window.id, id));
+            let is_link_group_hovered =
+                pane.link_group.is_some() && pane.link_group == self.hovered_link_group;
             pane.view(
                 id,
                 self.panes.len(),
                 is_focused,
+                is_link_group_hovered,
                 maximized,
                 main_window.id,
                 main_window,
@@ -715,10 +733,13 @@ impl Dashboard {
             let content = container(
                 PaneGrid::new(state, |id, pane, _maximized| {
                     let is_focused = self.focus == Some((window, id));
+                    let is_link_group_hovered =
+                        pane.link_group.is_some() && pane.link_group == self.hovered_link_group;
                     pane.view(
                         id,
                         state.len(),
                         is_focused,
+                        is_link_group_hovered,
                         false,
                         window,
                         main_window,
@@ -854,6 +875,70 @@ impl Dashboard {
         )))
     }
 
+    pub fn init_focused_dom_candles_pair(
+        &mut self,
+        handles: &AdapterHandles,
+        main_window: window::Id,
+        ticker_info: TickerInfo,
+    ) -> Task<Message> {
+        let Some(link_group) = self.next_available_link_group(main_window) else {
+            return Task::done(Message::Notification(Toast::warn(
+                "No free link groups available".to_string(),
+            )));
+        };
+
+        let selected_pane =
+            if let Some((_, pane)) = self.focus.filter(|(window, _)| *window == main_window) {
+                pane
+            } else if let Some(pane) = self.panes.iter().last().map(|(pane, _)| *pane) {
+                pane
+            } else {
+                let (state, pane) = pane_grid::State::new(pane::State::new());
+                self.panes = state;
+                pane
+            };
+
+        let Some((candles_pane, split)) =
+            self.panes
+                .split(pane_grid::Axis::Vertical, selected_pane, pane::State::new())
+        else {
+            return Task::done(Message::Notification(Toast::warn(
+                "Couldn't create linked DOM and candles panes".to_string(),
+            )));
+        };
+
+        self.panes.resize(split, 0.68);
+
+        if let Some(state) = self.panes.get_mut(selected_pane) {
+            state.link_group = Some(link_group);
+        }
+
+        if let Some(state) = self.panes.get_mut(candles_pane) {
+            state.link_group = Some(link_group);
+        }
+
+        self.focus = Some((main_window, selected_pane));
+
+        Task::batch([
+            self.init_pane(
+                handles,
+                main_window,
+                main_window,
+                selected_pane,
+                ticker_info,
+                ContentKind::CscalpDom,
+            ),
+            self.init_pane(
+                handles,
+                main_window,
+                main_window,
+                candles_pane,
+                ticker_info,
+                ContentKind::CandlestickChart,
+            ),
+        ])
+    }
+
     pub fn switch_tickers_in_group(
         &mut self,
         handles: &AdapterHandles,
@@ -913,6 +998,13 @@ impl Dashboard {
                 "No link group or focused pane found".to_string(),
             )))
         }
+    }
+
+    fn next_available_link_group(&self, main_window: window::Id) -> Option<LinkGroup> {
+        LinkGroup::ALL.into_iter().find(|group| {
+            self.iter_all_panes(main_window)
+                .all(|(_, _, state)| state.link_group != Some(*group))
+        })
     }
 
     pub fn toggle_trade_fetch(&mut self, is_enabled: bool, main_window: &Window) {
@@ -1116,6 +1208,19 @@ impl Dashboard {
         }
     }
 
+    pub fn set_live_trading_snapshot(
+        &mut self,
+        main_window: window::Id,
+        snapshot: &LiveTradingSnapshot,
+    ) {
+        self.iter_all_panes_mut(main_window)
+            .for_each(|(_, _, pane_state)| {
+                if let pane::Content::CscalpDom(Some(panel)) = &mut pane_state.content {
+                    panel.set_live_trading_snapshot(snapshot);
+                }
+            });
+    }
+
     pub fn ingest_trades(
         &mut self,
         stream: &StreamKind,
@@ -1230,7 +1335,9 @@ impl Dashboard {
                     tasks.push(Task::done(Message::RequestPalette));
                 }
             },
-            Some(pane::Action::Panel(_action)) => {}
+            Some(pane::Action::Panel(action)) => {
+                tasks.push(Task::done(Message::PanelAction(action)));
+            }
             Some(pane::Action::ResolveStreams(streams)) => {
                 tasks.push(Task::done(Message::ResolveStreams(
                     state.unique_id(),
@@ -1280,10 +1387,19 @@ impl Dashboard {
         self.refresh_streams(main_window)
     }
 
-    pub fn market_subscriptions(&self, handles: &AdapterHandles) -> Subscription<exchange::Event> {
+    pub fn market_subscriptions(
+        &self,
+        handles: &AdapterHandles,
+        allowed_exchanges: &[Exchange],
+    ) -> Subscription<exchange::Event> {
+        if allowed_exchanges.is_empty() {
+            return Subscription::none();
+        }
+
         let unique_streams = self
             .streams
             .combined_used()
+            .filter(|(exchange, _)| allowed_exchanges.contains(exchange))
             .flat_map(|(exchange, specs)| {
                 let mut subs = vec![];
 
@@ -1408,5 +1524,21 @@ impl From<fetcher::FetchUpdate> for Message {
                 Message::ErrorOccurred(Some(pane_id), DashboardError::Fetch(error))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_available_link_group_skips_groups_already_used_by_default_market_columns() {
+        let dashboard = Dashboard::default();
+        let main_window = window::Id::unique();
+
+        assert_eq!(
+            dashboard.next_available_link_group(main_window),
+            Some(LinkGroup::C)
+        );
     }
 }

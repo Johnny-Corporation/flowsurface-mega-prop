@@ -1,0 +1,92 @@
+\section{Combining Setups and Context}
+
+\subsection{The sources describe trades as assembled, not selected}
+
+One of the strongest messages in the transcript material is that a good trade is built like a constructor set: multiple pieces reinforce each other. That idea is essential for both discretionary trading and future research design. It means the framework should not ask only \emph{``Did setup X appear?''} It should ask:
+
+\begin{itemize}[leftmargin=1.5em]
+\item What is the primary setup family?
+\item What evidence supports it from other modalities?
+\item What evidence contradicts it?
+\item How much of the evidence is structural versus ephemeral?
+\item How fragile is the idea if one ingredient disappears?
+\end{itemize}
+
+\subsection{When a bounce becomes a breakout}
+
+A bounce setup can mutate into a breakout setup when the same defense is tested too often or is visibly degrading. The transformation usually follows this sequence:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item a defended level first produces good rejections;
+\item the market returns to it repeatedly;
+\item each test consumes more liquidity or shortens the distance between tests;
+\item tape aggression remains persistent;
+\item the defending side looks less able to repel the market cleanly;
+\item once breached, the level flips from barrier to fuel source.
+\end{enumerate}
+
+For research, this implies that ``bounce'' and ``breakout'' are not mutually exclusive static labels. They are states in a local evolution process.
+
+\subsection{When a breakout becomes a false breakout}
+
+The failure sequence is the mirror image:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item an obvious level is breached;
+\item breakout participants and stops activate;
+\item post-break continuation is weak or short-lived;
+\item the market returns through the level;
+\item trapped traders now provide reversal fuel.
+\end{enumerate}
+
+This is why the first seconds after a breach matter so much in the source material. The trader is not only asking whether price crossed the level, but whether the market \emph{accepted} the new price area.
+
+\subsection{How order book, tape, and chart evidence should be combined}
+
+The combined logic implied by the materials can be summarized in Table~\ref{tab:evidence_roles}.
+
+\begin{longtable}{L{0.22\textwidth}L{0.7\textwidth}}
+\caption{Role of each evidence source in the trading logic}\label{tab:evidence_roles}\\
+\toprule
+Evidence source & Primary role \\
+\midrule
+\endfirsthead
+\toprule
+Evidence source & Primary role \\
+\midrule
+\endhead
+DOM / book & Shows displayed intentions, queue sizes, spread condition, visible defense, robot behavior, and microstructure asymmetry near the current price. \\
+Tape / prints & Shows who is acting aggressively now, how intense the aggression is, and whether aggression actually achieves price movement. \\
+Chart / levels & Provides memory and geometry: prior highs/lows, round numbers, compression, trend phase, and locally obvious liquidity pools. \\
+Clusters / POC & Confirm whether important volume historically transacted where the current setup claims significance. \\
+Cross-market context & Indicates whether another instrument or market is currently leading, confirming, or contradicting the setup. \\
+Risk state & Determines whether the trader is still allowed to express the idea, even if the idea itself is valid. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Confidence as a weighted judgment, not a binary tag}
+
+The repository should eventually represent setup quality as a weighted confidence object, not a one-bit flag. The source materials imply at least the following dimensions:
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Structural quality:} level significance, round number, chart alignment, historical footprint support.
+\item \textbf{Microstructure quality:} queue behavior, spread, aggression, replenishment, and whether price is responding properly.
+\item \textbf{Context quality:} active instrument, relevant time of day, event sensitivity, leader-follower confirmation.
+\item \textbf{Risk quality:} whether the stop is obvious and compact, whether slippage is manageable, and whether the trader has remaining daily risk budget.
+\end{itemize}
+
+\subsection{Day-specific adaptation}
+
+The transcript on trade review makes an especially important point: what worked yesterday may not work today, and what failed for a month may come back. This is more than trader psychology; it is a research direction. The framework should track which setup families are currently being rewarded for each instrument on the current day.
+
+A practical interpretation is:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item Observe the opening phase and early session.
+\item Log all high-quality setup candidates, even if not traded.
+\item Score their near-term outcomes using simple rules.
+\item Maintain a live same-day setup quality profile.
+\item Use that profile as a filter or confidence modifier for later signals.
+\end{enumerate}
+
+This is one of the most valuable bridges from discretionary practice to systematic research in the entire knowledge base.

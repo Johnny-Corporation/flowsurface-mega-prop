@@ -1,0 +1,132 @@
+\section{Extended Setup Catalogue and Cross-Market Logic}
+
+\subsection{Robot-driven movement}
+
+\paragraph{What the setup is.} The transcripts describe repeated mechanical order-book behavior that looks algorithmic: one-tick reposting, steady grind, persistent reloading, or a behavior pattern previously seen in the same instrument. The trader then ``leans'' on that robot while it is still effective.
+
+\paragraph{Edge hypothesis.} The robot is not magical. The edge is that its behavior is temporarily predictable enough to provide directional support until it stops, weakens, or becomes overcrowded by other traders.
+
+\paragraph{Key variables.}
+\begin{itemize}
+\item how aggressive the robot is,
+\item how long it has already been active,
+\item whether it acts with or against broader price direction,
+\item how much liquidity stands in its way,
+\item whether passengers have already piled on.
+\end{itemize}
+
+\paragraph{Entry logic.} Best entries happen early in the robot's visible activity, not after it has already dragged price a large distance. The transcripts repeatedly warn that noticing the robot late leaves too little remaining potential.
+
+\paragraph{Exit logic.} Exit when the robot stops reposting, when contrary pressure becomes obvious, or when the move has already extended enough that recoil risk dominates remaining reward.
+
+\paragraph{Fuzzy element.} The source material is explicit that robot classification is unstable. Different robot behaviors appear in different periods; therefore the durable lesson is not memorizing one robot pattern but detecting mechanical, repeatable liquidity behavior in real time.
+
+\researchnote{A detector can look for repeated replenishment at the inside quote, fixed-step quote migration, repeated same-size reposting cadence, and temporary directional correlation between reposting and price travel.}
+
+\subsection{Spring / recoil after one-sided impulse}
+
+\paragraph{What the setup is.} The ``spring'' setup in the transcripts is essentially a recoil trade after an unusually one-sided impulsive move. The metaphor is a stretched spring: the more violently it is pulled in one direction, the greater the snap-back risk.
+
+\paragraph{Why it may work.} Strong impulsive movement often leaves price overextended relative to short-horizon counterparties. Once active flow thins and new same-direction traders stop arriving, price can mean-revert sharply.
+
+\paragraph{Good context.}
+\begin{itemize}
+\item large one-direction impulse,
+\item obvious exhaustion in prints,
+\item local chart extremity,
+\item reduced continuation pressure,
+\item definable invalidation just beyond the impulse extreme.
+\end{itemize}
+
+\paragraph{Bad context.}
+\begin{itemize}
+\item news flow still actively driving new participants,
+\item strong hidden support for continuation,
+\item correlated leader instruments still accelerating the same way,
+\item trying to fade too early.
+\end{itemize}
+
+\paragraph{Relationship to other setups.} Springs are often secondary setups created \emph{after} an earlier breakout, robot push, or news impulse. They are not isolated patterns; they are often the next phase in a state transition.
+
+\subsection{Volatility harvesting and spread capture}
+
+\paragraph{What the setup is.} The transcripts use the language of ``collecting volatility'' in fast environments, especially around news or linked instruments. The idea is not a single chart pattern but a trading mode: take quick, well-defined pieces of a temporarily highly responsive market.
+
+\paragraph{Where it appears.}
+\begin{itemize}
+\item around news,
+\item when one instrument in a linked complex moves first,
+\item during fast impulse-and-recoil cycles,
+\item when visible levels provide tiny but reliable scalp anchors.
+\end{itemize}
+
+\paragraph{Main danger.} Volatility collection easily degrades into random button pressing. The corpus implicitly requires that even these fast scalps retain a nearby reason, a short invalidation, and respect for spread and book emptiness.
+
+\subsection{Leader-follower / guide-instrument logic}
+
+\paragraph{What the setup is.} In the currency-and-futures material, related instruments are treated as one broader complex. A level or iceberg in the leader instrument can hold back or trigger movement in the follower instruments.
+
+\paragraph{Why it may work.} If instruments represent nearly the same underlying risk transfer in different wrappers, then short-horizon order flow in one leg can predict or constrain the others.
+
+\paragraph{Examples implied by the corpus.}
+\begin{itemize}
+\item spot currency, tomorrow settlement, and currency future viewed as one complex,
+\item index future reacting to oil or currency leg movement,
+\item broad market leader influencing a stock's likelihood of follow-through.
+\end{itemize}
+
+\paragraph{How to use it.}
+\begin{itemize}
+\item do not trade the follower as if it were independent,
+\item watch the true leader's levels and hidden liquidity,
+\item treat contradiction from the leader as a filter against the local setup,
+\item use leader movement to decide whether a local breakout or spring has external support.
+\end{itemize}
+
+\researchnote{This naturally translates into multi-stream event alignment: same-time-window features from guide instrument plus target instrument.}
+
+\subsection{News trading}
+
+\paragraph{What the setup is.} The source corpus explicitly advises not to trade the \emph{semantic content} of the news first, but the \emph{market's reaction} to the news. That is a very important distinction.
+
+\paragraph{Core logic.}
+\begin{itemize}
+\item the headline itself may be ambiguous or already priced,
+\item the market's immediate behavior reveals how participants are positioned,
+\item the book, prints, and volatility response are more actionable than the verbal interpretation of the headline.
+\end{itemize}
+
+\paragraph{What to watch.}
+\begin{itemize}
+\item sudden widening of spread,
+\item explosive prints,
+\item immediate liquidity withdrawal,
+\item rapid appearance and removal of densities,
+\item leader-follower divergence,
+\item whether the first impulse persists or fully retraces.
+\end{itemize}
+
+\paragraph{Main execution warning.} News is one of the worst environments for sloppy market orders because spread, slippage, and queue risk all rise together.
+
+\subsection{Limit-up / limit-down style constraints}
+
+\paragraph{What the setup is.} The ``planka'' material describes exchange-imposed range boundaries where price cannot move beyond a limit until the range expands. This creates a mechanically special regime.
+
+\paragraph{Why it matters.}
+\begin{itemize}
+\item liquidity structure becomes artificial,
+\item path dependency changes because the hard boundary itself is tradable information,
+\item trapped positioning can become severe near expansions,
+\item normal intuition about travel beyond the boundary is invalid until the rule changes.
+\end{itemize}
+
+\paragraph{Research implication.} This regime should be flagged explicitly in any detector. A setup near a price-limit boundary is not statistically comparable to the same pattern in continuous unconstrained trading.
+
+\subsection{MOEX versus crypto differences}
+
+\paragraph{Russian market specifics.} The corpus assumes deep focus on local liquidity structure, prop tooling, deep DOM, and exchange microstructure such as price limits and different market sections. Session structure and local opening behavior matter heavily.
+
+\paragraph{Crypto specifics.} Crypto offers longer trading hours, different liquidity composition, more persistent cross-venue fragmentation, and more continuous overnight behavior. Some DOM principles transfer; others need revalidation because visible size, cancellation behavior, and participant mix are different.
+
+\paragraph{Practical rule.} Reuse the setup taxonomy across venues, but never assume parameter transfer. Thresholds, depth significance, robot signatures, and bounce/breakout quality need venue-specific calibration.
+

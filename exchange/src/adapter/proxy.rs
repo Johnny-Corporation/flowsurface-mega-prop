@@ -687,3 +687,40 @@ pub fn try_apply_proxy(
     log::debug!("Using proxy for REST: {}", cfg.to_log_string());
     builder.proxy(proxy)
 }
+
+pub fn try_apply_blocking_proxy(
+    builder: reqwest::blocking::ClientBuilder,
+    proxy_cfg: Option<&Proxy>,
+) -> reqwest::blocking::ClientBuilder {
+    let Some(cfg) = proxy_cfg else {
+        return builder;
+    };
+
+    let (scheme, auth) = (cfg.scheme(), cfg.auth());
+
+    let proxy_url = match (scheme, auth) {
+        (ProxyScheme::Socks5 | ProxyScheme::Socks5h, Some(_auth)) => cfg.to_url_string(),
+        _ => cfg.to_url_string_no_auth(),
+    };
+
+    let proxy = match reqwest::Proxy::all(proxy_url) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!(
+                "Failed to configure blocking proxy (scheme={}): {}",
+                cfg.scheme().as_str(),
+                e
+            );
+            return builder;
+        }
+    };
+    let proxy = match (scheme, auth) {
+        (ProxyScheme::Http | ProxyScheme::Https, Some(auth)) => {
+            proxy.basic_auth(auth.username(), auth.password())
+        }
+        _ => proxy,
+    };
+
+    log::debug!("Using proxy for blocking REST: {}", cfg.to_log_string());
+    builder.proxy(proxy)
+}

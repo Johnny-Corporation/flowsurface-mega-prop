@@ -1,0 +1,98 @@
+\section{Risk and Execution Logic}
+
+\subsection{Risk management is treated as a control system, not a suggestion}
+
+The risk-management book is unusually explicit: risk management exists to prevent the trader from destroying their own capital and to reduce the damage of inevitable losing streaks. The most transferable ideas from the source are:
+
+\begin{itemize}[leftmargin=1.5em]
+\item daily loss limits matter more than heroic individual trades;
+\item per-trade risk must be derived from daily loss limits, not chosen ad hoc;
+\item size should be adjusted to the stop distance and allowable loss, not the other way around;
+\item once the daily limit is hit, trading stops;
+\item risk management must constrain both downside and the trader's impulse to overtrade or ``win it back.''
+\end{itemize}
+
+\subsection{Per-trade risk}
+
+For intraday logic, the natural unit is the \Important{trade-level invalidation}. If a bounce trade depends on one defending participant, then once that participant is gone or overrun, the idea no longer exists. That gives the cleanest stop logic. The sources favor these trades precisely because the trader knows where the idea fails.
+
+Breakout trades are riskier because the stop is structurally less protected. Often the market behind the breakout is thin, which means:
+
+\begin{itemize}[leftmargin=1.5em]
+\item price can move violently against the trader before they react;
+\item a wrong breakout entry can suffer severe slippage;
+\item late entry dramatically worsens risk/reward.
+\end{itemize}
+
+Therefore the framework should treat breakout setups as inherently more execution-sensitive than bounce setups.
+
+\subsection{Per-day risk}
+
+The risk book repeatedly emphasizes deriving daily loss from deposit and expected trading cadence. More important than the exact formula is the behavioral rule: when the daily loss limit is reached, the session ends. In a future live system, this should not rely on willpower alone. It should be enforceable by the platform, either via paper-trading guardrails or eventual live risk controls.
+
+\subsection{Execution trade-offs: market versus limit}
+
+The materials assume an active trader who frequently interacts through the DOM itself. That immediately creates an execution triangle:
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Limit entry:} better price and queue priority potential, but uncertain fill and queue-position risk.
+\item \textbf{Market entry:} certainty of participation, but slippage and impact risk, especially in thin books or fast news conditions.
+\item \textbf{Passive-to-aggressive transition:} start with a passive idea, then cross when confirming tape appears, but only if the setup still exists.
+\end{itemize}
+
+For research purposes, the system should not backtest entries as if every intended price were executable. Queue position, cancel risk, and spread widening must be considered explicitly.
+
+\subsection{Stop-Loss, Take-Profit, and trailing logic}
+
+The risk-management book strongly favors hard stops, especially for beginners. It also explains a technically important implementation point: some TP/SL logic lives in the application and fails if the application dies, while other logic lives server-side. This distinction matters directly for automation. A live research framework must record:
+
+\begin{itemize}[leftmargin=1.5em]
+\item whether the stop is synthetic or exchange-native;
+\item whether the take-profit is fixed, discretionary, or absent;
+\item whether trailing logic exists and what rule updates it;
+\item whether the stop was hit because price traded there, or because the synthetic logic managed to send the closing order.
+\end{itemize}
+
+\subsection{Partial exits and adding to positions}
+
+The source materials frequently describe partial profit-taking rather than all-in/all-out behavior. Partial exits serve three functions:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item crystallize profits before the move fully matures;
+\item reduce emotional pressure during continuation;
+\item free risk budget for managed continuation or re-entry.
+\end{enumerate}
+
+Adding to positions is treated as substantially more delicate. The trader may add when the original idea strengthens and the remaining risk budget permits it. Adding simply because the initial trade is hurting is strongly discouraged unless the setup logic genuinely improved. In research language, adding should be modeled as a \emph{new decision with inherited context}, not as a casual modification to the old trade.
+
+\subsection{Overtrading, tilt, and why automation can help}
+
+The books describe several recurring psychological traps:
+
+\begin{itemize}[leftmargin=1.5em]
+\item anger after losses,
+\item desire to ``do something'' even when the market is dead,
+\item tendency to increase size after frustration,
+\item refusal to stop after reaching the daily loss threshold,
+\item boredom-driven trading outside criteria.
+\end{itemize}
+
+This is precisely where partial automation can help even before full automation exists. A research platform can reduce discretionary error by enforcing:
+
+\begin{itemize}[leftmargin=1.5em]
+\item daily stop rules,
+\item pre-trade checklists,
+\item replay of near-miss versus taken trades,
+\item visibility into what setups are actually working today,
+\item automatic logging of exits, adds, and deviations from intended plan.
+\end{itemize}
+
+\subsection{Execution differences: crypto versus Russian market}
+
+The final framework must keep separate assumptions for crypto and MOEX-style instruments:
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Crypto:} 24/7 flow, fragmented venue behavior, heavier bot participation, frequent retail stop-runs, and stronger need to model exchange-specific microstructure quirks.
+\item \textbf{Russian market / T-Invest / MOEX context:} session structure matters more, cross-links between spot, TOM/TOD, futures, oil, and macro news may be more explicit, and venue rules such as planka states and section-specific risk controls matter more.
+\item \textbf{Shared issue:} in both markets, low-liquidity conditions make displayed size deceptive and make market-order backtests dangerously optimistic.
+\end{itemize}

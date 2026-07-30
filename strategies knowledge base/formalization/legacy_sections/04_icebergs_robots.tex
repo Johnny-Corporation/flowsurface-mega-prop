@@ -1,0 +1,124 @@
+\section{Core Setups II: Icebergs, Absorption, and Robots}
+
+\subsection{Iceberg-like behavior and hidden absorption}
+
+\subsubsection{What the setup is}
+
+The iceberg setup is one of the most important bridges from naive DOM reading to genuine
+microstructure thinking. A visible quote of fixed size keeps reappearing while executed volume
+through that level clearly exceeds the displayed amount. In other words, the tape says much
+more traded than the book says was visible.
+
+\subsubsection{Why it is believed to work}
+
+The basic hypothesis is that a strong passive participant wants to transact without revealing
+full size. That participant is often serious enough to matter because hidden replenishment is
+not random retail behavior. If price repeatedly hits the level and the visible slice keeps
+refreshing, the trader infers that a large participant is still active.
+
+There are two main paths from this observation:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \term{Fade logic}: the iceberg absorbs flow and price bounces away.
+  \item \term{Break logic}: the iceberg is eventually exhausted, and the break after exhaustion can
+        be powerful because the market just spent significant energy clearing one serious seller
+        or buyer.
+\end{itemize}
+
+\subsubsection{What to watch}
+
+\paragraph{Order book.}
+Repeated visible replenishment at roughly the same price.
+
+\paragraph{Tape / prints.}
+Executed volume far greater than visible size, ideally observed quickly enough that the mismatch
+is obvious in real time.
+
+\paragraph{Price behavior.}
+Does price stall despite aggressive hitting, or does it keep leaning and finally burst through?
+The same iceberg can support either a bounce or a breakout depending on who finally wins.
+
+\subsubsection{Traps and ambiguity}
+
+The transcripts themselves show why this is tricky: sometimes the trader sees an iceberg before
+the platform formally marks it; sometimes the apparent iceberg is mixed with additional visible
+orders; sometimes the real hidden size is unknown. Therefore the iceberg should not be coded as
+``iceberg detected equals trade.'' It should be coded as ``a meaningful hidden-liquidity event
+is likely present; now interpret direction with context.''
+
+\subsubsection{Algorithmic translation}
+
+Observable signals could include:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item cumulative traded volume at a price divided by concurrent displayed size,
+  \item refresh count at the same price within a short window,
+  \item number of failed attempts to dislodge the level,
+  \item post-absorption displacement away from or through the price.
+\end{itemize}
+
+This setup requires prints / executions. Order-book-only historical data is insufficient for a
+credible iceberg study.
+
+\subsection{Liquidity absorption as a broader concept}
+
+Icebergs are one special case of absorption. More broadly, absorption means aggressive activity
+arrives, but price does not travel as much as it ``should'' if passive resistance were weak.
+The practical lesson is the same: flow must be interpreted relative to price response. Heavy
+printing by itself is not strength. Heavy printing with no progress can be hidden opposition.
+
+This is a core reason why the future repository must preserve both message streams. Without
+trades, the system cannot distinguish between visible size that merely exists and visible or
+hidden size that is actually overpowering aggression.
+
+\subsection{Robot-following setups}
+
+\subsubsection{What the setup is}
+
+The robot setup in the transcripts is not a vague claim that ``algos exist.'' It is a very
+practical observation that a recurring participant can often be seen acting with machine-like
+regularity: placing similar size, repeating the same behavior, pushing incrementally, or
+consistently nudging price in one direction.
+
+\subsubsection{Why it is believed to work}
+
+If a participant is algorithmic, persistent, and effective, its footprint can become tradable.
+The trader does not need to know the source code of the robot. The trader only needs to infer a
+reliable behavior pattern: how aggressive it is, how quickly it refreshes, whether it walks the
+book, whether it defends a side, and whether it actually moves price rather than only creating
+noise.
+
+\subsubsection{What makes a robot worth following}
+
+The transcripts evaluate a robot by strength, aggression, size, and effectiveness. That is a
+useful research checklist:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item Does the participant act repeatedly enough to be recognized?
+  \item Does its activity correlate with actual price movement?
+  \item Is it operating in a liquid instrument where other participants matter, or in a thin
+        book where almost anything looks dominant?
+  \item Is the trader trading with the robot's pressure or trying to fade it?
+\end{itemize}
+
+\subsubsection{Clean versus unclean examples}
+
+Clean robot setups involve a participant whose behavior is legible and effective. Unclean cases
+involve projected intentionality: the trader sees a few repeated prints or orders and invents a
+robot story that is not supported by persistent evidence.
+
+\subsubsection{Algorithmic translation}
+
+Possible features:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item repeated order sizes and refresh cadence at stable intervals,
+  \item repeated one-tick nudging patterns,
+  \item correlation between one participant-like behavior cluster and subsequent price drift,
+  \item side persistence over multiple seconds or minutes,
+  \item cancellation / reposting behavior that suggests queue management rather than discretionary
+        clicking.
+\end{itemize}
+
+This is an area where pattern mining and clustering may later be useful, because the human
+notion of ``robot behavior'' often refers to sequence style rather than one isolated snapshot.

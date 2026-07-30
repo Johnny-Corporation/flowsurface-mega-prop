@@ -44,6 +44,7 @@ iced = { version = "0.14.0", default-features = false, features = [
     "advanced",
     "unconditional-rendering",
     "crisp",
+    "image",
     "x11",
     "wayland",
 ] }
@@ -53,6 +54,7 @@ serde_json.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 log.workspace = true
+regex.workspace = true
 uuid.workspace = true
 palette.workspace = true
 num-traits.workspace = true

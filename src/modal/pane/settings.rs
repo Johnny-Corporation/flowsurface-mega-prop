@@ -953,8 +953,99 @@ pub fn cscalp_dom_cfg_view<'a>(
         })
         .step(1.0);
 
+        let normal_mode = radio(
+            "Normal",
+            cscalp_dom_data::TradingMode::Normal,
+            Some(cfg.trading_mode),
+            move |trading_mode| {
+                Message::VisualConfigChanged(
+                    pane,
+                    VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                        trading_mode,
+                        ..cfg
+                    }),
+                    false,
+                )
+            },
+        )
+        .spacing(4);
+
+        let hedge_mode = radio(
+            "Hedge",
+            cscalp_dom_data::TradingMode::Hedge,
+            Some(cfg.trading_mode),
+            move |trading_mode| {
+                Message::VisualConfigChanged(
+                    pane,
+                    VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                        trading_mode,
+                        ..cfg
+                    }),
+                    false,
+                )
+            },
+        )
+        .spacing(4);
+
+        let hedge_order_controls: Option<Element<_>> =
+            (cfg.trading_mode == cscalp_dom_data::TradingMode::Hedge).then(|| {
+                let open = radio(
+                    "Open",
+                    cscalp_dom_data::HedgeOrderIntent::Open,
+                    Some(cfg.hedge_order_intent),
+                    move |hedge_order_intent| {
+                        Message::VisualConfigChanged(
+                            pane,
+                            VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                                hedge_order_intent,
+                                ..cfg
+                            }),
+                            false,
+                        )
+                    },
+                )
+                .spacing(4);
+
+                let close = radio(
+                    "Close",
+                    cscalp_dom_data::HedgeOrderIntent::Close,
+                    Some(cfg.hedge_order_intent),
+                    move |hedge_order_intent| {
+                        Message::VisualConfigChanged(
+                            pane,
+                            VisualConfig::CscalpDom(cscalp_dom_data::Config {
+                                hedge_order_intent,
+                                ..cfg
+                            }),
+                            false,
+                        )
+                    },
+                )
+                .spacing(4);
+
+                column![
+                    text("Hedge order").size(crate::style::text_size::EMPHASIS),
+                    row![open, close].spacing(10),
+                ]
+                .spacing(6)
+                .into()
+            });
+
+        let mode_controls = column![
+            text("Position mode").size(crate::style::text_size::EMPHASIS),
+            row![normal_mode, hedge_mode].spacing(10),
+        ]
+        .spacing(6);
+
+        let mode_controls = if let Some(hedge_order_controls) = hedge_order_controls {
+            mode_controls.push(hedge_order_controls)
+        } else {
+            mode_controls
+        };
+
         column![
             text("Trading").size(crate::style::text_size::SECTION),
+            mode_controls,
             classic_slider_row(
                 text("Order size"),
                 slider_ui.into(),

@@ -1,9 +1,9 @@
-use super::{Message, ViewState};
+use super::{Message, ViewState, safe_geometry};
 use crate::{style, widget::tooltip};
 
 use exchange::unit::Price;
 use iced::theme::palette::Extended;
-use iced::widget::canvas::{self, LineDash, Path, Stroke};
+use iced::widget::canvas::{self, LineDash, Stroke};
 use iced::{
     Alignment, Color, Element, Length, Point, Rectangle, Size, Theme, Vector, padding,
     widget::{button, container, row, text},
@@ -255,12 +255,12 @@ fn draw_price_levels(
             continue;
         }
 
-        frame.stroke(
-            &Path::line(
-                Point::new(region.x, y),
-                Point::new(region.x + region.width, y),
-            ),
+        safe_geometry::stroke_line(
+            frame,
+            Point::new(region.x, y),
+            Point::new(region.x + region.width, y),
             annotation_stroke(state, palette.primary.base.color),
+            "chart_tools.price_level",
         );
     }
 }
@@ -295,9 +295,12 @@ fn draw_segments(
             end = ray_far_point(start, end, region);
         }
 
-        frame.stroke(
-            &Path::line(start, end),
+        safe_geometry::stroke_line(
+            frame,
+            start,
+            end,
             annotation_stroke(state, palette.primary.base.color),
+            "chart_tools.segment",
         );
     }
 }
@@ -324,7 +327,13 @@ fn draw_draft(
                 end = ray_far_point(start, end, region);
             }
 
-            frame.stroke(&Path::line(start, end), annotation_stroke(state, color));
+            safe_geometry::stroke_line(
+                frame,
+                start,
+                end,
+                annotation_stroke(state, color),
+                "chart_tools.draft_segment",
+            );
         }
         ChartTool::Hand | ChartTool::Level => {}
     }
@@ -340,8 +349,20 @@ fn draw_trend_rectangle(
     let (fill, stroke_color) = trend_rectangle_colors(palette, rect);
     let stroke = trend_stroke(state, stroke_color);
 
-    frame.fill_rectangle(bounds.position(), bounds.size(), fill);
-    frame.stroke_rectangle(bounds.position(), bounds.size(), stroke);
+    safe_geometry::fill_rectangle(
+        frame,
+        bounds.position(),
+        bounds.size(),
+        fill,
+        "chart_tools.trend_rectangle_fill",
+    );
+    safe_geometry::stroke_rectangle(
+        frame,
+        bounds.position(),
+        bounds.size(),
+        stroke,
+        "chart_tools.trend_rectangle_stroke",
+    );
 
     let start = state.point_to_chart_xy(rect.start);
     let end = state.point_to_chart_xy(rect.end);
@@ -406,12 +427,12 @@ fn draw_arrow_line(
     let length = (direction.x * direction.x + direction.y * direction.y).sqrt();
     let min_length = RECT_ARROW_MIN_LENGTH_PX / state.scaling.max(1.0);
 
-    if length <= min_length {
+    if !length.is_finite() || length <= min_length {
         return;
     }
 
     let stroke = trend_stroke(state, color);
-    frame.stroke(&Path::line(start, end), stroke);
+    safe_geometry::stroke_line(frame, start, end, stroke, "chart_tools.arrow_line");
 
     let unit = Vector::new(direction.x / length, direction.y / length);
     let normal = Vector::new(-unit.y, unit.x);
@@ -421,8 +442,8 @@ fn draw_arrow_line(
     let left = wing_base + normal * head_width;
     let right = wing_base - normal * head_width;
 
-    frame.stroke(&Path::line(end, left), stroke);
-    frame.stroke(&Path::line(end, right), stroke);
+    safe_geometry::stroke_line(frame, end, left, stroke, "chart_tools.arrow_head_left");
+    safe_geometry::stroke_line(frame, end, right, stroke, "chart_tools.arrow_head_right");
 }
 
 fn draw_delete_marker(
@@ -440,8 +461,15 @@ fn draw_delete_marker(
         palette.background.weakest.color.scale_alpha(0.94)
     };
 
-    frame.fill_rectangle(top_left, Size::new(size, size), bg);
-    frame.stroke_rectangle(
+    safe_geometry::fill_rectangle(
+        frame,
+        top_left,
+        Size::new(size, size),
+        bg,
+        "chart_tools.delete_marker_fill",
+    );
+    safe_geometry::stroke_rectangle(
+        frame,
         top_left,
         Size::new(size, size),
         Stroke::with_color(
@@ -451,6 +479,7 @@ fn draw_delete_marker(
             },
             palette.danger.base.color.scale_alpha(0.9),
         ),
+        "chart_tools.delete_marker_stroke",
     );
 
     let inset = size * 0.28;
@@ -461,19 +490,19 @@ fn draw_delete_marker(
         },
         palette.danger.base.color,
     );
-    frame.stroke(
-        &Path::line(
-            Point::new(top_left.x + inset, top_left.y + inset),
-            Point::new(top_left.x + size - inset, top_left.y + size - inset),
-        ),
+    safe_geometry::stroke_line(
+        frame,
+        Point::new(top_left.x + inset, top_left.y + inset),
+        Point::new(top_left.x + size - inset, top_left.y + size - inset),
         stroke,
+        "chart_tools.delete_marker_cross_down",
     );
-    frame.stroke(
-        &Path::line(
-            Point::new(top_left.x + size - inset, top_left.y + inset),
-            Point::new(top_left.x + inset, top_left.y + size - inset),
-        ),
+    safe_geometry::stroke_line(
+        frame,
+        Point::new(top_left.x + size - inset, top_left.y + inset),
+        Point::new(top_left.x + inset, top_left.y + size - inset),
         stroke,
+        "chart_tools.delete_marker_cross_up",
     );
 }
 

@@ -23,7 +23,7 @@ use crate::{
     style::{self, Icon, icon_text},
     widget::{
         self, button_with_tooltip, chart::heatmap::HeatmapShader, column_drag, link_group_button,
-        toast::Toast,
+        loading, toast::Toast,
     },
     window::{self, Window},
 };
@@ -54,6 +54,7 @@ pub enum Effect {
     RequestFetch(Vec<FetchSpec>),
     SwitchTickersInGroup(TickerInfo),
     FocusWidget(iced::widget::Id),
+    PanelAction(super::panel::Action),
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -84,6 +85,7 @@ pub enum Message {
     Popout,
     Merge,
     SwitchLinkGroup(pane_grid::Pane, Option<LinkGroup>),
+    LinkGroupHovered(Option<LinkGroup>),
     VisualConfigChanged(pane_grid::Pane, VisualConfig, bool),
     PaneEvent(pane_grid::Pane, Event),
 }
@@ -521,6 +523,7 @@ impl State {
         id: pane_grid::Pane,
         panes: usize,
         is_focused: bool,
+        is_link_group_hovered: bool,
         maximized: bool,
         window: window::Id,
         main_window: &'a Window,
@@ -530,9 +533,12 @@ impl State {
         let mut top_left_buttons = if Content::Starter == self.content {
             row![]
         } else {
-            row![link_group_button(id, self.link_group, |id| {
-                Message::PaneEvent(id, Event::ShowModal(Modal::LinkGroup))
-            })]
+            row![link_group_button(
+                id,
+                self.link_group,
+                |id| { Message::PaneEvent(id, Event::ShowModal(Modal::LinkGroup)) },
+                Message::LinkGroupHovered
+            )]
         };
 
         if let Some(kind) = self.stream_pair_kind() {
@@ -624,7 +630,7 @@ impl State {
 
         let uninitialized_base = |kind: ContentKind| -> Element<'a, Message> {
             if self.has_stream() {
-                center(text("Loading…").size(crate::style::text_size::TITLE)).into()
+                loading::view(format!("Loading {}...", kind))
             } else {
                 let content = column![
                     text(kind.to_string()).size(crate::style::text_size::TITLE),
@@ -1155,7 +1161,7 @@ impl State {
         }
 
         let content = pane_grid::Content::new(body)
-            .style(move |theme| style::pane_background(theme, is_focused));
+            .style(move |theme| style::pane_background(theme, is_focused, is_link_group_hovered));
 
         let top_right_buttons = {
             let compact_control = container(
@@ -1234,11 +1240,21 @@ impl State {
             },
             Event::PanelInteraction(msg) => match &mut self.content {
                 Content::CscalpDom(Some(p)) => {
-                    super::panel::update(p, msg);
+                    if let Some(action) = super::panel::update(p, msg) {
+                        return Some(Effect::PanelAction(action));
+                    }
                     self.settings.visual_config = Some(VisualConfig::CscalpDom(p.config));
                 }
-                Content::Ladder(Some(p)) => super::panel::update(p, msg),
-                Content::TimeAndSales(Some(p)) => super::panel::update(p, msg),
+                Content::Ladder(Some(p)) => {
+                    if let Some(action) = super::panel::update(p, msg) {
+                        return Some(Effect::PanelAction(action));
+                    }
+                }
+                Content::TimeAndSales(Some(p)) => {
+                    if let Some(action) = super::panel::update(p, msg) {
+                        return Some(Effect::PanelAction(action));
+                    }
+                }
                 _ => {}
             },
             Event::ToggleIndicator(ind) => {

@@ -1,0 +1,118 @@
+\section{Combining Setups, Risk Logic, and Execution Reality}
+
+\subsection{Combination logic: one setup can become another}
+
+A major theme across the lessons is that setups are not isolated boxes. A bounce attempt can
+turn into a breakout if the defending participant disappears. A breakout can turn into a false
+breakout if follow-through fails. An iceberg can first act as absorption, then later become the
+fuel for a strong move once exhausted. A spring trade can be thought of as a bounce where the
+stretch makes otherwise modest resistance meaningful.
+
+This implies that future detectors should not be framed as independent yes/no classifiers only.
+A state-machine interpretation is more faithful:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item identify the current structural state,
+  \item watch the event that tests the state,
+  \item observe which branch the market takes next,
+  \item re-label the active hypothesis as new information arrives.
+\end{itemize}
+
+\subsection{A practical confidence model}
+
+The materials support a simple human-style confidence stack:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item \term{Location}: is the event happening where others care?
+  \item \term{Participant evidence}: is there a visible or hidden actor worth respecting?
+  \item \term{Tape confirmation}: are aggressive traders succeeding or failing?
+  \item \term{Context}: is the day supportive of this setup family?
+  \item \term{Exit clarity}: do we know where we are wrong?
+\end{enumerate}
+
+If several of these are weak, the example is ``unclean'' even if the screenshot looks similar to
+an ideal training example.
+
+\subsection{Per-trade risk}
+
+The risk book is conceptually conservative in the right way. Losses are normal, risk is finite,
+and position size must be defined against a maximum acceptable loss, not against wishful profit.
+In the transcript logic, bounce trades are attractive precisely because they often permit larger
+size with a smaller, more local stop. Breakout trades are more dangerous precisely because local
+support is less reliable and slippage can be severe.
+
+Practical rules implied by the combined materials:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item Every trade should have an invalidation point before entry.
+  \item If invalidation is not local and legible, size should shrink sharply or the trade should be
+        skipped.
+  \item If the trade thesis fails behaviorally, exit quickly rather than wait for a prettier stop.
+\end{itemize}
+
+\subsection{Per-day risk and stopping rules}
+
+The risk book strongly supports daily-loss limits. The core idea is simple: once the planned
+daily drawdown is reached, the session ends. This matters more in discretionary intraday trading
+than in slower styles because emotional state degrades quickly after repeated short-term losses.
+
+The transcripts support this indirectly: markets change fast, what worked yesterday may not work
+today, and adaptation matters. A daily stop is therefore not only emotional protection. It is
+also a recognition that the trader may be operating with the wrong model for the day.
+
+\subsection{Why overtrading happens}
+
+The materials imply several causes:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item seeing one familiar visual cue and ignoring missing confirming reasons,
+  \item revenge after a failed breakout or missed move,
+  \item trying to trade limit-state or news chaos without a real edge,
+  \item treating activity as productivity.
+\end{itemize}
+
+Automation can help here, not by removing discretion entirely, but by enforcing structural
+filters: daily stop switches, maximum concurrent risk, trade-count limits, and ``no trade unless
+required evidence is present'' rules.
+
+\subsection{Execution trade-offs: market versus limit}
+
+The knowledge base is implicitly very execution-aware. In fast setups, especially breakouts,
+marketable entry may be the only realistic way to participate. But market entry increases
+slippage risk and can destroy reward-to-risk if the move is already extended. Limit entry
+improves price but risks missing the move or never getting filled.
+
+For a research platform, this means backtests cannot assume magical fills:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item queue position matters,
+  \item fill probability matters,
+  \item spread state matters,
+  \item the difference between touching a price and actually trading there matters.
+\end{itemize}
+
+\subsection{Low-liquidity traps}
+
+The old Russian data in the repository contains many sparse books. The transcripts also discuss
+instruments whose books are effectively empty for trading purposes. In such environments,
+displayed liquidity can be misleading, stop quality is poor, and slippage dominates. A serious
+research engine must classify low-liquidity conditions explicitly rather than letting all
+setups operate as if queue quality were stable.
+
+\subsection{Differences between crypto and Russian market execution}
+
+The source materials are rooted more strongly in the Russian prop / DOM environment, but the
+repository explicitly targets both Russian markets and crypto. The following translation is
+therefore necessary:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item Crypto often offers richer continuous trading, more accessible public trade feeds, and more
+        frequent regime shifts across the full day.
+  \item Russian exchange trading is more session-structured, more sensitive to local schedule,
+        auction phases, and instrument-specific exchange rules.
+  \item Limit-state logic, settlement variants, and guide-instrument relationships can be more
+        structurally important in the Russian market than in typical crypto pairs.
+\end{itemize}
+
+The framework should share one event model across both domains while keeping venue-specific
+features and session metadata explicit.

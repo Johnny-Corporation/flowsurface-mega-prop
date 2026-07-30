@@ -1,0 +1,64 @@
+\section{Research Platform Direction and Roadmap}
+
+\subsection{Platform layers implied by the knowledge base}
+
+The repository should evolve toward the following layered platform:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{Ingestion and logging:} venue-specific connectors for Bybit and T-Invest, writing raw and normalized events.
+\item \textbf{Normalization and reconstruction:} stable event contracts for order book, trades, executions, and market status.
+\item \textbf{Replay and analytics:} session replayers, per-event inspection, and setup-study tooling.
+\item \textbf{Feature extraction:} depth, tape, spread, imbalance, cross-market, and day-state features.
+\item \textbf{Rule-based detection:} explicit detectors for bounce, breakout, false breakout, iceberg, robot, spring, and leader-follower setups.
+\item \textbf{Signal evaluation:} performance attribution by setup, instrument, time of day, and session regime.
+\item \textbf{Paper/demo execution:} live signals without immediate capital risk.
+\item \textbf{Later live execution and ML overlays:} only after the previous layers are stable and informative.
+\end{enumerate}
+
+\subsection{Historical versus live research loop}
+
+The materials do not support separating historical research from live observation too aggressively. The correct practical loop is parallel:
+
+\begin{itemize}[leftmargin=1.5em]
+\item use the historical archive for rough replay and hypothesis smoke tests;
+\item run live logging on Bybit continuously;
+\item run live logging on T-Invest whenever the Russian market is open and credentials are available;
+\item compare live observations against historical assumptions and source-material claims;
+\item refine setup definitions in response to what actually happens.
+\end{itemize}
+
+\subsection{What should be tested first}
+
+Before strategy optimization or ML, the repository should validate the most basic structural claims:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item Does large visible density correlate with short-term bounce probability?
+\item Does repeated testing and local compression increase breakout probability?
+\item Does post-breach re-entry identify false breakouts better than naive level crossing?
+\item Do simple near-touch imbalances or aggression bursts have useful short-horizon predictive value?
+\item Do guide-instrument relationships show day-dependent reliability?
+\end{enumerate}
+
+Only after these basic relationships prove visible should the framework attempt richer multi-signal logic.
+
+\subsection{Current historical-data limitations}
+
+The repository's order-book archive is suitable for \emph{weak backtesting} and replay, but not for final belief formation. In particular:
+
+\begin{itemize}[leftmargin=1.5em]
+\item order-book-only studies cannot validate iceberg logic properly without synchronized trades;
+\item sparse books may create fake signals that look like densities only because the instrument is thin;
+\item old venue conditions may not reflect current crypto or current MOEX microstructure;
+\item the most advanced setup classes depend on execution quality, prints, and current-day context, which the archive often cannot provide.
+\end{itemize}
+
+\subsection{Concrete near-term roadmap}
+
+\begin{enumerate}[leftmargin=1.5em]
+\item Keep the knowledge base formalized and versioned as strategy documentation.
+\item Stabilize Bybit and T-Invest logging with placeholder-only committed configs.
+\item Build replay notebooks or scripts around the normalized event format.
+\item Implement the first detector family: density bounce, compression breakout, and false breakout.
+\item Add day-state tracking to measure which setup families are working today.
+\item Compare live results with archive-based expectations and revise the formalization where reality disagrees.
+\end{enumerate}

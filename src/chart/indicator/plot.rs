@@ -1,8 +1,8 @@
-use crate::chart::{Basis, Interaction, Message, ViewState};
+use crate::chart::{Basis, Interaction, Message, ViewState, safe_geometry};
 use crate::style::{self, dashed_line};
 use data::util::{guesstimate_ticks, round_to_tick};
 use exchange::UnixMs;
-use iced::widget::canvas::{self, Cache, Geometry, Path};
+use iced::widget::canvas::{self, Cache, Geometry};
 use iced::{Alignment, Point, Rectangle, Renderer, Size, Theme, Vector, mouse};
 
 use std::collections::BTreeMap;
@@ -282,6 +282,45 @@ impl YScale {
     }
 }
 
+pub(super) struct HorizontalSnap {
+    pub rounded_value: f32,
+    pub y_position: f32,
+}
+
+pub(super) fn horizontal_snap(
+    cursor_y: f32,
+    bounds_height: f32,
+    highest: f32,
+    lowest: f32,
+) -> Option<HorizontalSnap> {
+    let range = highest - lowest;
+
+    if range <= f32::EPSILON
+        || bounds_height <= 0.0
+        || !cursor_y.is_finite()
+        || !bounds_height.is_finite()
+        || !highest.is_finite()
+        || !lowest.is_finite()
+    {
+        return None;
+    }
+
+    let ratio = cursor_y / bounds_height;
+    let value = highest - ratio * range;
+    let tick = guesstimate_ticks(range);
+    if tick <= 0.0 || !tick.is_finite() {
+        return None;
+    }
+
+    let rounded_value = round_to_tick(value, tick);
+    let y_position = bounds_height - ((rounded_value - lowest) / range * bounds_height);
+
+    y_position.is_finite().then_some(HorizontalSnap {
+        rounded_value,
+        y_position,
+    })
+}
+
 pub trait Plot<S: Series> {
     fn y_extents(&self, s: &S, range: RangeInclusive<u64>) -> Option<(f32, f32)>;
 
@@ -362,6 +401,15 @@ where
         if ctx.bounds.width == 0.0 {
             return vec![];
         }
+        if !safe_geometry::valid_chart_canvas(
+            "indicator_plot",
+            bounds,
+            ctx.bounds,
+            ctx.scaling,
+            ctx.cell_width,
+        ) {
+            return vec![];
+        }
 
         let indicator = self.indicator_cache.draw(renderer, bounds.size(), |frame| {
             let center = Vector::new(bounds.width / 2.0, bounds.height / 2.0);
@@ -380,6 +428,10 @@ where
                 width,
                 height: frame.height() / ctx.scaling,
             };
+            if !safe_geometry::valid_positive_rect("indicator_plot.region", region) {
+                return;
+            }
+
             let (earliest, latest) = ctx.interval_range(&region);
             if latest < earliest {
                 return;
@@ -404,6 +456,10 @@ where
                 width,
                 height: frame.height() / ctx.scaling,
             };
+            if !safe_geometry::valid_positive_rect("indicator_crosshair.region", region) {
+                return;
+            }
+
             let (earliest, latest) = ctx.interval_range(&region);
             if latest < earliest {
                 return;
@@ -437,12 +493,12 @@ where
                     }
                 };
 
-                frame.stroke(
-                    &Path::line(
-                        Point::new(snap_ratio * bounds.width, 0.0),
-                        Point::new(snap_ratio * bounds.width, bounds.height),
-                    ),
+                safe_geometry::stroke_line(
+                    frame,
+                    Point::new(snap_ratio * bounds.width, 0.0),
+                    Point::new(snap_ratio * bounds.width, bounds.height),
                     dashed,
+                    "indicator_crosshair.vertical",
                 );
 
                 // tooltip text
@@ -485,20 +541,18 @@ where
                 // horizontal snap uses label extents
                 let highest = self.max_for_labels;
                 let lowest = self.min_for_labels;
-                let tick = guesstimate_ticks(highest - lowest);
 
-                let ratio = cursor_position.y / bounds.height;
-                let value = highest + ratio * (lowest - highest);
-                let rounded = round_to_tick(value, tick);
-                let snap_ratio = (rounded - highest) / (lowest - highest);
-
-                frame.stroke(
-                    &Path::line(
-                        Point::new(0.0, snap_ratio * bounds.height),
-                        Point::new(bounds.width, snap_ratio * bounds.height),
-                    ),
-                    dashed,
-                );
+                if let Some(snap) =
+                    horizontal_snap(cursor_position.y, bounds.height, highest, lowest)
+                {
+                    safe_geometry::stroke_line(
+                        frame,
+                        Point::new(0.0, snap.y_position),
+                        Point::new(bounds.width, snap.y_position),
+                        dashed,
+                        "indicator_crosshair.horizontal",
+                    );
+                }
             } else if self.data_labels_always_visible
                 && let Some((x, y)) = match ctx.basis {
                     Basis::Time(_) => self.series.last_in(earliest..=latest),
@@ -568,7 +622,17 @@ impl PlotTooltip {
     }
 
     pub fn draw(&self, frame: &mut canvas::Frame, theme: &Theme, bounds: Rectangle, cursor_x: f32) {
+        if !safe_geometry::valid_positive_rect("indicator_tooltip", bounds) || !cursor_x.is_finite()
+        {
+            return;
+        }
+
         let (tooltip_w, tooltip_h) = self.guesstimate();
+        let tooltip_size = Size::new(tooltip_w, tooltip_h);
+        if !safe_geometry::positive_finite_size(tooltip_size) {
+            return;
+        }
+
         let palette = theme.extended_palette();
 
         // decide side to avoid covering hovered datapoint and fit in bounds
@@ -594,14 +658,21 @@ impl PlotTooltip {
             (rx, tx, Alignment::Start)
         };
 
-        frame.fill_rectangle(
+        let text_position = Point::new(text_x, 2.0);
+        if !safe_geometry::finite_point(text_position) {
+            return;
+        }
+
+        safe_geometry::fill_rectangle(
+            frame,
             Point::new(rect_x, 0.0),
-            Size::new(tooltip_w, tooltip_h),
+            tooltip_size,
             palette.background.weakest.color.scale_alpha(0.9),
+            "indicator_tooltip.background",
         );
         frame.fill_text(canvas::Text {
             content: self.text.clone(),
-            position: Point::new(text_x, 2.0),
+            position: text_position,
             size: iced::Pixels(crate::style::text_size::TINY),
             color: palette.background.base.text,
             font: style::AZERET_MONO,
@@ -612,21 +683,50 @@ impl PlotTooltip {
 
     pub fn draw_static(&self, frame: &mut canvas::Frame, theme: &Theme, _bounds: Rectangle) {
         let (tooltip_w, tooltip_h) = self.guesstimate();
-        let palette = theme.extended_palette();
+        let tooltip_size = Size::new(tooltip_w, tooltip_h);
+        if !safe_geometry::positive_finite_size(tooltip_size) {
+            return;
+        }
 
-        frame.fill_rectangle(
+        let palette = theme.extended_palette();
+        let text_position = Point::new(TOOLTIP_MARGIN + TOOLTIP_PADDING, 2.0);
+        if !safe_geometry::finite_point(text_position) {
+            return;
+        }
+
+        safe_geometry::fill_rectangle(
+            frame,
             Point::new(TOOLTIP_MARGIN, 0.0),
-            Size::new(tooltip_w, tooltip_h),
+            tooltip_size,
             palette.background.weakest.color.scale_alpha(0.9),
+            "indicator_tooltip.static_background",
         );
         frame.fill_text(canvas::Text {
             content: self.text.clone(),
-            position: Point::new(TOOLTIP_MARGIN + TOOLTIP_PADDING, 2.0),
+            position: text_position,
             size: iced::Pixels(crate::style::text_size::TINY),
             color: palette.background.base.text,
             font: style::AZERET_MONO,
             align_x: Alignment::Start.into(),
             ..canvas::Text::default()
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn horizontal_snap_is_absent_for_flat_ranges() {
+        assert!(horizontal_snap(24.0, 100.0, 50.0, 50.0).is_none());
+    }
+
+    #[test]
+    fn horizontal_snap_returns_finite_y_position() {
+        let snap = horizontal_snap(25.0, 100.0, 100.0, 0.0).unwrap();
+
+        assert!(snap.y_position.is_finite());
+        assert_eq!(snap.y_position, 25.0);
     }
 }

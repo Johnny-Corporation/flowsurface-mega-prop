@@ -10,6 +10,8 @@ use super::{AdapterError, HttpHub, RequestPort};
 use std::{collections::HashMap, time::Duration};
 
 pub mod fetch;
+pub mod private;
+pub mod private_ws;
 pub mod stream;
 
 const FETCH_DOMAIN: &str = "https://api.mexc.com/api";

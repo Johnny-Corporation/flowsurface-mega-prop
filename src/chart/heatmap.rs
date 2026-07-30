@@ -1,4 +1,7 @@
-use super::{Chart, Interaction, Message, PlotConstants, ViewState, scale::linear::PriceInfoLabel};
+use super::{
+    Chart, Interaction, Message, PlotConstants, ViewState, safe_geometry,
+    scale::linear::PriceInfoLabel,
+};
 use crate::{
     modal::pane::settings::study::{self, Study},
     style,
@@ -23,7 +26,7 @@ use exchange::{
     unit::{Price, PriceStep},
 };
 
-use iced::widget::canvas::{self, Event, Geometry, Path};
+use iced::widget::canvas::{self, Event, Geometry};
 use iced::{
     Alignment, Color, Element, Point, Rectangle, Renderer, Size, Theme, Vector, mouse,
     theme::palette::Extended,
@@ -464,6 +467,13 @@ impl canvas::Program<Message> for HeatmapChart {
         let palette = theme.extended_palette();
 
         let heatmap = chart.cache.main.draw(renderer, bounds_size, |frame| {
+            crate::watermark::draw_ticker_watermark(
+                frame,
+                Rectangle::with_size(bounds_size),
+                &chart.ticker_info,
+                palette.background.base.text,
+            );
+
             let center = Vector::new(bounds.width / 2.0, bounds.height / 2.0);
 
             frame.translate(center);
@@ -656,9 +666,12 @@ impl canvas::Program<Message> for HeatmapChart {
                                 }
                             };
 
-                            frame.fill(
-                                &Path::circle(Point::new(x_position, y_position), radius),
+                            safe_geometry::fill_circle(
+                                frame,
+                                Point::new(x_position, y_position),
+                                radius,
                                 color,
+                                "heatmap.trade_circle",
                             );
                         }
                     });
@@ -842,13 +855,12 @@ impl canvas::Program<Message> for HeatmapChart {
                         cursor_position.y - TOOLTIP_HEIGHT - TOOLTIP_PADDING
                     };
 
-                    let overlay_background = Path::rectangle(
+                    safe_geometry::fill_rectangle(
+                        frame,
                         Point::new(overlay_top_left_x, overlay_top_left_y),
                         Size::new(TOOLTIP_WIDTH, TOOLTIP_HEIGHT),
-                    );
-                    frame.fill(
-                        &overlay_background,
                         palette.background.weakest.color.scale_alpha(0.9),
+                        "heatmap.tooltip_background",
                     );
 
                     let col_count = time_interval_offsets.len() as f32;

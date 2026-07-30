@@ -19,7 +19,22 @@ use hyper_util::rt::TokioIo;
 use rustc_hash::FxHashMap;
 use serde_json::json;
 use sonic_rs::{Deserialize, JsonValueTrait, to_object_iter_unchecked};
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+
+const MEXC_FASTEST_DEPTH_PUSH_MS: u64 = 200;
+const MEXC_DEPTH_STALE_GAP_MS: u128 = 500;
+
+fn depth_subscription_payload(symbol: &str) -> serde_json::Value {
+    json!({
+        "method": "sub.depth",
+        "param": {
+            "symbol": symbol,
+        }
+    })
+}
 
 #[derive(Deserialize, Debug)]
 struct SonicTrade {
@@ -31,6 +46,20 @@ struct SonicTrade {
     pub direction: u8,
     #[serde(rename = "t")]
     pub time: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn depth_subscription_uses_fastest_documented_raw_channel() {
+        let payload = super::depth_subscription_payload("BTC_USDT");
+
+        assert_eq!(payload["method"], "sub.depth");
+        assert_eq!(payload["param"]["symbol"], "BTC_USDT");
+        assert_eq!(super::MEXC_FASTEST_DEPTH_PUSH_MS, 200);
+        assert!(payload.get("interval").is_none());
+        assert!(payload["param"].get("interval").is_none());
+    }
 }
 
 #[allow(dead_code)]
@@ -260,6 +289,7 @@ pub fn connect_depth_stream(
         let mut orderbook = LocalDepthCache::default();
         let mut snapshot_ready = false;
         let mut snapshot_time = UnixMs::ZERO;
+        let mut last_depth_rx_local: Option<Instant> = None;
 
         let qty_norm = QtyNormalization::with_raw_qty_unit(
             volume_size_unit() == SizeUnit::Quote,
@@ -280,12 +310,15 @@ pub fn connect_depth_stream(
                     .await
                     {
                         Ok(mut websocket) => {
-                            let depth_subscription = json!({
-                                "method": "sub.depth",
-                                "param": {
-                                    "symbol": symbol_str,
-                                }
-                            });
+                            let depth_subscription = depth_subscription_payload(&symbol_str);
+
+                            log::info!(
+                                "MEXC_DEPTH_SUBSCRIBE symbol={} channel=sub.depth fastest_documented_push_ms={} requested_push_ms={} configured_push_freq={}",
+                                symbol_str,
+                                MEXC_FASTEST_DEPTH_PUSH_MS,
+                                MEXC_FASTEST_DEPTH_PUSH_MS,
+                                push_freq,
+                            );
 
                             if websocket
                                 .write_frame(Frame::text(fastwebsockets::Payload::Borrowed(
@@ -294,16 +327,26 @@ pub fn connect_depth_stream(
                                 .await
                                 .is_err()
                             {
+                                log::warn!(
+                                    "MEXC_DEPTH_SUBSCRIBE_WRITE_FAILED symbol={} channel=sub.depth",
+                                    symbol_str
+                                );
                                 tokio::time::sleep(Duration::from_secs(1)).await;
                                 continue;
                             }
 
                             snapshot_ready = false;
                             snapshot_time = UnixMs::ZERO;
+                            last_depth_rx_local = None;
                             let _ = output.send(Event::Connected(exchange)).await;
                             state = State::Connected(websocket);
                         }
-                        Err(_) => {
+                        Err(err) => {
+                            log::warn!(
+                                "MEXC_DEPTH_CONNECT_FAILED symbol={} error={}",
+                                symbol_str,
+                                err
+                            );
                             tokio::time::sleep(Duration::from_secs(1)).await;
                             let _ = output
                                 .send(Event::Disconnected(
@@ -333,8 +376,21 @@ pub fn connect_depth_stream(
                                                     StreamData::Pong(_) => {}
                                                     StreamData::Subscription(stream_name) => {
                                                         if stream_name == "depth" {
+                                                            log::info!(
+                                                                "MEXC_DEPTH_SUBSCRIBED symbol={} channel=sub.depth fastest_documented_push_ms={}",
+                                                                symbol_str,
+                                                                MEXC_FASTEST_DEPTH_PUSH_MS,
+                                                            );
+                                                            log::info!(
+                                                                "MEXC_DEPTH_SNAPSHOT_FETCH_START symbol={}",
+                                                                symbol_str
+                                                            );
                                                             match handle.fetch_depth_snapshot(ticker).await {
                                                                 Ok(snapshot) => {
+                                                                    let snapshot_version = snapshot.last_update_id;
+                                                                    let snapshot_time_value = snapshot.time;
+                                                                    let snapshot_bid_levels = snapshot.bids.len();
+                                                                    let snapshot_ask_levels = snapshot.asks.len();
                                                                     snapshot_time = snapshot.time;
                                                                     snapshot_ready = true;
                                                                     orderbook.update_with_qty_norm(
@@ -342,8 +398,21 @@ pub fn connect_depth_stream(
                                                                         ticker_info.min_ticksize,
                                                                         Some(qty_norm),
                                                                     );
+                                                                    log::info!(
+                                                                        "MEXC_DEPTH_SNAPSHOT_READY symbol={} version={} snapshot_ts={} bid_levels={} ask_levels={}",
+                                                                        symbol_str,
+                                                                        snapshot_version,
+                                                                        snapshot_time_value.as_u64(),
+                                                                        snapshot_bid_levels,
+                                                                        snapshot_ask_levels,
+                                                                    );
                                                                 }
                                                                 Err(e) => {
+                                                                    log::warn!(
+                                                                        "MEXC_DEPTH_SNAPSHOT_FAILED symbol={} error={}",
+                                                                        symbol_str,
+                                                                        e
+                                                                    );
                                                                     let _ = output
                                                                         .send(Event::Disconnected(
                                                                             exchange,
@@ -356,8 +425,51 @@ pub fn connect_depth_stream(
                                                         }
                                                     }
                                                     StreamData::Depth(de_depth, time) => {
+                                                        let received_at = Instant::now();
+                                                        let local_gap_ms = last_depth_rx_local.map(|last| {
+                                                            received_at.duration_since(last).as_millis()
+                                                        });
+                                                        last_depth_rx_local = Some(received_at);
+                                                        let local_gap_label = local_gap_ms
+                                                            .map_or_else(|| "first".to_string(), |gap| gap.to_string());
+
                                                         if !snapshot_ready || time < snapshot_time.as_u64() {
+                                                            log::info!(
+                                                                "MEXC_DEPTH_SKIP symbol={} version={} exchange_ts={} snapshot_ready={} snapshot_ts={} local_gap_ms={}",
+                                                                symbol_str,
+                                                                de_depth.version,
+                                                                time,
+                                                                snapshot_ready,
+                                                                snapshot_time.as_u64(),
+                                                                local_gap_label,
+                                                            );
                                                             continue;
+                                                        }
+
+                                                        let local_lag_ms = UnixMs::now().as_u64().saturating_sub(time);
+                                                        let stale_gap = local_gap_ms
+                                                            .is_some_and(|gap| gap > MEXC_DEPTH_STALE_GAP_MS);
+                                                        log::info!(
+                                                            "MEXC_DEPTH_RX symbol={} version={} exchange_ts={} local_lag_ms={} local_gap_ms={} bid_updates={} ask_updates={} fastest_documented_push_ms={} stale_gap={}",
+                                                            symbol_str,
+                                                            de_depth.version,
+                                                            time,
+                                                            local_lag_ms,
+                                                            local_gap_label,
+                                                            de_depth.bids.len(),
+                                                            de_depth.asks.len(),
+                                                            MEXC_FASTEST_DEPTH_PUSH_MS,
+                                                            stale_gap,
+                                                        );
+                                                        if stale_gap {
+                                                            log::warn!(
+                                                                "MEXC_DEPTH_STALE_GAP symbol={} version={} exchange_ts={} local_gap_ms={} threshold_ms={}",
+                                                                symbol_str,
+                                                                de_depth.version,
+                                                                time,
+                                                                local_gap_label,
+                                                                MEXC_DEPTH_STALE_GAP_MS,
+                                                            );
                                                         }
 
                                                         let depth = DepthPayload {
@@ -387,7 +499,8 @@ pub fn connect_depth_stream(
                                                             Some(qty_norm),
                                                         );
 
-                                                        let _ = output
+                                                        let dispatch_started = Instant::now();
+                                                        let send_result = output
                                                             .send(Event::DepthReceived(
                                                                 StreamKind::Depth {
                                                                     ticker_info,
@@ -398,6 +511,24 @@ pub fn connect_depth_stream(
                                                                 orderbook.depth.clone(),
                                                             ))
                                                             .await;
+                                                        let dispatch_wait_ms = dispatch_started.elapsed().as_millis();
+                                                        log::info!(
+                                                            "MEXC_DEPTH_DISPATCH symbol={} version={} exchange_ts={} dispatch_wait_ms={} book_bids={} book_asks={}",
+                                                            symbol_str,
+                                                            de_depth.version,
+                                                            time,
+                                                            dispatch_wait_ms,
+                                                            orderbook.depth.bids.len(),
+                                                            orderbook.depth.asks.len(),
+                                                        );
+                                                        if send_result.is_err() {
+                                                            log::warn!(
+                                                                "MEXC_DEPTH_DISPATCH_DROPPED symbol={} version={} exchange_ts={}",
+                                                                symbol_str,
+                                                                de_depth.version,
+                                                                time,
+                                                            );
+                                                        }
                                                     }
                                                     StreamData::Trade(_, _, _) => {}
                                                     StreamData::Kline(_, _) => {}

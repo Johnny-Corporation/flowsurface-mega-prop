@@ -1,0 +1,88 @@
+\section{Microstructure Foundations of the Trading Logic}
+
+\subsection{The market is interpreted as a negotiation between displayed and undisplayed intent}
+
+Across the material, the trader is not described as predicting price from abstract indicators. Instead, the trader watches how \Important{displayed depth}, \Important{executed prints}, \Important{recent price path}, and \Important{contextual expectations} interact. A central premise is that the book shows \emph{intentions currently being advertised}, while tape and clusters show \emph{what actually traded}. Those are not the same thing.
+
+This distinction matters because visible liquidity can be deceptive. A displayed wall can be genuine support or resistance, but it can also be:
+
+\begin{itemize}[leftmargin=1.5em]
+\item a bluff intended to change the behavior of smaller traders,
+\item a temporarily parked order that will be canceled before interaction,
+\item only the visible tip of a much larger iceberg,
+\item a mechanical quoting robot rather than a directional participant,
+\item a passive execution layer that is actually designed to facilitate a later continuation move.
+\end{itemize}
+
+Therefore the source material repeatedly insists that a density or level is not, by itself, a reason to trade. Meaning arises from \Important{place}, \Important{time}, \Important{behavior}, and \Important{interaction}.
+
+\subsection{Visible versus hidden liquidity}
+
+Visible liquidity is what the DOM shows directly: standing limit size at specific prices. Hidden liquidity is what becomes inferable when the visible queue does not explain the amount of executed volume. The classic iceberg logic in the transcripts is exactly this: a level appears to show 1{,}000 contracts, 2{,}700 contracts trade into it, and the visible quantity barely changes. That mismatch suggests replenishment or concealed size.
+
+The practical implication is that the trader is not only measuring size, but also asking:
+
+\begin{itemize}[leftmargin=1.5em]
+\item Is the level being refilled?
+\item Is the refilling stable or moving?
+\item Does tape aggression fail to move price despite repeated impact attempts?
+\item Does the level behave like a participant trying to hold a zone, or like a fake wall trying to alter perception?
+\end{itemize}
+
+In research language, this points toward a distinction between \Important{static book state} and \Important{book reaction function}. A serious system must model both.
+
+\subsection{Liquidity pools, stop clusters, and why breakouts can accelerate}
+
+The books and transcripts both emphasize that obvious highs, lows, round numbers, and repeated support/resistance zones attract orders. Even when stop orders are not displayed in the DOM, traders infer their existence behind obvious levels. That creates two related ideas:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item A defended level can be attractive for bounce trades because a large passive participant appears to be protecting it.
+\item The same level can be attractive for breakout trades because, once breached, the stop orders resting behind it become fuel.
+\end{enumerate}
+
+This is why the same pattern can mean opposite things. A large density beneath price may indicate strong support \emph{until} the level is repeatedly tested, partially consumed, and surrounded by worsening evidence on tape. At that point, the density may become the last obstacle before a stop cascade.
+
+\subsection{Compression, pressure, and the ``spring'' concept}
+
+One recurring mental model is that of \Important{compression}. When price repeatedly presses into a boundary, when liquidity accumulates tightly around a zone, or when movement becomes constrained within a triangle or local range, the trader interprets that as stored directional energy. The ``spring'' lesson makes this explicit: a one-sided impulse without meaningful pullback is interpreted as a stretched state likely to produce a recoil once fresh participation weakens or a counter-side level appears.
+
+Compression is therefore not merely a chart pattern. It is a joint state of:
+
+\begin{itemize}[leftmargin=1.5em]
+\item shrinking room around a level,
+\item repeated tests,
+\item concentrated order flow,
+\item growing vulnerability of one side's stops,
+\item increasing importance of the next interaction.
+\end{itemize}
+
+\subsection{Why context dominates pattern shape}
+
+The material is unusually explicit that no single pattern guarantees anything. Trades are described as \emph{assembled} from multiple reasons rather than selected from a deterministic checklist. This means that pattern shape alone is insufficient. Context includes:
+
+\begin{itemize}[leftmargin=1.5em]
+\item where the level sits inside the current day structure;
+\item whether the instrument is currently active or dead;
+\item whether the move happens during the open, before lunch, after US open, near settlement, or around a scheduled event;
+\item whether the instrument is being led by another market such as oil, RTS, USD/RUB, TOM versus TOD currency, or a related future;
+\item whether the visible book is deep and stable or sparse and fragile;
+\item whether current volatility supports follow-through or mean reversion;
+\item whether today's tape resembles yesterday's successful pattern or its failure mode.
+\end{itemize}
+
+This naturally motivates a \Important{day-state} layer in the future research architecture.
+
+\subsection{Observation stack used by the discretionary trader}
+
+The sources implicitly use a hierarchy of observational tools:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{DOM / Level 2:} visible queues, densities, movement of queues, robot behavior, spread condition.
+\item \textbf{Tape / prints:} aggression, print size, print frequency, repeated equal-sized prints, inability of aggressive flow to move price.
+\item \textbf{Chart:} local highs/lows, round numbers, compression patterns, trend context, previous reaction zones.
+\item \textbf{Clusters / footprint / POC:} historical proof that size actually traded at certain prices.
+\item \textbf{Cross-market context:} guide instruments, futures, spot, oil, currency pairs, and news-sensitive leaders.
+\item \textbf{Risk state:} current daily loss, number of attempts already taken, mental condition, and whether the trader is still allowed to take risk.
+\end{enumerate}
+
+The sources make clear that the trader should not allow the interface to become visually noisy. A badly configured DOM creates false significance: every highlighted density begins to look like real support or resistance. The observation stack is only useful when the interface emphasizes the truly abnormal.

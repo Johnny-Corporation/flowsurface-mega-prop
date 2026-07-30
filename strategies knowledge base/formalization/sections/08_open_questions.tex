@@ -1,0 +1,72 @@
+\section{Open Questions, Ambiguities, and Likely Failure Points}
+
+\subsection{Concepts That Are Useful but Still Fuzzy}
+
+Several ideas in the knowledge base are undeniably valuable, but still too fuzzy to treat as fully specified rules:
+\begin{itemize}
+  \item ``real'' versus ``fake'' density;
+  \item ``clean'' versus ``unclean'' trade examples;
+  \item whether a robot is still active or already done;
+  \item how much post-break delay is still acceptable before calling failure;
+  \item how many tests weaken a level enough to invalidate bounce logic;
+  \item what counts as meaningful support behind a visible order.
+\end{itemize}
+
+These should remain explicitly marked as ambiguous in the research code and documentation.
+
+\subsection{Potential Contradictions Inside the Source Worldview}
+
+The materials are mostly coherent, but several tensions exist:
+\begin{itemize}
+  \item visible size is treated as critical, yet also treated as easy to fake;
+  \item heavy aggression can confirm continuation, yet also mark exhaustion;
+  \item repeated tests can strengthen a breakout thesis, yet too many tests can degrade level quality;
+  \item strong trends invite breakout participation, yet stretched movement invites spring reversals.
+\end{itemize}
+
+These are not fatal contradictions.
+They mean the state space is conditional, not binary.
+
+\subsection{Ideas That Need Empirical Testing Most Urgently}
+
+\begin{enumerate}
+  \item Whether visible-liquidity bounce logic survives modern crypto and modern Russian-market conditions.
+  \item Whether order-book-only archive data is sufficient to say anything useful about breakout versus fakeout transitions.
+  \item Whether simple day-specific adaptation materially improves detector quality.
+  \item Whether robot-like patterns can be detected robustly enough to trade systematically rather than anecdotally.
+  \item Whether cluster-memory alignment adds measurable signal once live logging is rich enough.
+\end{enumerate}
+
+\subsection{What May Be Outdated}
+
+Some parts of the materials may be era-specific:
+\begin{itemize}
+  \item terminal-specific workflow assumptions;
+  \item size thresholds calibrated to older MOEX liquidity conditions;
+  \item participant behavior patterns that have changed;
+  \item and infrastructure assumptions that matter differently in crypto.
+\end{itemize}
+
+The repo should preserve the ideas but not worship their original numeric details.
+
+\subsection{Practical Conclusion}
+
+The knowledge base is strongest when treated as a practitioner hypothesis library.
+Its main value is not that it hands over a finished algorithm.
+Its value is that it tells the repository where to look:
+\begin{itemize}
+  \item at defended liquidity,
+  \item at compression and release,
+  \item at the relation between displayed size and aggressive flow,
+  \item at participant behavior patterns,
+  \item and at day-specific adaptation.
+\end{itemize}
+
+The correct next step is therefore not ``optimize a final strategy''.
+The correct next step is to keep building a platform that can:
+\begin{itemize}
+  \item log cleanly,
+  \item replay honestly,
+  \item detect simple patterns explicitly,
+  \item and compare historical assumptions against live observation.
+\end{itemize}

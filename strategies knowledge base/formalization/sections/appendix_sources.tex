@@ -1,0 +1,82 @@
+\section{Source Appendix}
+
+\subsection{Exact Repository Source Files}
+
+The table below lists the primary repository files behind the formalization. These source codes are used throughout this appendix when mapping major claims back to concrete files. File names are transliterated into ASCII for readability, but each entry refers to a specific file stored in the repository.
+
+\begin{longtable}{p{0.11\linewidth}p{0.54\linewidth}p{0.25\linewidth}}
+\toprule
+\textbf{Code} & \textbf{Repository source reference} & \textbf{Primary use in this report} \\
+\midrule
+BK-PS & knowledge base/trading books/, file: Professional Scalping PDF & DOM, tape, densities, breakouts, false breaks, cluster logic, robots. \\
+BK-PM & knowledge base/trading books/, file: Prop Trading on MOEX PDF & Prop infrastructure, platform requirements, risk-manager logic, operating context. \\
+BK-RM & knowledge base/trading books/, file: Risk Management in Trading PDF & Per-trade risk, daily stop rules, position sizing, psychological risk control. \\
+TR-01 & knowledge base/transcripts/, lesson 1, Vstuplenie / What the Order Book Is & DOM-first worldview, why the book matters, trader framing. \\
+TR-02 & knowledge base/transcripts/, lesson 2, Plotnosti & Densities, visible size, what makes a level meaningful or misleading. \\
+TR-03 & knowledge base/transcripts/, lesson 3, Aisbergi & Iceberg inference, replenishment, hidden-liquidity interpretation. \\
+TR-04 & knowledge base/transcripts/, lesson 4, Nastroika Stakana & DOM setup, interface hygiene, practical observation workflow. \\
+TR-05 & knowledge base/transcripts/, lesson 5, Roboty & Robot behavior, spoof-like behavior, machine-driven patterns. \\
+TR-06 & knowledge base/transcripts/, lesson 6, Grafiki & Interaction between chart context and DOM logic. \\
+TR-07 & knowledge base/transcripts/, lesson 7, Osnovaniya Dlya Sdelok & Multi-reason trade construction, setup stacking, contextual filters. \\
+TR-08 & knowledge base/transcripts/, lesson 8, Sdelki na Otskok & Bounce-trade logic, entries, exclusions, stop anchors. \\
+TR-09 & knowledge base/transcripts/, lesson 9, Potentsial v Sdelke / Exits and Adds & Exit logic, adds, partials, potential estimation. \\
+TR-10 & knowledge base/transcripts/, lesson 10, Logika Prinyatiya Resheniy & Decision sequencing, contextual interpretation, complex case reading. \\
+TR-11 & knowledge base/transcripts/, lesson 11, Razbor Sdelok na Otskok & Worked bounce examples, clean vs unclean recognition. \\
+TR-12 & knowledge base/transcripts/, lesson 12, Sdelki na Proboi & Breakouts, failed continuation, speed-of-follow-through logic. \\
+TR-13 & knowledge base/transcripts/, lesson 13, Sdelki ot Robotov & Trading with or against robots in concrete examples. \\
+TR-14 & knowledge base/transcripts/, lesson 14, Valyuta i Fyuchersy & Currency-futures relationships, guide-instrument logic. \\
+TR-15 & knowledge base/transcripts/, lesson 15, Sdelki ot Planok & Limit-up / limit-down regime behavior and special risks. \\
+TR-16 & knowledge base/transcripts/, lesson 16, Sdelki na Pruzhinkakh & Springs, stretched-state reversals, overextension logic. \\
+TR-17 & knowledge base/transcripts/, lesson 17, Sbor Volatilnosti & File present but empty in this repository snapshot; only indirect inference possible. \\
+TR-18 & knowledge base/transcripts/, lesson 18, Sdelki na Novostyakh & News reaction, event-driven microstructure, volatility regimes. \\
+TR-19 & knowledge base/transcripts/, lesson 19, Analiz Svoei Torgovli & Self-review, day-specific adaptation, process correction. \\
+TR-20 & knowledge base/transcripts/, lesson 20, Psikhologiya & File present but empty in this repository snapshot; psychology reconstructed mostly from BK-RM and TR-19. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Major Claim Traceability Map}
+
+\paragraph{DOM-first trading worldview.}
+The claim that the order book is the primary real-time lens, with charts used as context rather than as the main trigger, comes primarily from TR-01, TR-04, TR-06, and BK-PS.
+
+\paragraph{A trade is built from several reasons.}
+The repeated statement that one factor is weak and that a trade should be constructed from multiple aligned reasons comes most directly from TR-07 and TR-10, with reinforcement from TR-19.
+
+\paragraph{Density bounce logic.}
+The bounce setup, its preference for tight invalidation, its dependence on visible defense, and the clean-versus-unclean distinction come mainly from TR-02, TR-08, TR-11, and BK-PS.
+
+\paragraph{Breakout and false-break logic.}
+The claim that breakouts need both trigger and fuel, that they should work quickly, and that immediate return into range often marks failure comes mainly from TR-06, TR-10, TR-12, and BK-PS.
+
+\paragraph{Icebergs, replenishment, and absorption.}
+The interpretation of hidden liquidity from mismatch between visible size and executed interaction is based primarily on TR-03, TR-10, TR-11, and BK-PS.
+
+\paragraph{Robot behavior.}
+The view that repetitive machine behavior can be traded temporarily, but should not be treated as a timeless static pattern library, comes mainly from TR-05, TR-13, and BK-PS.
+
+\paragraph{Spring / stretched-state reversal logic.}
+The claim that overstretched one-way movement creates local recoil opportunity only when it meets a real anchor comes mainly from TR-08, TR-11, and TR-16.
+
+\paragraph{Leader-follower and cross-instrument logic.}
+The idea that one instrument can guide another intraday, especially in Russian-market currency and futures complexes, comes mainly from TR-14 and TR-18.
+
+\paragraph{News and volatility-harvesting logic.}
+The instruction to trade the market's reaction to news rather than the semantic content of the headline comes directly from TR-18, while the volatility-harvesting framing is only partially supported because TR-17 is empty.
+
+\paragraph{Exit logic, adds, and partials.}
+The emphasis on taking first reliable profit, managing the remainder conditionally, and adding only inside the original risk budget comes mainly from TR-09, TR-11, and BK-RM.
+
+\paragraph{Risk discipline and daily stop rules.}
+The insistence on daily loss limits, per-trade budgeting, stop discipline, and avoiding revenge trading comes mainly from BK-RM, with supporting process logic from TR-09 and TR-19.
+
+\paragraph{Day-specific adaptation.}
+The claim that what works today for one instrument may stop working tomorrow, and that the first part of the session should be used to calibrate current behavior, comes most strongly from TR-19, with supporting context from TR-07 and TR-10.
+
+\paragraph{Research-platform implications.}
+The recommendation to move from live capture to replay to features to explicit detectors before ML overlays is not copied from a single source sentence. It is an engineering translation of the full corpus, especially BK-PS, BK-RM, TR-07, TR-10, TR-12, and TR-19.
+
+\subsection{Methodological Note}
+
+The report is written in English while the source material is mostly in Russian.
+Translation prioritized preservation of trading meaning over literal wording.
+When the original materials were vague, the report keeps that vagueness visible instead of pretending to have stronger precision than the sources actually support.

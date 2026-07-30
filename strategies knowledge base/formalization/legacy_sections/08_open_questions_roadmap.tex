@@ -1,0 +1,103 @@
+\section{Open Questions, Ambiguities, and Practical Roadmap}
+
+\subsection{Ambiguity register}
+
+Several concepts are clearly important in the materials but remain too fuzzy to encode directly.
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \term{Clean versus dirty setup quality.} Traders recognize it quickly, but the boundary is
+        rarely formalized.
+  \item \term{Real participant versus fake liquidity.} The definition is behavioral, not static.
+  \item \term{Robot identification.} Some cases are obvious to a trained eye, but pattern boundaries
+        are unclear.
+  \item \term{Smart Money.} Useful framing, weakly operational on its own.
+  \item \term{Volatility harvesting.} Mentioned conceptually, weakly specified in local evidence.
+  \item \term{Market regime transfer.} The same visible pattern can mean opposite things depending on
+        whether the day is trend, rotation, squeeze, or event-driven chaos.
+\end{itemize}
+
+\subsection{Possible contradictions or source mismatches}
+
+The knowledge base mixes educational books and practice-first transcript lessons. The books are
+cleaner and more explanatory. The transcripts are more operational but also more heuristic. This
+creates expected tension:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item Books can make setups appear more stable and teachable than they feel in live examples.
+  \item Transcripts can sound highly discretionary and sometimes downplay the need for formal
+        repeatability.
+  \item Risk books emphasize conservative structure, while live examples sometimes rely on very fast
+        behavioral exits that are hard to reproduce without high-quality execution.
+\end{itemize}
+
+These are not fatal contradictions. They simply mean the framework should record both explicit
+rules and a separate ambiguity register.
+
+\subsection{Questions that require empirical testing}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Which density metrics are most predictive once normalized by instrument and regime?
+  \item How often do visible density bounces survive once trades / prints are incorporated?
+  \item Can breakout quality be separated reliably using only short-horizon order-flow features?
+  \item How stable are leader-follower relations within one day and across days?
+  \item Can same-day calibration materially improve rule-based detectors without overfitting?
+  \item Which setups remain meaningful in crypto versus Russian markets, and which are venue-specific?
+\end{enumerate}
+
+\subsection{Practical roadmap for the repository}
+
+\subsubsection{Phase 1: formalize and log}
+
+Complete the knowledge formalization, keep the viewer tools organized, and use the new Bybit and
+T-Invest logging layer to start collecting research-grade data. During this phase, the win
+condition is not profit. The win condition is better evidence.
+
+\subsubsection{Phase 2: test simple claims}
+
+Use replay and live capture to test the most basic relationships:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item density bounce frequency,
+  \item density pull plus breakout,
+  \item failed continuation after breakout,
+  \item reaction around visible absorption,
+  \item early-session pattern quality.
+\end{itemize}
+
+\subsubsection{Phase 3: encode rule-based setup detectors}
+
+Build detectors that are explicit, configurable, and reviewable. They should emit not only
+signals but also \emph{reason bundles}: the components that caused the setup to be flagged.
+
+\subsubsection{Phase 4: add replay, evaluation, and analytics}
+
+The platform should compare:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item historical replay assumptions,
+  \item live observed behavior,
+  \item signal quality by instrument,
+  \item signal quality by time of day,
+  \item signal quality by day regime.
+\end{itemize}
+
+\subsubsection{Phase 5: only then consider adaptive filters}
+
+Once the repository has richer live data and rule-based events, it becomes reasonable to
+consider ML as a \emph{filter} rather than as an oracle. The most promising uses are:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item taking or skipping borderline setups,
+  \item classifying breakout versus fakeout,
+  \item ranking setup cleanliness,
+  \item adapting to current-day context.
+\end{itemize}
+
+\subsection{Final working conclusion}
+
+The central message of the knowledge base is not ``watch big orders.'' The central message is
+that short-term market behavior is a negotiation between visible liquidity, hidden liquidity,
+aggressive flow, nearby structural context, and changing day conditions. A useful research
+platform must therefore preserve that negotiation in data form. Once the negotiation is
+preserved, the repository can move gradually from discretionary stories toward explicit event
+patterns, measured features, and finally robust live-tested logic.

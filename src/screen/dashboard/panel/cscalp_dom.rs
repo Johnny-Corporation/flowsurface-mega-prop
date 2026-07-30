@@ -1,5 +1,6 @@
 use super::Message;
 use crate::style;
+use crate::trading_state::LiveTradingSnapshot;
 use data::panel::{
     cscalp_dom::{ClusterColumn, Config, build_time_clusters},
     ladder::{GroupedDepth, Side, TradeStore},
@@ -12,7 +13,7 @@ use exchange::{TickerInfo, UnixMs, depth::Depth};
 use iced::widget::canvas::{self, Text};
 use iced::{Alignment, Event, Point, Rectangle, Renderer, Size, Theme, keyboard, mouse};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Instant;
 
 mod clusters;
@@ -45,6 +46,7 @@ const PRINT_BUBBLE_MAX_RADIUS: f32 = 18.0;
 const PRINT_LABEL_MIN_RADIUS: f32 = 8.0;
 const PRINT_LABEL_MAX_COUNT: usize = 18;
 const CLUSTER_FOOTER_ROWS: f32 = 3.0;
+const DOM_DEPTH_STALE_GAP_MS: u128 = 500;
 
 impl super::Panel for CscalpDom {
     fn scroll(&mut self, delta: f32) {
@@ -57,8 +59,12 @@ impl super::Panel for CscalpDom {
         CscalpDom::invalidate(self, Some(Instant::now()));
     }
 
-    fn cancel_all_orders(&mut self) {
-        CscalpDom::cancel_all_orders(self);
+    fn adjust_order_size(&mut self, delta: f32) {
+        CscalpDom::adjust_order_size(self, delta);
+    }
+
+    fn cancel_all_orders(&mut self) -> Option<super::Action> {
+        CscalpDom::cancel_all_orders(self)
     }
 
     fn handle_orderbook_click(
@@ -68,8 +74,8 @@ impl super::Panel for CscalpDom {
         cursor_y: f32,
         width: f32,
         height: f32,
-    ) {
-        CscalpDom::handle_orderbook_click(self, button, cursor_x, cursor_y, width, height);
+    ) -> Option<super::Action> {
+        CscalpDom::handle_orderbook_click(self, button, cursor_x, cursor_y, width, height)
     }
 
     fn drag_section_split(&mut self, divider: super::SectionDivider, cursor_x: f32, width: f32) {
@@ -100,8 +106,10 @@ pub struct CscalpDom {
     pending_tick_size: Option<PriceStep>,
     raw_price_spread: Option<Price>,
     last_exchange_ts_ms: Option<UnixMs>,
+    last_depth_apply_at: Option<Instant>,
     working_orders: Vec<PaperOrder>,
     paper_position: PaperPosition,
+    live_trading: LiveTradingSnapshot,
     fill_sounds: Option<crate::audio::SoundCache>,
 }
 
@@ -119,9 +127,63 @@ impl CscalpDom {
             raw_price_spread: None,
             pending_tick_size: None,
             last_exchange_ts_ms: None,
+            last_depth_apply_at: None,
             working_orders: Vec::new(),
             paper_position: PaperPosition::default(),
-            fill_sounds: crate::audio::SoundCache::with_default_sounds(Some(45.0)).ok(),
+            live_trading: LiveTradingSnapshot::default(),
+            fill_sounds: None,
+        }
+    }
+
+    pub fn set_live_trading_snapshot(&mut self, snapshot: &LiveTradingSnapshot) {
+        let (symbol, _) = self.ticker_info.ticker.to_full_symbol_and_type();
+        let snapshot = snapshot.for_symbol(&symbol);
+        if self.live_trading != snapshot {
+            let previous_order_ids = self
+                .live_trading
+                .open_orders
+                .iter()
+                .map(|order| order.order_id.as_str())
+                .collect::<HashSet<_>>();
+            let next_order_ids = snapshot
+                .open_orders
+                .iter()
+                .map(|order| order.order_id.as_str())
+                .collect::<HashSet<_>>();
+
+            for order in snapshot
+                .open_orders
+                .iter()
+                .filter(|order| !previous_order_ids.contains(order.order_id.as_str()))
+            {
+                log::info!(
+                    "DOM_LIVE_ORDER_MARKER_READY symbol={} order_id={} side={:?} price={} contracts={}",
+                    order.symbol,
+                    order.order_id,
+                    order.side,
+                    order.price.to_f32_lossy(),
+                    order.contracts
+                );
+            }
+
+            for order in self
+                .live_trading
+                .open_orders
+                .iter()
+                .filter(|order| !next_order_ids.contains(order.order_id.as_str()))
+            {
+                log::info!(
+                    "DOM_LIVE_ORDER_MARKER_REMOVED symbol={} order_id={} side={:?} price={} contracts={}",
+                    order.symbol,
+                    order.order_id,
+                    order.side,
+                    order.price.to_f32_lossy(),
+                    order.contracts
+                );
+            }
+
+            self.live_trading = snapshot;
+            self.invalidate(Some(Instant::now()));
         }
     }
 
@@ -131,6 +193,43 @@ impl CscalpDom {
     }
 
     pub fn insert_depth(&mut self, depth: &Depth, update_t: UnixMs) {
+        let apply_at = Instant::now();
+        let local_gap_ms = self
+            .last_depth_apply_at
+            .map(|last| apply_at.duration_since(last).as_millis());
+        let exchange_gap_ms = self
+            .last_exchange_ts_ms
+            .map(|last| update_t.as_u64().saturating_sub(last.as_u64()));
+        let local_lag_ms = UnixMs::now().as_u64().saturating_sub(update_t.as_u64());
+        let local_gap_label =
+            local_gap_ms.map_or_else(|| "first".to_string(), |gap| gap.to_string());
+        let exchange_gap_label =
+            exchange_gap_ms.map_or_else(|| "first".to_string(), |gap| gap.to_string());
+        let stale_gap = local_gap_ms.is_some_and(|gap| gap > DOM_DEPTH_STALE_GAP_MS);
+        let (symbol, _) = self.ticker_info.ticker.to_full_symbol_and_type();
+
+        log::info!(
+            "DOM_DEPTH_APPLIED symbol={} exchange_ts={} local_lag_ms={} local_gap_ms={} exchange_gap_ms={} book_bids={} book_asks={} stale_gap={}",
+            symbol,
+            update_t.as_u64(),
+            local_lag_ms,
+            local_gap_label,
+            exchange_gap_label,
+            depth.bids.len(),
+            depth.asks.len(),
+            stale_gap,
+        );
+        if stale_gap {
+            log::warn!(
+                "DOM_DEPTH_STALE_GAP symbol={} exchange_ts={} local_gap_ms={} threshold_ms={}",
+                symbol,
+                update_t.as_u64(),
+                local_gap_label,
+                DOM_DEPTH_STALE_GAP_MS,
+            );
+        }
+        self.last_depth_apply_at = Some(apply_at);
+
         if let Some(next) = self.pending_tick_size.take() {
             self.step = next;
             self.trades.rebuild_grouped(self.step);
@@ -277,6 +376,18 @@ impl canvas::Program<Message> for CscalpDom {
                 key: keyboard::Key::Named(keyboard::key::Named::Space),
                 ..
             }) => Some(canvas::Action::publish(Message::CancelAllOrders).and_capture()),
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Character(value),
+                ..
+            }) if matches!(value.as_str(), "+" | "=") => {
+                Some(canvas::Action::publish(Message::AdjustOrderSize(1.0)).and_capture())
+            }
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Character(value),
+                ..
+            }) if matches!(value.as_str(), "-" | "_") => {
+                Some(canvas::Action::publish(Message::AdjustOrderSize(-1.0)).and_capture())
+            }
             Event::Mouse(mouse_event) => match mouse_event {
                 mouse::Event::ButtonPressed(mouse::Button::Left) => {
                     let cursor_position = cursor_position?;
@@ -347,6 +458,23 @@ impl canvas::Program<Message> for CscalpDom {
                     }
                 }
                 mouse::Event::WheelScrolled { delta } => {
+                    let cursor_position = cursor_position?;
+                    if self.is_in_trading_footer_area(
+                        bounds.width,
+                        bounds.height,
+                        cursor_position.x,
+                        cursor_position.y,
+                    ) {
+                        let quantity_delta = match delta {
+                            mouse::ScrollDelta::Lines { y, .. } => y.signum(),
+                            mouse::ScrollDelta::Pixels { y, .. } => y.signum(),
+                        };
+                        return Some(
+                            canvas::Action::publish(Message::AdjustOrderSize(quantity_delta))
+                                .and_capture(),
+                        );
+                    }
+
                     let scroll_amount = match delta {
                         mouse::ScrollDelta::Lines { y, .. } => -(*y) * ROW_HEIGHT,
                         mouse::ScrollDelta::Pixels { y, .. } => -*y,
@@ -409,6 +537,17 @@ impl canvas::Program<Message> for CscalpDom {
 
                 let mut spread_row: Option<(f32, f32)> = None;
                 let footer_top = bounds.height - ROW_HEIGHT * CLUSTER_FOOTER_ROWS;
+                crate::watermark::draw_ticker_watermark(
+                    frame,
+                    Rectangle {
+                        x: cols.prints.0,
+                        y: 0.0,
+                        width: (cols.prints.1 - cols.prints.0).max(0.0),
+                        height: footer_top.max(0.0),
+                    },
+                    &self.ticker_info,
+                    text_color,
+                );
 
                 for visible_row in visible_rows.iter() {
                     if visible_row.y + ROW_HEIGHT > footer_top {

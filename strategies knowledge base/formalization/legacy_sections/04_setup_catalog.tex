@@ -1,0 +1,150 @@
+\section{Detailed Setup Catalog}
+
+\subsection{How to read this section}
+
+Each setup below is written as a \emph{research object}. That means every setup includes not only the trader's intended edge, but also the conditions under which the same visual pattern can invert its meaning. The repeated lesson from the source material is that a setup is never just ``what shape appeared.'' It is a claim about \emph{who is in control}, \emph{where trapped liquidity is likely to sit}, and \emph{how the next interaction should unfold}. Whenever a concept remains discretionary or fuzzy, that fact is stated directly.
+
+\subsection{Bounce from large visible liquidity / density}
+
+\begin{setupdetails}
+\setupitem{Definition}{Price approaches a visibly large queue or cluster of queues and reacts away from it instead of trading through it. In the language of the materials, this is the classic ``trade from density'' or ``trade from a limiting participant.''}
+\setupitem{Edge hypothesis}{A real participant with enough size is willing to absorb aggressive flow at a defined price area. If the market is not strong enough to consume that size, price reverts away from the defended zone. The attraction of the setup is the short, obvious invalidation: if the level fails, the trade idea is usually wrong immediately.}
+\setupitem{Best context}{The materials favor this setup for newer traders and describe it as the cleanest entry family when the level is reinforced by several factors at once: round number, prior graph level, visible density, footprint activity around the level, and stable or replenishing support from one side. It is especially favored when the book is not empty and the trader can see who is supposed to stop the move.}
+\setupitem{When not to trade it}{Do not trade every density mechanically. Avoid weak, recently appearing, repeatedly canceled, or suspiciously mobile walls. Avoid levels that already survived too many tests, especially if each retest consumes more visible size. Avoid trying to fade a strong one-way news move only because a wall appears. Avoid sparse books where a nominally ``large'' queue is not large relative to the instrument's actual aggression rate.}
+\setupitem{Order book cues}{The sources emphasize relative size, not absolute size. A wall is meaningful only versus the instrument's normal displayed depth. Stronger versions of the setup include multiple aligned densities, round-number placement, or an iceberg-like replenishment effect. A good bounce level looks defended, not decorative: it remains there long enough to matter and does not behave like a spoofing robot.}
+\setupitem{Tape / prints cues}{Aggressive flow should strike the level and fail to continue. Large prints can occur into the wall, but if the wall is genuine, price does not progress proportionally. The tape should not show an accelerating sequence of ever larger same-direction prints that simply bulldozes through the queue.}
+\setupitem{Price / structure cues}{The setup is stronger when price is arriving from an extended local move, especially if the level coincides with prior support or resistance, a local extreme, or the edge of a compression zone. The transcript material repeatedly treats graph structure as confirmation, not as a separate strategy.}
+\setupitem{Entry and invalidation}{Discretionary entries vary: some traders enter near the defended queue, others wait for the first visible failure of aggression, and others require a quick reclaim after a small false break. Invalidation is usually straightforward: the level trades through, the defending size disappears without reaction, or the post-touch bounce lacks enough energy and returns into the wall.}
+\setupitem{Exit and partials}{The materials favor taking partials into the next obvious opposing liquidity zone, previous intraday swing, or target implied by the recent graph range. Because these trades have compact stop logic, they often permit larger size than breakout trades. However, the discretionary trader still watches whether the bounce is merely technical or becoming the start of a broader reversal.}
+\setupitem{Failure modes}{The most important failure mode is confusing visible size with real support. A large wall can be fake, late, or already exhausted. Another failure mode is using yesterday's notion of ``large'' on a day when the instrument is much more active. A third is fading a move whose momentum is fundamentally event-driven and therefore capable of eating levels that would normally hold.}
+\setupitem{Clean versus dirty examples}{A clean bounce has multiple aligned reasons: meaningful level, genuine visible size, tape rejection, and orderly price reaction. A dirty bounce is one where the trader is guessing that a wall \emph{should} hold because it is large on screen, while everything else in the market suggests the opposite.}
+\setupitem{Algorithmic translation}{Observable components include displayed depth at level, age of the queue, cancellation/replenishment behavior, recent aggressive volume into the level, immediate price response, number of prior tests, and distance to neighboring liquidity. The difficult part is estimating whether the wall is ``real'' or merely theatrical. That likely requires a combination of hand-built features and later quality filtering.}
+\end{setupdetails}
+
+\subsection{Breakout through density after pressure or compression}
+
+\begin{setupdetails}
+\setupitem{Definition}{Price presses into a level or density, repeatedly tests it, compresses nearby, and then trades through it with follow-through instead of rejecting.}
+\setupitem{Edge hypothesis}{A level can become vulnerable when the side defending it has already spent its ammunition or when the stop cluster behind it is large enough to attract a directional push. The breakout works because the final breach releases trapped or pending liquidity: stops, chase orders, and delayed participation.}
+\setupitem{Best context}{The source material describes breakout trading as harder and riskier than bounce trading, but also potentially powerful when done correctly. Better contexts include visible pressure into the level, a locally compressed structure, strong same-direction tape, and evidence that the defended side is being consumed rather than effortlessly holding.}
+\setupitem{When not to trade it}{Avoid taking every level breach as a breakout. If the book behind the level is empty and liquidity is thin, slippage risk becomes severe. Avoid entering late after the stop-run already happened. Avoid breakouts where no real aggression is visible and the move looks like a one-print poke.}
+\setupitem{Order book cues}{Repeated consumption of the same defending level, weakening replenishment, or visible removal of the last meaningful opposing queue are supportive. Compression against the level matters: traders repeatedly describe the market ``coiling'' into a boundary.}
+\setupitem{Tape / prints cues}{A breakout should be accompanied by aggression that is not instantly absorbed. The tape should speed up or grow in size and the market should actually travel. The source material is particularly skeptical of ``breakouts'' where the level is touched but no stop fuel appears.}
+\setupitem{Price / structure cues}{Multiple failed attempts to reverse from the level can make it more vulnerable. Chart structures such as triangles, flags, narrow bases, and repeated tests are interpreted as visible evidence that liquidity is accumulating around a future release point.}
+\setupitem{Entry and invalidation}{The discretionary difficulty lies in choosing \emph{where} to enter. Too early and the trader buys the wall instead of the break. Too late and the trader buys the exhaustion. Invalidation is fast: if the move re-enters the old range and the breakout does not attract immediate continuation, the trader should assume a false breakout is underway.}
+\setupitem{Exit and partials}{Breakout trades often require faster management because the initial stop is less visually protected than in a bounce. Traders commonly partial into the first post-break expansion, then reassess whether real trend continuation is developing or whether only a short-term stop sweep occurred.}
+\setupitem{Failure modes}{The main failure mode is the false breakout: the level is pierced, stops trigger, but the move cannot sustain itself. Other failure modes include entering because of chart aesthetics while the DOM and tape disagree, or trading a breakout in a dead instrument where there is no real participation to carry the move.}
+\setupitem{Algorithmic translation}{Useful signals include repeated test count, compression distance to level, change in best bid / ask depth near the level, post-break trade intensity, spread expansion or contraction, and short-horizon excursion after breach. A rule-based state machine for ``compression -> breach -> continuation or failure'' is a natural first implementation path.}
+\end{setupdetails}
+
+\subsection{False breakout / failed continuation / liquidity grab}
+
+\begin{setupdetails}
+\setupitem{Definition}{Price trades through an obvious level, appears to trigger a breakout, but then quickly returns back through the level, trapping breakout traders and often reversing sharply.}
+\setupitem{Edge hypothesis}{Obvious levels attract breakout participation and stop orders. A large player can use that liquidity to complete inventory transfer. Once the stop pool is harvested and no fresh demand remains, the market reverses.}
+\setupitem{Best context}{The books and transcripts emphasize false breaks around obvious highs, lows, round numbers, and well-watched chart boundaries. The setup is stronger when the breach is thin, unsustained, or immediately met by opposite absorption.}
+\setupitem{Order book cues}{A classic warning sign is that the level breaks only after the visible defense is pulled, but no durable new support appears on the other side. Another is that the book looks empty behind the move and then quickly refills against it.}
+\setupitem{Tape / prints cues}{The tape may initially look aggressive, but the key observation is \emph{what the aggression achieves}. If a burst of market buys pushes price through resistance but fails to create persistent upward trade location, the move may be distributive rather than genuine continuation.}
+\setupitem{Price / structure cues}{The graph-level formulation from the source material is explicit: a false breakout is often a stop collection event. Price pokes through an obvious level, activates breakout interest, and then snaps back. This is tightly related to the Smart Money ``liquidity grab'' idea in the books.}
+\setupitem{Entry and invalidation}{A discretionary trader often waits for re-entry into the prior range or for a clearly failed hold above or below the level. The trade is invalidated if the market re-establishes itself on the breakout side and begins to continue again.}
+\setupitem{Exit and partials}{Targets usually begin with the opposite side of the local range, the prior impulse origin, or the nearest opposing liquidity pool. Because false-break reversals can be fast, partials are frequently taken earlier than on slower mean-reversion trades.}
+\setupitem{Clean versus dirty examples}{A clean fakeout first attracts obvious participation and then visibly rejects it. A dirty fakeout is one where the trader is simply fading strength because a move feels ``too far,'' without any specific reclaim or failed-hold evidence.}
+\setupitem{Algorithmic translation}{A practical detector can model: approach to obvious level, breach distance, post-breach dwell time, excursion beyond level, trade intensity during breach, re-entry speed, and short-term reversal distance. This setup is especially suitable for labeling later ML filters, because the outcome classes are intuitive: sustained break, failed break, or ambiguous churn.}
+\end{setupdetails}
+
+\subsection{Iceberg or hidden-liquidity defense}
+
+\begin{setupdetails}
+\setupitem{Definition}{A level appears to have limited visible size, yet absorbs much more executed volume than the displayed queue would imply, often while the visible quantity refreshes.}
+\setupitem{Edge hypothesis}{A concealed participant is willing to transact meaningful size at a specific level without advertising the full amount. That participant can defend price, stop a move, or serve as the anchor for a bounce trade.}
+\setupitem{What makes it attractive}{The iceberg setup gives the discretionary trader something closer to \emph{proof of real participation}. Visible size can lie; replenished execution is harder to fake. The transcript lesson on icebergs explicitly treats them as a more advanced topic because they require inference from mismatch between book and tape.}
+\setupitem{When not to trust it}{Iceberg identification is probabilistic. The trader can mistake rapid re-quoting, fragmented exchange updates, or multiple small participants for one hidden participant. The lesson repeatedly warns that programs may not detect the iceberg immediately even when the human suspects it.}
+\setupitem{Order book cues}{Stable visible size despite repeated trades, reloading at the same price, or repeated reappearance of the same queue size after hits are core cues.}
+\setupitem{Tape / prints cues}{Executed volume at the level materially exceeds visible size. The tape should show repeated interaction at one price without commensurate price progress.}
+\setupitem{Trade logic}{The usual trade is not ``buy because an iceberg exists.'' It is ``treat the iceberg as a limiting participant and trade the reaction if the market fails to overcome it.'' When the iceberg is finally broken, however, the opposite logic can apply: the break of a long-defending hidden buyer can become a powerful downside signal.}
+\setupitem{Failure modes}{The level can still fail. The existence of hidden size does not imply infinite size. Another failure is identifying an iceberg correctly but entering too early, before evidence appears that other participants are actually respecting it.}
+\setupitem{Algorithmic translation}{Potential features include displayed-size persistence, traded-volume-to-displayed-size ratio, repeated same-price replenishment intervals, local queue depletion and refill cycles, and price-impact efficiency. High-quality iceberg detection likely requires full depth and synchronized trades, which is one reason the old order-book-only archive is insufficient for serious validation.}
+\end{setupdetails}
+
+\subsection{Absorption and repeated testing}
+
+\begin{setupdetails}
+\setupitem{Definition}{One side of the market repeatedly attacks a price area, yet the market does not progress proportionally. The defending side absorbs the flow.}
+\setupitem{Edge hypothesis}{Aggressive traders reveal urgency by crossing the spread, but urgency is only informative if it moves price. When price does not move, the passive side may be stronger than the tape initially suggests.}
+\setupitem{Important nuance}{Absorption is not a guaranteed reversal signal. Repeated absorption can mean that a strong passive participant is present, or it can mean that the passive side is being slowly worn down before a breakout. The difference is one of evolution: Is the level getting stronger, or merely surviving?}
+\setupitem{Order book cues}{Look for recurring interaction at the same price area, replenishment, and inability of attackers to clear the queue cleanly. But also watch whether the visible defense is shrinking with each test.}
+\setupitem{Tape / prints cues}{The transcript logic around tape is simple and powerful: large and frequent prints imply aggression; the question is whether that aggression is accepted by price. Absorption exists when aggression is visible but price progress is poor.}
+\setupitem{Trade logic}{Early in the sequence, absorption may justify a bounce trade. Late in the sequence, if each defense grows weaker, the same observable phenomenon may justify anticipating a breakout instead. This is one of the clearest examples of context-dependent pattern inversion.}
+\setupitem{Algorithmic translation}{Research features should include attack count, cumulative aggressive volume into the defended level, net queue change, local price response, and time spent pinned near the defense. A useful state label may be ``absorption holding'' versus ``absorption degrading.''}
+\end{setupdetails}
+
+\subsection{Robot or algorithm behavior in the book and tape}
+
+\begin{setupdetails}
+\setupitem{Definition}{Observable repetitive behavior in orders or prints indicates systematic algorithmic participation rather than discretionary clicking.}
+\setupitem{Edge hypothesis}{If a human trader can infer the robot's operating rule, then the robot becomes a temporary guide to near-term price behavior. The robot may be accumulating, distributing, leaning on a level, or spoofing weaker participants.}
+\setupitem{Patterns discussed in the sources}{The materials describe equal-sized prints repeating with stable cadence, limit orders that mechanically reposition with spread changes, and large visible walls that disappear the moment price approaches them. These correspond roughly to execution algorithms, quoting/market-making logic, and spoofing/manipulation behavior.}
+\setupitem{Best context}{Robot-following is most useful when the pattern is obvious, persistent, and large relative to the instrument. The sources repeatedly say that only large and obvious robots deserve attention.}
+\setupitem{Order book cues}{Mechanical order movement, repeated same-size replenishment, laddering behavior, and large visible queues that appear to steer participants are key signs.}
+\setupitem{Tape / prints cues}{Equal-sized repeated prints, stable inter-arrival rhythm, and sustained directional participation all suggest algorithmic flow.}
+\setupitem{Trade logic}{The simplest formulation is: trade \emph{with} a genuine directional execution robot while it is active, and avoid or reverse against obvious spoofing behavior once the fake support or resistance disappears.}
+\setupitem{Failure modes}{Misclassification is easy. Some behavior that appears robotic is just a large but fragmented participant. Another risk is assuming persistence: the robot may stop instantly, leaving late followers trapped.}
+\setupitem{Algorithmic translation}{This setup maps naturally to sequence features: inter-trade timing regularity, same-size print repetition, repeated queue edits with low entropy, and cancellation-on-approach behavior. A later ML layer might be especially useful here because the pattern class is visually obvious to humans but awkward to encode with rigid thresholds alone.}
+\end{setupdetails}
+
+\subsection{Spring / stretched-impulse mean reversion}
+
+\begin{setupdetails}
+\setupitem{Definition}{A very strong one-direction impulse travels unusually far with little or no pullback, creating a stretched state that becomes vulnerable to a sharp counter-move once new fuel disappears.}
+\setupitem{Edge hypothesis}{The move has consumed too much one-sided urgency relative to nearby liquidity. A modest opposing wall or a change in flow can trigger a reflexive retracement because the move is ``overstretched like a spring.''}
+\setupitem{Best context}{The sources frame this as a specialty setup after obvious impulse moves, especially in fast products such as currency and futures. The key is not merely that price moved a lot, but that it moved almost one-directionally without normal pauses.}
+\setupitem{Order book cues}{The trader looks for the first meaningful opposing density after the impulse, especially if the move now reaches an area where fresh continuation buyers or sellers may be exhausted.}
+\setupitem{Tape / prints cues}{The impulse often begins with strong one-sided tape. The spring trade becomes interesting when that one-sided dominance no longer intensifies and price reaches a potential stall point.}
+\setupitem{Trade logic}{The trader seeks a defined location for the pullback to start, often from newly appeared densities or exhaustion signs after the long one-way push. This is not a slow mean-reversion bet; it is a trade on reflexive recoil after overstretch.}
+\setupitem{Failure modes}{The move can continue much further than a mean-reversion trader expects, especially on news or broad market repricing. Fading every large impulse is a reliable way to donate money to the trend.}
+\setupitem{Algorithmic translation}{Use impulse length, number of consecutive same-direction bars or book-state transitions, realized volatility burst, pullback deficit, and first opposing-liquidity interaction. This is a setup where volatility normalization matters: ``large'' must be judged relative to instrument and current session state.}
+\end{setupdetails}
+
+\subsection{Planka / limit-state trading}
+
+\begin{setupdetails}
+\setupitem{Definition}{A special state around exchange-imposed intraday price limits, where price approaches the limit band, cannot trade through it until the band is widened, and participants stack around the boundary.}
+\setupitem{Why it matters}{The planka lesson is less a universal setup than a reminder that some market states are structurally different. Near a limit band, normal assumptions about reachable prices and order placement cease to hold.}
+\setupitem{Trade logic}{The trader's job is not to apply ordinary breakout or bounce logic blindly. Instead, the trader must understand the exchange mechanics, possible widening procedures, the difference between liquid and illiquid instruments, and the crowding that forms while traders wait for expansion.}
+\setupitem{Failure modes}{The main risk is assuming the band behaves like an ordinary resistance level. It does not. Exchange rules can change, widening timing can differ, and the crowd around the limit can create highly discontinuous behavior.}
+\setupitem{Algorithmic translation}{This setup requires market-structure metadata outside the pure book and tape stream: limit-up/limit-down bands, expansion rules, trading status, and instrument-specific limit policies. It belongs in a platform that merges market-data events with venue metadata.}
+\end{setupdetails}
+
+\subsection{News reaction setup}
+
+\begin{setupdetails}
+\setupitem{Definition}{A trade taken during or immediately after an expected news event, but based on the market's \emph{reaction} rather than the trader's own semantic interpretation of the headline.}
+\setupitem{Edge hypothesis}{The trader does not try to guess whether the news is ``good'' or ``bad'' in isolation. Instead, the trader uses the scheduled event as a warning that abnormal activity is about to appear, then reads the DOM and tape to see which side is actually taking control.}
+\setupitem{Best context}{Scheduled macro or sector events, especially those that concentrate attention on instruments such as oil, RTS, or currency products. The sources emphasize observing how the market behaves relative to the news, not translating the news into an economic thesis in real time.}
+\setupitem{Order book cues}{Fast queue changes, abrupt removal or appearance of size, and immediate interaction with previously watched levels matter more than pre-news static book shape.}
+\setupitem{Tape / prints cues}{Big prints, sudden bursts of participation, and very fast price discovery dominate. The trader wants to see \emph{who is actually winning the first battle}.}
+\setupitem{Trade logic}{This is essentially a context amplifier for other setups. A news event can produce a breakout, a failed breakout, an iceberg battle, or a spring-like recoil. The event is not the setup; it is the catalyst that changes the speed and importance of the next microstructure interaction.}
+\setupitem{Failure modes}{Trying to interpret headline sentiment instead of order-flow response, entering before reaction structure becomes legible, or underestimating slippage and spread risk during event bursts.}
+\setupitem{Algorithmic translation}{News-time flags, scheduled event calendars, abnormal message-rate detection, spread widening, depth collapse, and bursty tape features are all measurable. But real-time semantic interpretation of news should remain optional; the sources explicitly prefer reaction-based reading to headline-based forecasting.}
+\end{setupdetails}
+
+\subsection{Guide-instrument / leader-follower / cross-market setup}
+
+\begin{setupdetails}
+\setupitem{Definition}{A trade in one instrument is conditioned on observable behavior in another instrument that acts as a leader, proxy, or structurally linked market.}
+\setupitem{Source logic}{The currency and futures material explicitly treats some instruments as effectively one complex: TOM, TOD, Si, RTS, oil, and other related products. The idea is not statistical correlation in the abstract, but live guidance: one instrument reveals information earlier or more clearly than another.}
+\setupitem{Best context}{Instruments tied by arbitrage, funding, macro drivers, sector leadership, or market session sequence. This is especially relevant when one book is cleaner than another, or when the follower book is thin but the leader provides the narrative.}
+\setupitem{Trade logic}{The trader first determines whether the leader is actually leading today. If yes, then book and tape signals in the follower are interpreted through that cross-market context. A density in the follower is weaker if the leader is still pushing through; a breakout in the follower is stronger if the leader is already confirming.}
+\setupitem{Failure modes}{Static correlation is not enough. On some days the presumed leader stops leading, or both instruments react to a third cause in different timing. Blindly importing one market's narrative into another is dangerous.}
+\setupitem{Algorithmic translation}{This setup needs synchronized multi-instrument streams, lead-lag measurements, spread or basis features, and day-specific validation of whether the relationship is currently active. It is an excellent candidate for later same-day regime scoring rather than hard permanent rules.}
+\end{setupdetails}
+
+\subsection{POC / cluster-backed level confirmation}
+
+\begin{setupdetails}
+\setupitem{Definition}{A level is considered more credible when past executed volume, especially stable point-of-control zones, lines up with the currently visible book and the chart structure.}
+\setupitem{Edge hypothesis}{The DOM shows present intention; clusters show where the market actually transacted historically. When the same level matters in both views, the trader has stronger reason to believe that participants care about it.}
+\setupitem{Trade logic}{Cluster-backed levels do not replace DOM signals. Instead they filter them. A density sitting at a historically meaningful traded zone is more credible than a density sitting in a historically irrelevant zone.}
+\setupitem{Failure modes}{History can anchor traders to stale levels. A clean historical POC does not guarantee today's book will react there. The setup is weakest when historical control points are scattered and no coherent acceptance area exists.}
+\setupitem{Algorithmic translation}{Requires footprint or executed trade history with price-level aggregation. Features can include historical POC distance, acceptance-zone overlap, and whether current activity is occurring inside or outside prior value concentration. This is difficult to validate with the repository's old order-book-only archive and much easier once live print capture is available.}
+\end{setupdetails}

@@ -19,6 +19,7 @@ use widget::{DEFAULT_Y_AXIS_GUTTER, HeatmapShaderWidget};
 use crate::{
     chart::Action,
     modal::pane::settings::study::{self, Study},
+    widget::loading,
 };
 use data::aggr::time::TimeSeries;
 use data::chart::{
@@ -304,10 +305,7 @@ impl HeatmapShader {
 
     pub fn view(&self, timezone: data::UserTimezone) -> iced::Element<'_, Message> {
         if self.base_price.is_none() {
-            return iced::widget::center(
-                iced::widget::text("Waiting for data...").size(crate::style::text_size::TITLE),
-            )
-            .into();
+            return loading::view("Waiting for depth data...");
         }
 
         let render_latest_time = self.anchor.render_latest_time();

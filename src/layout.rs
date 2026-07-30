@@ -31,20 +31,7 @@ pub struct SavedState {
     pub audio_cfg: data::AudioStream,
     pub volume_size_unit: exchange::SizeUnit,
     pub proxy_cfg: Option<exchange::proxy::Proxy>,
-}
-
-impl SavedState {
-    pub fn window(&self) -> (iced::window::Position, iced::Size) {
-        let position = self.main_window.map(|w| w.position()).map_or(
-            iced::window::Position::Centered,
-            iced::window::Position::Specific,
-        );
-        let size = self
-            .main_window
-            .map_or_else(crate::window::default_size, |w| w.size());
-
-        (position, size)
-    }
+    pub accent_color: String,
 }
 
 impl Default for SavedState {
@@ -60,6 +47,7 @@ impl Default for SavedState {
             audio_cfg: data::AudioStream::default(),
             volume_size_unit: exchange::SizeUnit::Base,
             proxy_cfg: None,
+            accent_color: "#5B6CFF".to_string(),
         }
     }
 }
@@ -409,6 +397,11 @@ pub fn load_saved_state() -> SavedState {
                 audio_cfg: state.audio_cfg,
                 volume_size_unit: state.size_in_quote_ccy,
                 proxy_cfg,
+                accent_color: if state.accent_color.is_empty() {
+                    "#5B6CFF".to_string()
+                } else {
+                    state.accent_color
+                },
             }
         }
         Err(e) => {

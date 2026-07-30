@@ -1,0 +1,83 @@
+\section{Risk Management, Execution, and Session Discipline}
+
+\subsection{Risk is structural, not optional}
+
+The risk-management book is explicit that losses are unavoidable and that the purpose of risk management is not to eliminate losing trades but to constrain their impact. The transcript corpus aligns with this by repeatedly tying entry logic to nearby invalidation. Together they imply a strict sequence:
+
+\begin{enumerate}
+\item define the reason for the trade,
+\item define the point where that reason is broken,
+\item size the trade from that damage tolerance,
+\item stop the session if limits are reached.
+\end{enumerate}
+
+\subsection{Per-trade risk}
+
+Per-trade risk in this corpus is driven by two interacting ideas:
+
+\begin{itemize}
+\item \textbf{thesis invalidation,} especially in DOM-driven trades,
+\item \textbf{budgeted maximum loss,} computed from account and session limits.
+\end{itemize}
+
+In practical terms, the stop is not chosen from emotion. It belongs where the underlying setup ceases to exist. For a bounce, that is often the destruction of the defending density. For a breakout, it may be rapid return behind the level. For a spring, it is extension beyond the expected exhaustion zone. Once that location is known, position size must be chosen such that loss at that point remains inside the predetermined budget.
+
+\subsection{Daily risk and session stop rules}
+
+The risk book strongly emphasizes dividing acceptable capital loss into session budgets and trade budgets. It also explicitly recommends stopping the session when the daily limit is reached and warns against revenge trading. This principle fits discretionary microstructure trading especially well because decision quality degrades rapidly after emotional frustration.
+
+\paragraph{Repository translation.} The future live framework should support:
+
+\begin{itemize}
+\item hard daily loss limit,
+\item soft daily warning threshold,
+\item optional daily profit lock,
+\item automatic shutdown of signal generation after a hard stop,
+\item post-session tagging and review.
+\end{itemize}
+
+\subsection{Partial exits and manual trade management}
+
+The corpus repeatedly uses partials. The idea is simple: the market rarely owes the trader the full theoretical move. Therefore:
+
+\begin{itemize}
+\item take something at the first reliable obstacle,
+\item keep optionality with the remainder,
+\item reassess using fresh DOM and tape evidence,
+\item do not let a winner rot into a loser merely because the original fantasy target still looks attractive on the chart.
+\end{itemize}
+
+\subsection{Execution tradeoffs: market versus limit}
+
+\paragraph{Limit orders.} Better price, but queue risk and non-fill risk. On a fast breakout, the best-looking price may simply not trade for the trader.
+
+\paragraph{Market orders.} Certainty of action, but spread and slippage cost. On a fast failure or news burst, execution quality can deteriorate dramatically.
+
+\paragraph{Microstructure lesson.} Execution method is not just a broker preference. It is part of the setup definition. A signal that only works if the trader gets ideal passive fills may be far weaker than it appears in backtesting.
+
+\subsection{Queue position, low-liquidity traps, and empty-book danger}
+
+The source material implicitly understands queue risk even when it does not formalize it mathematically. If many participants lean on the same visible level, not all of them will be filled equally. Likewise, in thin books the stop may exist only in theory; the actual realized exit can be much worse.
+
+\paragraph{Research implication.} Backtests built on top-of-book or snapshot logic alone will systematically overestimate entry quality and underestimate failure damage unless queue and depth consumption are modeled.
+
+\subsection{Why discretionary traders overtrade}
+
+The source corpus points toward several overtrading drivers:
+
+\begin{itemize}
+\item attachment to favorite instruments,
+\item boredom during slow periods,
+\item illusion that every visible level is tradable,
+\item desire to make back losses,
+\item inability to accept that some days simply do not offer the clean setup one wants.
+\end{itemize}
+
+\paragraph{Why automation helps.} Automation can reduce overtrading not by replacing judgment immediately, but by refusing to trigger without minimum evidence. A machine can enforce ``no three bases, no trade'' much more consistently than a frustrated human.
+
+\subsection{Crypto versus Russian-market execution}
+
+\paragraph{Crypto.} More continuous trading, often more symbols, more fragmented behavior, and potentially more visible cancellation games. Public data is easier to log; private execution behavior depends on venue APIs and account mode.
+
+\paragraph{MOEX / T-Invest.} Stronger exchange-specific session structure, section rules, price limits, and local microstructure conventions. Some data access is richer in a professional prop environment than in retail broker interfaces. Risk control and execution architecture may need to account for section-level restrictions and market schedule boundaries.
+

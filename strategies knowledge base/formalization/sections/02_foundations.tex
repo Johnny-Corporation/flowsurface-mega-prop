@@ -1,0 +1,255 @@
+\section{Foundations of the Trading Logic}
+
+\subsection{Core Information Channels}
+
+Across the knowledge base, the market is read through four main channels.
+
+\begin{longtable}{p{0.18\linewidth}p{0.28\linewidth}p{0.48\linewidth}}
+\toprule
+\textbf{Channel} & \textbf{What it shows} & \textbf{How the materials use it} \\
+\midrule
+Order book / DOM & Displayed resting liquidity and short-term microstructure geometry & Primary tool for identifying densities, visible defense, empty space, pull-and-push behavior, robot footprints, and where a short stop can be anchored. \\
+Tape / prints & Aggressive trading flow and pace of execution & Used to judge whether a level is being hit with force, whether breakout fuel is real, and whether a defending participant is getting absorbed or refreshed. \\
+Clusters / footprint & Executed historical volume at price & Used to distinguish mere displayed intent from actual prior business, to align PoC with levels, and to judge whether a zone has real memory. \\
+Chart / session context & Higher-level structure across time & Used for levels, compression, previous highs and lows, range boundaries, session memory, and whether the intraday move has enough room or is already stretched. \\
+\bottomrule
+\end{longtable}
+
+One of the strongest recurring messages in the transcripts is that none of these channels should be used in isolation.
+The chart alone is too poor.
+The DOM alone is too easy to spoof or misread.
+Tape alone can be noisy.
+Clusters alone are backward-looking.
+The edge hypothesis is that good trades happen when these channels align.
+
+\subsection{Visible Liquidity, Hidden Liquidity, and ``Real'' Liquidity}
+
+\subsubsection{Visible Liquidity}
+
+Visible liquidity is the displayed size currently sitting in the book.
+In the source vocabulary this usually appears as a density or large size.
+Visible liquidity matters because it changes local geometry:
+\begin{itemize}
+  \item it can repel price;
+  \item it can attract price as a magnet;
+  \item it can define where other traders place stops or entries;
+  \item it can become a public reference point that changes crowd behavior.
+\end{itemize}
+
+However, the knowledge base is explicit that visible size alone is not enough.
+A density is not a trade by itself.
+It must be interpreted through place, timing, recent motion, surrounding liquidity, and reaction when touched.
+
+\subsubsection{Hidden Liquidity}
+
+Hidden liquidity appears most clearly through iceberg logic and absorption logic.
+The key discretionary belief is that displayed size often understates true interest.
+If the same price keeps trading volume far beyond the displayed amount while the visible quote refreshes or refuses to disappear, traders infer a hidden participant.
+
+This idea is central because it changes stop logic and confidence:
+\begin{itemize}
+  \item a visible order may be flimsy;
+  \item a refreshed hidden participant may be much stronger than it looks;
+  \item a breakout through a price that was thought to contain hidden liquidity can become especially explosive because many traders were leaning against that level.
+\end{itemize}
+
+\subsubsection{``Real'' Versus Fake Liquidity}
+
+The books and transcripts never give a neat mathematical definition, but the practical distinction is clear.
+``Real'' liquidity is size that remains behaviorally meaningful when price approaches it.
+Fake liquidity is size that disappears, shifts, or fails to produce the reaction implied by its apparent size.
+
+Signs that liquidity is behaving more like real liquidity:
+\begin{itemize}
+  \item it is placed at a structurally meaningful price;
+  \item it has support behind it, not just a lonely quote in empty space;
+  \item it persists through repeated approach;
+  \item tape hits it heavily without immediate collapse;
+  \item cluster history suggests prior business around the same area;
+  \item the instrument and day regime are liquid enough for the size to matter.
+\end{itemize}
+
+Signs that liquidity is behaving more like fake or low-quality liquidity:
+\begin{itemize}
+  \item it is far from any level that traders care about;
+  \item it appears late after the move is already mostly done;
+  \item it is isolated, with no structural support behind it;
+  \item it is quickly canceled when touched;
+  \item the tape slices through it with little friction;
+  \item the instrument is thin enough that seemingly large size is not actually large for the regime.
+\end{itemize}
+
+\subsection{Crowd Positioning and Stop Clusters}
+
+Another deep idea in the material is that the market is not just a book of prices and quantities.
+It is a map of probable trader pain.
+Obvious highs, lows, range edges, and visible defended levels attract not only entries but also stops.
+
+This matters because breakout logic and fakeout logic are both built around the same fuel source:
+\begin{itemize}
+  \item breakout logic says that once obvious stops start to fire, price can accelerate through thin space;
+  \item fakeout logic says that once those stops are harvested, the move can exhaust and reverse if no genuine continuation demand remains.
+\end{itemize}
+
+So the same visual pattern can imply opposite trades.
+The difference is not the picture alone.
+The difference is whether there is still a live participant or flow imbalance after the stop run.
+
+\subsection{Compression, Springs, and Release}
+
+The materials repeatedly describe two related phenomena:
+\begin{itemize}
+  \item \textbf{compression toward a level}, where price keeps pushing into the same zone with tightening structure;
+  \item \textbf{spring or stretched state}, where price runs in one direction without normal pullback and becomes vulnerable to a snapback once a real counterforce appears.
+\end{itemize}
+
+Compression is bullish for breakout \emph{if} the market keeps accepting higher prices into resistance and the opposing liquidity weakens or gets consumed.
+Compression is bearish for breakout \emph{if} the structure is only crowd crowding without true initiative flow.
+
+Springs are different.
+A spring is not automatically a trade.
+It only becomes tradable when there is a concrete opposing anchor such as:
+\begin{itemize}
+  \item a meaningful density;
+  \item a cluster/level memory zone;
+  \item an iceberg;
+  \item a known robot or participant behavior pattern;
+  \item or an obvious exhaustion point after a one-sided burst.
+\end{itemize}
+
+\subsection{Why Time of Day and Day Structure Matter}
+
+The source materials place major emphasis on today-specific calibration.
+A recurring practical belief is that the market does not offer the same opportunities every day, even in the same instrument.
+Some days favor bounces.
+Some days favor breakouts.
+Some days are noisy, empty, or dominated by fake motion.
+
+This leads to an important research idea for the repository:
+\begin{itemize}
+  \item use the first part of the session to estimate what is actually working \emph{today};
+  \item treat setup quality as conditional on the current day regime, not as static;
+  \item adapt aggressiveness, hold time, and setup preference by instrument-day context.
+\end{itemize}
+
+The knowledge base does not formalize this statistically, but it clearly points in that direction.
+This is one of the strongest candidates for later adaptive modeling once logging and replay are good enough.
+
+\subsection{Why the Same Pattern Can Mean Opposite Things}
+
+The books and transcripts repeatedly warn against cartoon pattern reading.
+The same visible event can carry opposite implications depending on context:
+\begin{itemize}
+  \item a large ask can be real resistance or bait for a breakout;
+  \item a push through highs can be true continuation or just stop collection;
+  \item repeated tests can mean building pressure or weakening conviction;
+  \item heavy aggressive buying can be initiative continuation or the last buyers finishing into a larger seller.
+\end{itemize}
+
+Therefore, context is not decoration.
+It is the decision layer that determines whether a local pattern is interpreted as:
+\begin{itemize}
+  \item continuation,
+  \item reversal,
+  \item absorption,
+  \item exhaustion,
+  \item or no-trade noise.
+\end{itemize}
+
+\subsection{How a Trader Searches for Foundations in Real Time}
+
+One weakness of many summaries of discretionary trading is that they list patterns but do not explain how the trader actually \emph{hunts} for them on the screen.
+Across the source materials, the search process is not ``scan every tick for everything''.
+It is much more structured.
+The trader is usually cycling through the following sequence.
+
+\begin{enumerate}
+  \item \textbf{Build the session map first.}
+  Before looking for a local setup, define the important prices for the day: prior high/low, opening zone, obvious intraday range edges, large cluster/PoC zones, and any currently visible large resting liquidity.
+
+  \item \textbf{Ask where the next meaningful interaction may happen.}
+  The trader is not interested in random mid-range noise.
+  Attention narrows to places where one of the following may happen:
+  \begin{itemize}
+    \item price collides with visible size;
+    \item price compresses into an obvious level;
+    \item price stretches into a likely defense zone;
+    \item or a leader instrument creates a new directional clue.
+  \end{itemize}
+
+  \item \textbf{Observe the approach, not just the touch.}
+  A level is interpreted differently depending on how price arrives.
+  Slow drift, compression, fast one-direction impulse, repeated tests, and exhausted final push all imply different trade candidates.
+
+  \item \textbf{Compare the book and the tape during the interaction.}
+  The central question is whether displayed liquidity and aggressive flow agree or conflict.
+  If strong aggression cannot move price, absorption or hidden defense becomes plausible.
+  If displayed resistance vanishes as price approaches, breakout logic becomes stronger.
+
+  \item \textbf{Classify the local event quickly.}
+  In practical terms the trader is trying to decide among a small set of live hypotheses:
+  \begin{itemize}
+    \item defended bounce;
+    \item true breakout;
+    \item false breakout / trap;
+    \item iceberg / hidden defense;
+    \item robot support or robot pressure;
+    \item or no-trade clutter.
+  \end{itemize}
+
+  \item \textbf{Define the stop before clicking.}
+  The materials repeatedly prefer trades whose invalidation is behaviorally obvious.
+  If the trader cannot point to the exact reason the idea is wrong, the setup is usually too vague.
+
+  \item \textbf{Require visible path, not just visible trigger.}
+  A level may be attractive, but if there is no room to the next obstacle, the setup is low quality.
+  One of the practical habits in the materials is to ask: ``if I am right, where can price actually go immediately?''
+
+  \item \textbf{Downgrade or skip late recognition.}
+  Many bad trades come from spotting a good idea too late and entering after the first clean reaction has already happened.
+  The materials are unusually strict about not chasing because a setup that was good two seconds ago may already be structurally worse now.
+\end{enumerate}
+
+\subsection{Foundation-by-Foundation Search Questions}
+
+When the trader sees a potentially active area, the search process can be reduced to a set of concrete questions.
+
+\begin{longtable}{p{0.23\linewidth}p{0.34\linewidth}p{0.35\linewidth}}
+\toprule
+\textbf{Foundation} & \textbf{How to search for it} & \textbf{What usually confirms it} \\
+\midrule
+Visible defended density & Find large size located at an obvious intraday price and watch whether price stalls there instead of cutting through. & Repeated hits without clean penetration, refresh/reload, same-side support behind the level, and quick rejection after touch. \\
+Consumption / breakout & Find a public level that price keeps pressing into and inspect whether the visible barrier is thinning or being eaten. & Tight approach, repeated tests, urgent tape through the level, and open space behind it. \\
+False breakout & Watch obvious breakout points and ask whether the post-break area is accepted or instantly rejected. & Poor follow-through, return into the old range, and late breakout traders getting trapped. \\
+Iceberg / hidden defense & Look for throughput far larger than displayed size or quotes that keep reappearing at the same price. & Refill, persistent defense, heavy prints at one price with little progress, and repeated inability to dislodge the level. \\
+Absorption & Compare aggressive prints to actual price movement near a key zone. & One side keeps attacking, but price barely advances; eventually price rotates away or the absorbed side collapses late. \\
+Robot behavior & Search for repetitive, machine-like stepping or refreshing that is too regular to be casual flow. & Equal-size updates, constant cadence, and temporary directional regularity that other traders start reacting to. \\
+Spring / stretch & Look for one-direction extension into a known anchor, not just extension in empty space. & A stretched move reaches real resistance/support, loses quality, and reacts sharply once counterflow appears. \\
+Leader-follower logic & Monitor whether another instrument is giving a cleaner or earlier signal around the same moment. & The leader moves first, the traded instrument lags, and the local book/tape later align with the leader's message. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Clean Versus Unclean Trades}
+
+Human traders in the source material often distinguish clean from unclean examples without giving a single numeric formula.
+A clean trade usually means:
+\begin{itemize}
+  \item the anchor is obvious;
+  \item the stop is short and behaviorally justified;
+  \item the surrounding book is interpretable;
+  \item the potential path is visible;
+  \item confirming signals line up quickly;
+  \item and the trader is not relying on hope or post-hoc rationalization.
+\end{itemize}
+
+An unclean trade usually means:
+\begin{itemize}
+  \item too many contradictory signals;
+  \item no precise invalidation;
+  \item poor potential relative to risk;
+  \item unclear participant logic;
+  \item stretched late entry;
+  \item or taking a local pattern without sufficient higher-level context.
+\end{itemize}
+
+That clean-versus-unclean distinction should be preserved in research form as a quality score rather than collapsed into a hard yes/no rule too early.

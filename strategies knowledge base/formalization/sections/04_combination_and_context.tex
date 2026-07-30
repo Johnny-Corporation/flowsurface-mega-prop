@@ -1,0 +1,131 @@
+\section{How Setups Combine and How Context Changes Interpretation}
+
+\subsection{No Setup Lives Alone}
+
+The source material repeatedly rejects one-signal trading.
+The trader is not supposed to ask ``is there a density?''
+The trader is supposed to ask:
+\begin{itemize}
+  \item where is the density;
+  \item what happened before it;
+  \item who is likely trapped around it;
+  \item what is the tape doing into it;
+  \item what sits behind it;
+  \item how stretched the move already is;
+  \item and what kind of day this instrument is having.
+\end{itemize}
+
+That means the repo should treat setups as \textbf{composite states}, not isolated triggers.
+
+\subsection{A Bounce Can Become a Breakout}
+
+One of the most important transition patterns is that a defense can weaken over time.
+A level that initially offers a clean bounce may later become a breakout candidate if:
+\begin{itemize}
+  \item repeated tests consume the same-side support;
+  \item the defending participant refreshes less aggressively;
+  \item compression keeps building into the level;
+  \item the opposite side becomes more initiative-driven;
+  \item nearby support behind the level disappears.
+\end{itemize}
+
+Research implication: detector logic should not tag a level once and freeze its role.
+The role of a level must be allowed to transition from defended anchor to vulnerable barrier.
+
+\subsection{A Breakout Can Become a False Breakout}
+
+Likewise, a valid breakout trigger can fail if post-break acceptance is weak.
+The repository should explicitly model a \emph{post-trigger evaluation window}.
+That window needs to answer:
+\begin{itemize}
+  \item did the market gain distance quickly enough;
+  \item did the book behind the break remain supportive;
+  \item did the tape continue in the break direction;
+  \item did price hold beyond the level or immediately re-enter the prior range.
+\end{itemize}
+
+This is not a small nuance.
+It is central to the entire source worldview.
+Many of the same traders who like breakout trades also like fading failed breakouts.
+The transition itself is the opportunity.
+
+\subsection{Static Levels, Dynamic Liquidity, and Executed Flow}
+
+The knowledge base uses three different concepts of ``level'':
+\begin{enumerate}
+  \item \textbf{static chart level}: previous high, low, range edge, prior extreme;
+  \item \textbf{dynamic displayed level}: current density, shifting quote wall, robot layer;
+  \item \textbf{executed memory level}: cluster concentration, PoC, prior heavy business.
+\end{enumerate}
+
+The best trades often occur when these three notions overlap.
+If only one of them exists, quality is usually lower.
+
+\subsection{Confidence and Quality as a Multi-Factor Score}
+
+The transcripts talk about needing several reasons for a trade.
+That idea translates naturally into a confidence model.
+An eventual research-friendly quality score could include:
+\begin{itemize}
+  \item structural location quality;
+  \item visible-liquidity quality;
+  \item tape confirmation quality;
+  \item cluster-memory quality;
+  \item stretch or spring quality;
+  \item room-to-target quality;
+  \item day-regime fit;
+  \item and execution quality, including spread and queue conditions.
+\end{itemize}
+
+This should not initially be over-optimized.
+A simple additive score or state-based filter is sufficient for early research.
+
+\subsection{Session Structure and Day-Specific Adaptation}
+
+The materials strongly imply a session-level feedback loop:
+\begin{itemize}
+  \item observe the early session;
+  \item learn whether visible levels are holding or failing today;
+  \item learn whether the instrument is moving enough for breakouts;
+  \item learn whether fakeouts dominate or whether continuation is clean;
+  \item adapt participation accordingly.
+\end{itemize}
+
+This is one of the most valuable research directions in the repository because it connects discretionary intuition to systematic adaptation.
+Instead of assuming one static detector threshold forever, the system can maintain same-day priors such as:
+\begin{itemize}
+  \item current breakout follow-through quality;
+  \item current bounce hold rate;
+  \item current spread and depth regime;
+  \item current response to news or leaders;
+  \item current instrument liveliness.
+\end{itemize}
+
+\subsection{Time-of-Day Conditioning}
+
+The same local pattern should be interpreted differently depending on time of day:
+\begin{itemize}
+  \item early session often contains the clearest structural information and strongest recalibration opportunity;
+  \item midday may have lower conviction or thinner flow;
+  \item event windows can create abnormal opportunity and abnormal risk;
+  \item late session moves can be distorted by inventory squaring and reduced horizon.
+\end{itemize}
+
+For research purposes, time-of-day should not be a cosmetic feature.
+It should be a first-class conditioning variable.
+
+\subsection{Clean Decision Checklist}
+
+The human discretionary workflow implied by the materials can be written as a checklist:
+\begin{enumerate}
+  \item Is the instrument liquid and moving enough right now?
+  \item Is there a meaningful structural location?
+  \item Is there visible or hidden participant logic at that location?
+  \item Does tape or executed flow confirm or contradict the local thesis?
+  \item Is the stop precise and behaviorally justified?
+  \item Is there room to the next meaningful obstacle?
+  \item Does the current day regime fit this setup family?
+  \item Is the execution environment acceptable?
+\end{enumerate}
+
+If multiple answers are weak, the source material would usually classify the trade as low quality even if a single pattern component is present.

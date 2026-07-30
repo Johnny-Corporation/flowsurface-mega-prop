@@ -3,4 +3,7 @@
 /.vscode
 *.log
 /logs/
+/docs/
 AGENTS.md
+/.codex/
+/business model/

@@ -2,9 +2,11 @@ pub mod cscalp_dom;
 pub mod ladder;
 pub mod timeandsales;
 
+use crate::widget::loading;
+use exchange::{TickerInfo, unit::Price};
 use iced::{
     Element, padding,
-    widget::{canvas, center, container, text},
+    widget::{canvas, container},
 };
 use std::time::Instant;
 
@@ -13,6 +15,7 @@ pub enum Message {
     Scrolled(f32),
     ResetScroll,
     Invalidate(Option<Instant>),
+    AdjustOrderSize(f32),
     CancelAllOrders,
     OrderbookClicked {
         button: OrderClickButton,
@@ -28,7 +31,42 @@ pub enum Message {
     },
 }
 
-pub enum Action {}
+#[derive(Debug, Clone)]
+pub enum Action {
+    PlaceLimitOrder(LimitOrderIntent),
+    PlaceMarketOrder(MarketOrderIntent),
+    CancelAllOrders(TickerInfo),
+}
+
+#[derive(Debug, Clone)]
+pub struct LimitOrderIntent {
+    pub ticker_info: TickerInfo,
+    pub side: OrderSide,
+    pub price: Price,
+    pub quantity: f32,
+    pub position_intent: OrderPositionIntent,
+}
+
+#[derive(Debug, Clone)]
+pub struct MarketOrderIntent {
+    pub ticker_info: TickerInfo,
+    pub side: OrderSide,
+    pub quantity: f32,
+    pub position_intent: OrderPositionIntent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderSide {
+    Buy,
+    Sell,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderPositionIntent {
+    CloseFirst,
+    Open,
+    Close,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderClickButton {
@@ -51,9 +89,13 @@ pub trait Panel: canvas::Program<Message> {
 
     fn is_empty(&self) -> bool;
 
+    fn adjust_order_size(&mut self, _delta: f32) {}
+
     fn drag_section_split(&mut self, _divider: SectionDivider, _cursor_x: f32, _width: f32) {}
 
-    fn cancel_all_orders(&mut self) {}
+    fn cancel_all_orders(&mut self) -> Option<Action> {
+        None
+    }
 
     fn handle_orderbook_click(
         &mut self,
@@ -62,13 +104,14 @@ pub trait Panel: canvas::Program<Message> {
         _cursor_y: f32,
         _width: f32,
         _height: f32,
-    ) {
+    ) -> Option<Action> {
+        None
     }
 }
 
 pub fn view<T: Panel>(panel: &'_ T, _timezone: data::UserTimezone) -> Element<'_, Message> {
     if panel.is_empty() {
-        return center(text("Waiting for data...").size(crate::style::text_size::TITLE)).into();
+        return loading::view("Waiting for panel data...");
     }
 
     container(
@@ -80,35 +123,39 @@ pub fn view<T: Panel>(panel: &'_ T, _timezone: data::UserTimezone) -> Element<'_
     .into()
 }
 
-pub fn update<T: Panel>(panel: &mut T, message: Message) {
+pub fn update<T: Panel>(panel: &mut T, message: Message) -> Option<Action> {
     match message {
         Message::Scrolled(delta) => {
             panel.scroll(delta);
+            None
         }
         Message::ResetScroll => {
             panel.reset_scroll();
+            None
         }
         Message::Invalidate(now) => {
             panel.invalidate(now);
+            None
         }
-        Message::CancelAllOrders => {
-            panel.cancel_all_orders();
+        Message::AdjustOrderSize(delta) => {
+            panel.adjust_order_size(delta);
+            None
         }
+        Message::CancelAllOrders => panel.cancel_all_orders(),
         Message::OrderbookClicked {
             button,
             cursor_x,
             cursor_y,
             width,
             height,
-        } => {
-            panel.handle_orderbook_click(button, cursor_x, cursor_y, width, height);
-        }
+        } => panel.handle_orderbook_click(button, cursor_x, cursor_y, width, height),
         Message::SectionSplitDragged {
             divider,
             cursor_x,
             width,
         } => {
             panel.drag_section_split(divider, cursor_x, width);
+            None
         }
     }
 }

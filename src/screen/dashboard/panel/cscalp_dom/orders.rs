@@ -2,7 +2,16 @@ use super::{
     CLUSTER_FOOTER_ROWS, CscalpDom, ROW_HEIGHT,
     types::{ColumnRanges, PriceGrid, VisibleRow},
 };
-use crate::{audio::SoundType, screen::dashboard::panel::OrderClickButton, style};
+use crate::{
+    audio::SoundType,
+    screen::dashboard::panel::{
+        Action, LimitOrderIntent, MarketOrderIntent, OrderClickButton, OrderPositionIntent,
+        OrderSide,
+    },
+    style,
+    trading_state::{LiveOrderSide, LivePosition},
+};
+use data::panel::cscalp_dom::{HedgeOrderIntent, TradingMode};
 use exchange::unit::Price;
 use iced::{
     Alignment, Point, Rectangle, Size,
@@ -26,6 +35,12 @@ pub(super) struct PaperOrder {
     contracts: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClickOrderKind {
+    Limit(PaperOrderSide, Price),
+    Market(PaperOrderSide),
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub(super) struct PaperPosition {
     contracts: f32,
@@ -43,6 +58,31 @@ impl CscalpDom {
         cursor_x >= cols.orderbook.0 && cursor_x <= cols.orderbook.1
     }
 
+    pub(super) fn is_in_trading_footer_area(
+        &self,
+        width: f32,
+        height: f32,
+        cursor_x: f32,
+        cursor_y: f32,
+    ) -> bool {
+        if cursor_y < height - ROW_HEIGHT * CLUSTER_FOOTER_ROWS {
+            return false;
+        }
+
+        let Some(grid) = self.build_price_grid() else {
+            return false;
+        };
+        let layout = self.price_layout_for(width, &grid);
+        let cols = self.column_ranges(width, layout.price_px);
+        cursor_x >= cols.orderbook.0 && cursor_x <= width.max(cols.price.1).max(cols.orderbook.1)
+    }
+
+    pub(super) fn adjust_order_size(&mut self, delta: f32) {
+        self.config.paper_order_contracts =
+            adjust_order_contracts(self.config.paper_order_contracts, delta);
+        self.invalidate(Some(Instant::now()));
+    }
+
     pub(super) fn handle_orderbook_click(
         &mut self,
         button: OrderClickButton,
@@ -50,49 +90,40 @@ impl CscalpDom {
         cursor_y: f32,
         width: f32,
         height: f32,
-    ) {
-        if !self.config.view_mode {
-            log::warn!("Live CSCALP DOM order submission is not wired; ignoring click.");
-            return;
-        }
-
-        let Some(grid) = self.build_price_grid() else {
-            return;
-        };
+    ) -> Option<Action> {
+        let grid = self.build_price_grid()?;
         let layout = self.price_layout_for(width, &grid);
         let cols = self.column_ranges(width, layout.price_px);
         if cursor_x < cols.orderbook.0 || cursor_x > cols.orderbook.1 {
-            return;
+            return None;
         }
         if cursor_y >= height - ROW_HEIGHT * CLUSTER_FOOTER_ROWS {
-            return;
+            return None;
         }
 
-        let Some(price) = self.screen_y_to_price(cursor_y, &grid, height) else {
-            return;
+        let price = self.screen_y_to_price(cursor_y, &grid, height)?;
+
+        let action = match click_order_kind(button, price, grid.best_bid, grid.best_ask) {
+            Some(ClickOrderKind::Limit(side, price)) => self.handle_limit_order_click(side, price),
+            Some(ClickOrderKind::Market(side)) => self.handle_market_order_click(side),
+            None => None,
         };
 
-        if price >= grid.best_ask {
-            match button {
-                OrderClickButton::Left => self.execute_market_order(PaperOrderSide::Buy),
-                OrderClickButton::Right => self.place_limit_order(PaperOrderSide::Sell, price),
-            }
-        } else if price <= grid.best_bid {
-            match button {
-                OrderClickButton::Left => self.place_limit_order(PaperOrderSide::Buy, price),
-                OrderClickButton::Right => self.execute_market_order(PaperOrderSide::Sell),
-            }
-        }
-
         self.invalidate(Some(Instant::now()));
+        action
     }
 
-    pub(super) fn cancel_all_orders(&mut self) {
-        if self.working_orders.is_empty() {
-            return;
+    pub(super) fn cancel_all_orders(&mut self) -> Option<Action> {
+        if self.working_orders.is_empty() && self.config.view_mode {
+            return None;
+        }
+
+        if !self.config.view_mode {
+            return Some(Action::CancelAllOrders(self.ticker_info));
         }
         self.working_orders.clear();
         self.invalidate(Some(Instant::now()));
+        None
     }
 
     pub(super) fn fill_view_mode_limit_orders(&mut self) {
@@ -142,23 +173,34 @@ impl CscalpDom {
         cols: &ColumnRanges,
         text_color: iced::Color,
     ) {
-        if self.working_orders.is_empty() {
+        if self.config.view_mode && self.working_orders.is_empty() {
+            return;
+        }
+        if !self.config.view_mode && self.live_trading.open_orders.is_empty() {
             return;
         }
 
-        let counts = self.order_counts_by_price();
+        let contracts = self.order_contracts_by_price();
         for visible in visible_rows {
             let Some(price) = visible.row.price() else {
                 continue;
             };
-            let Some((buy_count, sell_count)) = counts.get(&price).copied() else {
+            let Some((buy_contracts, sell_contracts)) = contracts.get(&price).copied() else {
                 continue;
             };
             let Some(y) = self.price_to_screen_y(price, grid, bounds.height) else {
                 continue;
             };
-            let label = order_marker_label(buy_count, sell_count);
-            self.draw_order_marker(frame, &label, y, cols, text_color, buy_count, sell_count);
+            let label = order_marker_label(buy_contracts, sell_contracts);
+            self.draw_order_marker(
+                frame,
+                &label,
+                y,
+                cols,
+                text_color,
+                buy_contracts,
+                sell_contracts,
+            );
         }
     }
 
@@ -259,12 +301,24 @@ impl CscalpDom {
         let footer_y = (bounds.height - footer_h).floor();
         let footer_h = bounds.height - footer_y;
         let (position_dollars, pnl_percent, pnl_dollars) = self.paper_position_values();
+        let position_contracts = if self.config.view_mode {
+            self.paper_position.contracts
+        } else {
+            self.primary_live_position()
+                .map(|position| position.contracts)
+                .unwrap_or_default()
+        };
         let panel_fill = trading_footer_panel_color(text_color);
         let cells = [
+            (
+                "Q",
+                order_contracts_label(self.config.paper_order_contracts),
+            ),
+            ("C", signed_contracts(position_contracts)),
             ("$", signed_money(position_dollars)),
-            ("C", signed_contracts(self.paper_position.contracts)),
             ("%", format!("{:+.2}%", pnl_percent)),
             ("P", signed_money(pnl_dollars)),
+            ("", mode_label(self.config).to_string()),
         ];
 
         let x0 = cols.orderbook.0;
@@ -281,7 +335,7 @@ impl CscalpDom {
         );
 
         let cell_w = width / 2.0;
-        let cell_h = footer_h / 2.0;
+        let cell_h = footer_h / 3.0;
         for (idx, (label, value)) in cells.iter().enumerate() {
             let col = idx % 2;
             let row = idx / 2;
@@ -298,7 +352,11 @@ impl CscalpDom {
                 Size::new(cell_w, 1.0),
                 divider_color,
             );
-            let content = format!("{label} {value}");
+            let content = if label.is_empty() {
+                value.to_string()
+            } else {
+                format!("{label} {value}")
+            };
             let text_color = footer_value_color(label, value, text_color, bid_color, ask_color);
             let center_y = y + cell_h * 0.5;
             frame.fill_text(Text {
@@ -321,6 +379,51 @@ impl CscalpDom {
             contracts: self.config.paper_order_contracts.max(1.0),
         };
         self.working_orders.push(order);
+    }
+
+    fn handle_limit_order_click(&mut self, side: PaperOrderSide, price: Price) -> Option<Action> {
+        if self.config.view_mode {
+            self.place_limit_order(side, price);
+            return None;
+        }
+
+        Some(Action::PlaceLimitOrder(LimitOrderIntent {
+            ticker_info: self.ticker_info,
+            side: match side {
+                PaperOrderSide::Buy => OrderSide::Buy,
+                PaperOrderSide::Sell => OrderSide::Sell,
+            },
+            price,
+            quantity: self.config.paper_order_contracts.max(1.0),
+            position_intent: self.order_position_intent(),
+        }))
+    }
+
+    fn handle_market_order_click(&mut self, side: PaperOrderSide) -> Option<Action> {
+        if self.config.view_mode {
+            self.execute_market_order(side);
+            return None;
+        }
+
+        Some(Action::PlaceMarketOrder(MarketOrderIntent {
+            ticker_info: self.ticker_info,
+            side: match side {
+                PaperOrderSide::Buy => OrderSide::Buy,
+                PaperOrderSide::Sell => OrderSide::Sell,
+            },
+            quantity: self.config.paper_order_contracts.max(1.0),
+            position_intent: self.order_position_intent(),
+        }))
+    }
+
+    fn order_position_intent(&self) -> OrderPositionIntent {
+        match self.config.trading_mode {
+            TradingMode::Normal => OrderPositionIntent::CloseFirst,
+            TradingMode::Hedge => match self.config.hedge_order_intent {
+                HedgeOrderIntent::Open => OrderPositionIntent::Open,
+                HedgeOrderIntent::Close => OrderPositionIntent::Close,
+            },
+        }
     }
 
     fn execute_market_order(&mut self, side: PaperOrderSide) {
@@ -351,16 +454,29 @@ impl CscalpDom {
         }
     }
 
-    fn order_counts_by_price(&self) -> BTreeMap<Price, (usize, usize)> {
-        let mut counts: BTreeMap<Price, (usize, usize)> = BTreeMap::new();
-        for order in &self.working_orders {
-            let entry = counts.entry(order.price).or_default();
-            match order.side {
-                PaperOrderSide::Buy => entry.0 += 1,
-                PaperOrderSide::Sell => entry.1 += 1,
+    fn order_contracts_by_price(&self) -> BTreeMap<Price, (f32, f32)> {
+        let mut contracts: BTreeMap<Price, (f32, f32)> = BTreeMap::new();
+
+        if self.config.view_mode {
+            for order in &self.working_orders {
+                let entry = contracts.entry(order.price).or_default();
+                match order.side {
+                    PaperOrderSide::Buy => entry.0 += order.contracts,
+                    PaperOrderSide::Sell => entry.1 += order.contracts,
+                }
+            }
+        } else {
+            for order in &self.live_trading.open_orders {
+                let entry = contracts
+                    .entry(order.price.round_to_step(self.step))
+                    .or_default();
+                match order.side {
+                    LiveOrderSide::Buy => entry.0 += order.contracts,
+                    LiveOrderSide::Sell => entry.1 += order.contracts,
+                }
             }
         }
-        counts
+        contracts
     }
 
     fn draw_order_marker(
@@ -370,19 +486,21 @@ impl CscalpDom {
         y: f32,
         cols: &ColumnRanges,
         text_color: iced::Color,
-        buy_count: usize,
-        sell_count: usize,
+        buy_contracts: f32,
+        sell_contracts: f32,
     ) {
         let width = label.chars().count() as f32 * style::text_size::TINY * 0.66 + 8.0;
         let x = (cols.prints.1 - width - 4.0).max(cols.prints.0 + 2.0);
-        let color = if sell_count > 0 && buy_count == 0 {
+        let has_buy = buy_contracts > POSITION_EPSILON;
+        let has_sell = sell_contracts > POSITION_EPSILON;
+        let color = if has_sell && !has_buy {
             iced::Color {
                 r: 0.88,
                 g: 0.31,
                 b: 0.31,
                 a: 1.0,
             }
-        } else if buy_count > 0 && sell_count == 0 {
+        } else if has_buy && !has_sell {
             iced::Color {
                 r: 0.22,
                 g: 0.72,
@@ -411,11 +529,20 @@ impl CscalpDom {
     }
 
     fn paper_position_values(&self) -> (f32, f32, f32) {
+        if !self.config.view_mode {
+            return self.live_position_values();
+        }
+
         let mark = self.mark_price().map_or(0.0, Price::to_f32_lossy);
-        self.paper_position.values(mark)
+        self.paper_position
+            .values(mark, self.contract_value_multiplier())
     }
 
     fn paper_position_range(&self, grid: &PriceGrid) -> Option<(Price, Price, bool, bool)> {
+        if !self.config.view_mode {
+            return self.live_position_range(grid);
+        }
+
         let avg_entry = self.paper_position.avg_entry?;
         let is_long = self.paper_position.contracts > POSITION_EPSILON;
         let is_short = self.paper_position.contracts < -POSITION_EPSILON;
@@ -442,6 +569,68 @@ impl CscalpDom {
         Some((entry, spread, is_profitable, is_long))
     }
 
+    fn live_position_values(&self) -> (f32, f32, f32) {
+        let Some(position) = self.primary_live_position() else {
+            return (0.0, 0.0, 0.0);
+        };
+        let mark = self
+            .position_exit_price(position.contracts)
+            .map_or(0.0, Price::to_f32_lossy);
+        position_values(position, mark, self.contract_value_multiplier())
+    }
+
+    fn live_position_range(&self, grid: &PriceGrid) -> Option<(Price, Price, bool, bool)> {
+        let position = self.primary_live_position()?;
+        let avg_entry = position.avg_entry?;
+        let is_long = position.contracts > POSITION_EPSILON;
+        let is_short = position.contracts < -POSITION_EPSILON;
+        if !is_long && !is_short {
+            return None;
+        }
+
+        let spread = self.position_exit_price(position.contracts)?;
+        let entry = Price::from_f32(avg_entry).round_to_step(grid.tick);
+        let spread = spread.round_to_step(grid.tick);
+        let (_, _, pnl) = position_values(
+            position,
+            spread.to_f32_lossy(),
+            self.contract_value_multiplier(),
+        );
+
+        Some((entry, spread, pnl >= 0.0, is_long))
+    }
+
+    fn primary_live_position(&self) -> Option<&LivePosition> {
+        self.live_trading
+            .positions
+            .iter()
+            .filter(|position| position.contracts.abs() > POSITION_EPSILON)
+            .max_by(|left, right| {
+                left.contracts
+                    .abs()
+                    .partial_cmp(&right.contracts.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
+    fn position_exit_price(&self, contracts: f32) -> Option<Price> {
+        if contracts > POSITION_EPSILON {
+            self.best_price(super::Side::Bid)
+        } else if contracts < -POSITION_EPSILON {
+            self.best_price(super::Side::Ask)
+        } else {
+            None
+        }
+        .or_else(|| self.mark_price())
+    }
+
+    fn contract_value_multiplier(&self) -> f32 {
+        self.ticker_info
+            .contract_size
+            .map(|size| size.as_f32())
+            .unwrap_or(1.0)
+    }
+
     fn mark_price(&self) -> Option<Price> {
         match (
             self.best_price(super::Side::Bid),
@@ -453,6 +642,33 @@ impl CscalpDom {
             (None, None) => self.trades.raw.back().map(|trade| trade.price),
         }
     }
+}
+
+fn click_order_kind(
+    button: OrderClickButton,
+    price: Price,
+    best_bid: Price,
+    best_ask: Price,
+) -> Option<ClickOrderKind> {
+    if price >= best_ask {
+        return match button {
+            OrderClickButton::Left => Some(ClickOrderKind::Market(PaperOrderSide::Buy)),
+            OrderClickButton::Right => Some(ClickOrderKind::Limit(PaperOrderSide::Sell, price)),
+        };
+    }
+
+    if price <= best_bid {
+        return match button {
+            OrderClickButton::Left => Some(ClickOrderKind::Limit(PaperOrderSide::Buy, price)),
+            OrderClickButton::Right => Some(ClickOrderKind::Market(PaperOrderSide::Sell)),
+        };
+    }
+
+    None
+}
+
+fn adjust_order_contracts(current: f32, delta: f32) -> f32 {
+    (current + delta).round().clamp(1.0, 100.0)
 }
 
 impl PaperPosition {
@@ -504,17 +720,21 @@ impl PaperPosition {
         }
     }
 
-    fn values(self, mark: f32) -> (f32, f32, f32) {
-        let position_dollars = self.contracts * mark;
+    fn values(self, mark: f32, contract_multiplier: f32) -> (f32, f32, f32) {
+        let position_dollars = self.contracts * contract_multiplier * mark;
         let unrealized = match self.avg_entry {
-            Some(avg) if self.contracts > POSITION_EPSILON => (mark - avg) * self.contracts,
-            Some(avg) if self.contracts < -POSITION_EPSILON => (avg - mark) * self.contracts.abs(),
+            Some(avg) if self.contracts > POSITION_EPSILON => {
+                (mark - avg) * self.contracts * contract_multiplier
+            }
+            Some(avg) if self.contracts < -POSITION_EPSILON => {
+                (avg - mark) * self.contracts.abs() * contract_multiplier
+            }
             _ => 0.0,
         };
         let total_pnl = self.realized_pnl + unrealized;
         let pnl_base = self
             .avg_entry
-            .map(|avg| avg.abs() * self.contracts.abs())
+            .map(|avg| avg.abs() * self.contracts.abs() * contract_multiplier)
             .unwrap_or(0.0);
         let pnl_percent = if pnl_base > POSITION_EPSILON {
             (unrealized / pnl_base) * 100.0
@@ -526,13 +746,53 @@ impl PaperPosition {
     }
 }
 
-fn order_marker_label(buy_count: usize, sell_count: usize) -> String {
-    match (buy_count, sell_count) {
-        (0, 0) => String::new(),
-        (buy, 0) => format!("{buy}x↑"),
-        (0, sell) => format!("{sell}x↓"),
-        (buy, sell) => format!("{buy}x↑ {sell}x↓"),
+fn position_values(
+    position: &LivePosition,
+    mark: f32,
+    contract_multiplier: f32,
+) -> (f32, f32, f32) {
+    let position_dollars = position.contracts * contract_multiplier * mark;
+    let unrealized = match position.avg_entry {
+        Some(avg) if position.contracts > POSITION_EPSILON => {
+            (mark - avg) * position.contracts * contract_multiplier
+        }
+        Some(avg) if position.contracts < -POSITION_EPSILON => {
+            (avg - mark) * position.contracts.abs() * contract_multiplier
+        }
+        _ => 0.0,
+    };
+    let total_pnl = position.realized_pnl + unrealized;
+    let pnl_base = position
+        .avg_entry
+        .map(|avg| avg.abs() * position.contracts.abs() * contract_multiplier)
+        .unwrap_or_default();
+    let pnl_percent = if pnl_base > POSITION_EPSILON {
+        (unrealized / pnl_base) * 100.0
+    } else {
+        0.0
+    };
+
+    (position_dollars, pnl_percent, total_pnl)
+}
+
+fn order_marker_label(buy_contracts: f32, sell_contracts: f32) -> String {
+    let has_buy = buy_contracts > POSITION_EPSILON;
+    let has_sell = sell_contracts > POSITION_EPSILON;
+
+    match (has_buy, has_sell) {
+        (false, false) => String::new(),
+        (true, false) => format!("{}↑", order_marker_contracts_label(buy_contracts)),
+        (false, true) => format!("{}↓", order_marker_contracts_label(sell_contracts)),
+        (true, true) => format!(
+            "{}↑ {}↓",
+            order_marker_contracts_label(buy_contracts),
+            order_marker_contracts_label(sell_contracts)
+        ),
     }
+}
+
+fn order_marker_contracts_label(value: f32) -> String {
+    format!("{:.0}", value.round().max(0.0))
 }
 
 fn signed_money(value: f32) -> String {
@@ -545,6 +805,22 @@ fn signed_contracts(value: f32) -> String {
         format!("{value:+.0}")
     } else {
         format!("{value:+.2}")
+    }
+}
+
+fn order_contracts_label(value: f32) -> String {
+    format!("{:.0}", value.round().clamp(1.0, 100.0))
+}
+
+fn mode_label(cfg: data::panel::cscalp_dom::Config) -> &'static str {
+    if cfg.view_mode {
+        "VIEW"
+    } else {
+        match (cfg.trading_mode, cfg.hedge_order_intent) {
+            (TradingMode::Normal, _) => "NORMAL",
+            (TradingMode::Hedge, HedgeOrderIntent::Open) => "H-OPEN",
+            (TradingMode::Hedge, HedgeOrderIntent::Close) => "H-CLOSE",
+        }
     }
 }
 
@@ -609,5 +885,61 @@ fn solid_mix(base: iced::Color, tint: iced::Color, tint_weight: f32) -> iced::Co
         g: base.g * base_weight + tint.g * tint_weight,
         b: base.b * base_weight + tint.b * tint_weight,
         a: 1.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ClickOrderKind, PaperOrderSide, adjust_order_contracts, click_order_kind,
+        order_marker_label,
+    };
+    use crate::screen::dashboard::panel::OrderClickButton;
+    use exchange::unit::Price;
+
+    #[test]
+    fn crossed_spread_clicks_map_to_market_orders() {
+        let bid = Price::from_f32(100.0);
+        let ask = Price::from_f32(101.0);
+
+        assert_eq!(
+            click_order_kind(OrderClickButton::Left, ask, bid, ask),
+            Some(ClickOrderKind::Market(PaperOrderSide::Buy))
+        );
+        assert_eq!(
+            click_order_kind(OrderClickButton::Right, bid, bid, ask),
+            Some(ClickOrderKind::Market(PaperOrderSide::Sell))
+        );
+    }
+
+    #[test]
+    fn passive_clicks_map_to_limit_orders() {
+        let bid = Price::from_f32(100.0);
+        let ask = Price::from_f32(101.0);
+        let buy_price = Price::from_f32(99.5);
+        let sell_price = Price::from_f32(101.5);
+
+        assert_eq!(
+            click_order_kind(OrderClickButton::Left, buy_price, bid, ask),
+            Some(ClickOrderKind::Limit(PaperOrderSide::Buy, buy_price))
+        );
+        assert_eq!(
+            click_order_kind(OrderClickButton::Right, sell_price, bid, ask),
+            Some(ClickOrderKind::Limit(PaperOrderSide::Sell, sell_price))
+        );
+    }
+
+    #[test]
+    fn order_size_adjustment_stays_in_contract_bounds() {
+        assert_eq!(adjust_order_contracts(1.0, -1.0), 1.0);
+        assert_eq!(adjust_order_contracts(1.0, 1.0), 2.0);
+        assert_eq!(adjust_order_contracts(100.0, 1.0), 100.0);
+    }
+
+    #[test]
+    fn order_marker_label_shows_contract_volume() {
+        assert_eq!(order_marker_label(5.0, 0.0), "5↑");
+        assert_eq!(order_marker_label(0.0, 3.0), "3↓");
+        assert_eq!(order_marker_label(5.0, 3.0), "5↑ 3↓");
     }
 }

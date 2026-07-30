@@ -18,7 +18,7 @@ pub const AZERET_MONO: Font = Font {
     style: iced::font::Style::Normal,
 };
 
-pub const TITLE_PADDING_TOP: f32 = if cfg!(target_os = "macos") { 20.0 } else { 0.0 };
+pub const TITLE_PADDING_TOP: f32 = 0.0;
 
 pub mod text_size {
     pub const SMALL: f32 = 11.0;
@@ -35,8 +35,6 @@ pub mod text_size {
 /// Enum variant names may differ from Fontello CSS names.
 #[repr(u32)]
 pub enum Icon {
-    Locked = 59392,
-    Unlocked = 59393,
     ResizeFull = 59395,
     ResizeSmall = 59396,
     Close = 59397,
@@ -491,7 +489,7 @@ pub fn pane_title_bar(theme: &Theme) -> Style {
     }
 }
 
-pub fn pane_background(theme: &Theme, is_focused: bool) -> Style {
+pub fn pane_background(theme: &Theme, is_focused: bool, is_link_group_hovered: bool) -> Style {
     let palette = theme.extended_palette();
 
     let color = if palette.is_dark {
@@ -500,24 +498,30 @@ pub fn pane_background(theme: &Theme, is_focused: bool) -> Style {
         palette.background.strong.color
     };
 
+    let border = if is_link_group_hovered {
+        Border {
+            width: 2.0,
+            color: palette.secondary.strong.color,
+            radius: 4.0.into(),
+        }
+    } else if is_focused {
+        Border {
+            width: 1.0,
+            color: palette.background.strong.color,
+            radius: 4.0.into(),
+        }
+    } else {
+        Border {
+            width: 1.0,
+            color: color.scale_alpha(0.5),
+            radius: 2.0.into(),
+        }
+    };
+
     Style {
         text_color: Some(palette.background.base.text),
         background: Some(palette.background.weakest.color.into()),
-        border: {
-            if is_focused {
-                Border {
-                    width: 1.0,
-                    color: palette.background.strong.color,
-                    radius: 4.0.into(),
-                }
-            } else {
-                Border {
-                    width: 1.0,
-                    color: color.scale_alpha(0.5),
-                    radius: 2.0.into(),
-                }
-            }
-        },
+        border,
         ..Default::default()
     }
 }

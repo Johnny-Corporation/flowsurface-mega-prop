@@ -1,0 +1,102 @@
+\section{Scope, Source Base, and Method}
+
+\subsection{What This Document Is Trying to Do}
+
+The repository is not aiming to build a toy order-book bot.
+The intended system is a research and trading platform for intraday market microstructure work across two primary domains:
+\begin{itemize}
+  \item crypto markets, with Bybit as the immediate live testing venue;
+  \item Russian market instruments, especially those traded through T-Invest and the historical QScalp \texttt{.OrdLog.qsh} archive already stored in the repository.
+\end{itemize}
+
+The long-range goal is to move from informal discretionary pattern language toward:
+\begin{itemize}
+  \item explicit event definitions;
+  \item reproducible logging and replay;
+  \item measurable features;
+  \item rule-based setup detectors;
+  \item practical live research loops;
+  \item and only later, if the data becomes good enough, ML overlays that filter or rank already-defined patterns.
+\end{itemize}
+
+This report therefore does \emph{three} jobs at once.
+First, it preserves the original human trading logic.
+Second, it organizes that logic into a coherent taxonomy.
+Third, it translates each idea into a research agenda that can be implemented in code and tested against data.
+
+\subsection{Source Inventory}
+
+The knowledge base is a mixture of books and transcript-derived video materials.
+The books provide higher-level structure and vocabulary; the transcripts contribute many of the practical details, caveats, and ``how it actually feels on the tape'' comments that are usually missing from books.
+
+\subsubsection{Books}
+
+\sourceentry{Professional Scalping}{Primary discretionary trading logic source for DOM, tape, clusters, densities, breakouts, bounces, POC, smart-money style framing, and robot behavior.}
+\sourceentry{Prop Trading on MOEX}{Operational and infrastructure framing for prop-style intraday trading on the Russian market, including risk control, broker relationships, colocation, and platform requirements.}
+\sourceentry{Risk Management in Trading}{Explicit risk-control framework for daily loss limits, per-trade risk, stop logic, leverage discipline, and the behavioral reasons traders break their own rules.}
+
+\subsubsection{Transcript-Derived Video Materials}
+
+The transcript series contributes concrete tactical material on:
+\begin{itemize}
+  \item densities;
+  \item icebergs;
+  \item tape and DOM configuration;
+  \item robots;
+  \item graph-plus-book interpretation;
+  \item foundations for trades;
+  \item bounce trades;
+  \item breakout trades;
+  \item trade potential, exits, and adds;
+  \item decision logic;
+  \item currency and futures specifics;
+  \item limit-up / limit-down regimes;
+  \item springs and stretched moves;
+  \item news-driven behavior;
+  \item and self-analysis of trading.
+\end{itemize}
+
+Two transcript files in the repository are effectively empty or near-empty:
+\begin{itemize}
+  \item the volatility-harvesting lesson;
+  \item the psychology lesson.
+\end{itemize}
+The relevant ideas from those topics were therefore reconstructed mostly from adjacent materials, not from fully populated transcripts.
+
+\subsection{Translation Philosophy}
+
+The source material is discretionary and heavily contextual.
+That matters.
+Many ideas are described in a way that makes perfect sense to an experienced human staring at a fast DOM, but not to a research pipeline.
+Phrases such as ``clean level'', ``good participant'', ``price is being held'', ``the book is empty'', or ``today the instrument is moving properly'' are meaningful, but they are not directly measurable.
+
+The translation philosophy used in this report is:
+\begin{enumerate}
+  \item preserve the original meaning instead of prematurely forcing false precision;
+  \item separate what is explicit from what is fuzzy;
+  \item identify observables, even if the threshold values remain open;
+  \item map discretionary logic into candidate state machines and feature groups;
+  \item state clearly when the available data is insufficient to test the full human concept.
+\end{enumerate}
+
+\subsection{Important Reliability Caveats}
+
+This report should \emph{not} be read as proof that the described setups are profitable.
+It is a formalization of practitioner knowledge, not a performance report.
+
+Several reliability issues must stay visible:
+\begin{itemize}
+  \item The books and videos represent a specific trading style, with a strong DOM-and-tape bias.
+  \item Some examples are tied to particular MOEX eras, liquidity profiles, and terminal workflows.
+  \item The historical Russian archive in the repository is order-book only, old, and often sparse or low quality.
+  \item A meaningful portion of the original edge may depend on data not present in that archive, especially trades, execution response, and hidden-liquidity inference.
+  \item Human discretion often uses cross-context cues that are easy to mention and hard to encode.
+\end{itemize}
+
+The right use of this document is therefore:
+\begin{itemize}
+  \item as a hypothesis map;
+  \item as a design document for logging and replay;
+  \item as a guide for detector implementation;
+  \item and as a record of what still requires live validation.
+\end{itemize}

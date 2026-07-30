@@ -1,0 +1,47 @@
+\section{Appendix: Source Coverage Map}
+
+\subsection{Books}
+
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{``Professional Scalping''} --- used for general scalping definitions, the role of DOM / tape / clusters, density-based strategies, chart-level logic, POC, Smart Money framing, and robot behavior.
+\item \textbf{``Risk Management in Trading''} --- used for daily-loss logic, per-trade risk, Stop-Loss / Take-Profit mechanics, trailing stop, psychological failure patterns, and intraday-specific risk budgeting.
+\item \textbf{``Prop Trading on Moscow Exchange''} --- used for prop infrastructure, risk-manager logic, deep DOM environment, session-control thinking, and the business-side context for strict trader constraints.
+\end{enumerate}
+
+\subsection{Transcript lessons used directly}
+
+\begin{longtable}{L{0.12\textwidth}L{0.78\textwidth}}
+\toprule
+Lesson & Main contribution to this document \\
+\midrule
+\endfirsthead
+\toprule
+Lesson & Main contribution to this document \\
+\midrule
+\endhead
+1 & Introduction to the DOM-first trading worldview and tool stack. \\
+2 & Density classification, relative size, and the idea that densities alone are not trade reasons. \\
+3 & Icebergs as hidden limit interest inferred from mismatch between visible size and executed volume. \\
+4 & DOM and tape configuration, visual filtering, and why over-decorated interfaces create false signals. \\
+5 & Robot behavior, algorithmic execution patterns, spoofing, and market steering. \\
+6 & Why chart interpretation must be paired with hidden and visible liquidity logic. \\
+7 & Multi-reason trade construction; the ``constructor'' metaphor for setup quality. \\
+8 & Bounce trades as the cleanest family because of compact invalidation and visible support logic. \\
+9 & Trade potential, exit planning, and logic for adds and reductions. \\
+10 & Trade decision logic in a complex real example, especially around iceberg-led context. \\
+11 & Worked bounce examples and what makes an example clean or dirty. \\
+12 & Breakout trades, their higher difficulty, and rapid failure management. \\
+13 & Concrete trades built around robots. \\
+14 & Currency and futures as leader-follower or linked-instrument complexes. \\
+15 & Planka / exchange-limit behavior. \\
+16 & Spring setups after overstretched one-way impulses. \\
+17 & File present but empty in this repository snapshot. \\
+18 & News reaction trading based on market response rather than headline interpretation. \\
+19 & Self-analysis, daily preparation, and the importance of adapting when old patterns stop working. \\
+20 & File present but empty in this repository snapshot. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Final synthesis}
+
+Taken together, the sources describe a trader who does not believe in purely static patterns. The trader believes in \Important{participant behavior under context}. That is the central message preserved in this document and the one the repository should protect as it becomes more systematic.
